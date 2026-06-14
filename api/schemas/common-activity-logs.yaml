@@ -1,0 +1,268 @@
+# docs/schemas/common-activity-logs.yaml
+# Schemas for the common-activity-logs sub-area
+# of the `common` REST module. Two endpoints:
+#   GET  /api/activity-logs
+#   POST /api/activity-logs
+# Source: src/app/api/(common)/activity-logs/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetActivityLogsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getActivityLogsSchema }`. The schema is
+        `baseQuerySchema.transform(transformPaginationSchema)`,
+        so the post-transform shape is
+        `{ page, limit, offset, search?, start?,
+        end? }`. The service's `findAndCount`
+        interprets:
+          - `search` — `contains` (case-insensitive)
+            against joined `user.username`,
+            joined `user.fullName`, or joined
+            `user.role.name`. Three-branch `OR`
+            through the `user` relation.
+          - `start` / `end` — `timestamp` range
+            (`gte` / `lte`). Both must be present
+            (the service only sets the range if
+            both are truthy).
+          - `page` / `limit` — standard. The
+            service applies
+            `take: query.limit || 10, skip:
+            query.offset || 0` (default 10, not
+            20 like most other endpoints).
+        Ordering: `timestamp: desc`. The `count`
+        shares the same `where`, so `totalCount`
+        is the filtered total.
+
+CreateActivityLogBody:
+  type: object
+  description: |
+    `enhancedApiHandler` `validation: { body:
+    createActivityLogSchema }`. The schema is
+    `z.object({ page: z.string().optional(),
+    event: z.enum(["PageView", "Click",
+    "Hover"]).default("PageView") }).superRefine(
+    (data, ctx) => { if (data.event ===
+    "PageView" && !data.page) { ... } })`.
+  required:
+    - event
+  properties:
+    page:
+      type: string
+      description: |
+        Optional in the Zod schema, but
+        **required when `event === "PageView"`**
+        (enforced via `superRefine` →
+        `ZodIssueCode.custom`).
+    event:
+      type: string
+      enum: [PageView, Click, Hover]
+      default: PageView
+      description: |
+        The event type. Only `PageView` is
+        actually handled by the route (logged
+        via `pageViewLogger.logPageView`).
+        `Click` and `Hover` are accepted by the
+        schema but currently no-op in the
+        handler.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetActivityLogsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/activity-logs`.
+    The service returns
+    `Promise<{ logs: ActivityLog[]; totalCount:
+    number }>` (activity-logs.service.ts:7-79)
+    and the route wraps it in
+    `{ success: true, result, message: "" }` —
+    no `error` field on success (the route
+    does not set it).
+  required:
+    - success
+    - result
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [logs, totalCount]
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: ./common-activity-logs.yaml#/ActivityLog
+        totalCount:
+          type: integer
+          minimum: 0
+
+CreateActivityLogResponse:
+  type: object
+  description: |
+    Response shape of `POST /api/activity-logs`.
+    The route returns
+    `{ success: true, result: null, message: "" }`
+    — no `error` field on success. The
+    `result: null` is because no log id is
+    returned (logging is batched
+    asynchronously, so the client cannot
+    read it back).
+  required:
+    - success
+    - result
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: "null"
+    message:
+      type: string
+      example: ""
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+ActivityLog:
+  type: object
+  description: |
+    Canonical activity log shape. TS type
+    `ActivityLog` from
+    `src/app/(dashboard)/common/reports/activity-logs/features/types/index.ts:72-84`.
+
+    Maps to the Prisma `ActivityLog` model
+    (prisma/schema.prisma, @@map("activity_logs")).
+    Columns: `id, entityId, action, entity,
+    userId, timestamp, description,
+    additionalData`. Three `@@index`
+    declarations on `userId`, `action`, `entity`
+    — but the API does not filter on any of
+    those three.
+
+    The service's `findMany` includes only
+    the joined `user` (with a custom `select`
+    — see `ActivityLogUser`). Scalar columns
+    (including `entityId`, `action`, `entity`,
+    `description`, `additionalData`,
+    `timestamp`) come through automatically.
+
+    `description` is a free-form string with
+    no length cap visible in the schema. The
+    `PageViewLogger` constructs descriptions
+    as `` `Viewed \`${page}\`` `` (the
+    `page` is user-supplied).
+  required:
+    - id
+    - description
+    - timestamp
+    - user
+  properties:
+    id:
+      type: string
+      format: uuid
+    entityId:
+      type: string
+      format: uuid
+      nullable: true
+      description: |
+        Nullable UUID. No FK constraint to
+        any specific table — the
+        `entityId` is a free-form pointer.
+    action:
+      type: string
+      nullable: true
+      description: |
+        Free-form action string (e.g.,
+        "Create", "Update", "Delete",
+        "View"). Not constrained to an enum
+        in the Prisma model.
+    entity:
+      type: string
+      nullable: true
+      description: |
+        Free-form entity name (e.g.,
+        "Item", "Sale", "User"). The
+        `PageViewLogger` sets this to the
+        `page` string (e.g.,
+        "/dashboard/doctors").
+    userId:
+      type: string
+      format: uuid
+      description: |
+        FK to `User`, `onDelete: Cascade`.
+    timestamp:
+      type: string
+      format: date-time
+    description:
+      type: string
+      description: |
+        Free-form text. The
+        `PageViewLogger` writes
+        `` `Viewed \`${page}\`` ``
+        (markdown-code-fenced page path).
+    additionalData:
+      type: object
+      nullable: true
+      description: |
+        `Json?` column. The TS type allows
+        `Prisma.JsonValue | { remark?: string }
+        | null` — so a `remark` key is the
+        conventional shape, but any JSON is
+        acceptable.
+    user:
+      $ref: ./common-activity-logs.yaml#/ActivityLogUser
+
+ActivityLogUser:
+  type: object
+  description: |
+    The joined `User` row for an `ActivityLog`
+    entry. The service's `user` `select` is
+    `{ id, username, fullName, userId, role: {
+    select: { id, name } } }` — narrower than
+    the canonical `Publisher` (which is
+    `{ id, fullName, username }` only), and
+    adds the joined `role` (id + name). The
+    projection does NOT include `password`,
+    `email`, `phoneNo`, `status`,
+    `isSuperadmin`, `roleId`, `departmentId`,
+    `joiningDate`.
+  required:
+    - id
+    - username
+    - fullName
+    - userId
+    - role
+  properties:
+    id:
+      type: string
+      format: uuid
+    username:
+      type: string
+    fullName:
+      type: string
+    userId:
+      type: string
+      description: |
+        Business-level user id string
+        (separate from `User.id`).
+    role:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string

@@ -1,0 +1,506 @@
+# docs/schemas/trpc-roles.yaml
+# Schemas for the tRPC `roles` router (src/lib/trpc/routers/roles.ts).
+# This module also OWNS the RBAC vocabulary: `Action` and `Subject` enums
+# are exported from src/app/(dashboard)/common/user-management/roles/features/utils.ts
+# and referenced by virtually every authorizeProcedure call site.
+
+# =============================================================================
+# RBAC vocabulary — owned by this module
+# =============================================================================
+
+Action:
+  type: string
+  description: |
+    RBAC action verb. The TS type is
+    `Action = BaseAction | SpecialAction | (string & {})` from
+    `src/app/(dashboard)/common/user-management/roles/features/utils.ts:41`.
+    The `(string & {})` arm allows arbitrary strings to be assigned for
+    forward compatibility, but the canonical actions are listed below.
+  enum:
+    # baseActions
+    - View
+    - Add
+    - Edit
+    - Delete
+    - Export
+    # specialActions (in declaration order)
+    - Change Status
+    - Add Billing
+    - Collect
+    - Uncollect
+    - Acknowledge
+    - De Acknowledge
+    - Cancel
+    - Print
+    - Reprint
+    - Deliver
+    - Ward Clearance
+    - Pharmacy Clearance
+    - Cashier Clearance
+    - Define Deposit Required
+
+Subject:
+  type: string
+  description: |
+    RBAC subject (resource). The TS type `Subject` is a string literal union
+    of the `subjects` array in
+    `src/app/(dashboard)/common/user-management/roles/features/utils.ts:43-226`.
+    Each subject is grouped by `SubjectConfig.module` (Purchase, Pharmacy,
+    OPD Billing, IPD Billing, EMR, etc.) which determines which permission
+    table the subject appears in. The full list is enumerated below.
+  enum:
+    # User Management
+    - User
+    - Department
+    - Role
+    # Setup
+    - Unit
+    - Category
+    - Supplier
+    - Payment Method
+    - Store
+    - Store Mapping
+    - Bill Type
+    - Hospital Info
+    - Default Setting
+    # Purchase
+    - Items
+    - Purchase Request
+    - Purchasing
+    - GRN
+    - GRN Return
+    - GRN Return Types
+    - FOC (Price)
+    - Expiry Update
+    - Purchased Price Update
+    # Inventory
+    - Stock Summary
+    - Stock Damage
+    - Stock Expiry
+    - Used Item
+    - Stock Request
+    - Stock Transfer
+    - Stock Movement
+    - Stock Adjustment
+    - Batch
+    # Pharmacy
+    - Pharmacy Sale
+    - Sale List
+    - Sale Return
+    - Latest Selling Price
+    - Change Selling Price
+    - Pharmacy Request(IPD)
+    - Sale List(IPD)
+    - Sale Return(IPD)
+    # Service
+    - Service Billing
+    - Service Bill List
+    - Service List
+    - Service Category
+    - Service Sub Category
+    - Service & Doctor Mapping
+    - Category & Module Mapping
+    - Service Package List
+    - Procedure List
+    - Item Summary
+    - Operation Type
+    - Anesthesia Type
+    - Main Procedure List
+    # Reception
+    - Registration List
+    - Admission List
+    # Doctor
+    - Doctor List
+    - Doctor's Time Slot
+    - Specialization
+    - Clinic List
+    # Appointment
+    - Book Appointment
+    - Appointment List
+    - Appointment Type
+    # Room Management
+    - Request Room
+    - Room List
+    - Room Type
+    - Room Charges
+    - Ward List
+    - Building List
+    - Room Transfer
+    - Unregistered Booking List
+    # OPD Billing
+    - OT Requests
+    - Package Billing
+    - Package Bill List
+    - OPD Refunded Bill List
+    # IPD Billing
+    - Ward
+    - IPD List
+    - Discharge List
+    - Discharge Summary
+    - Deposit
+    - Deposit Type
+    - Pharmacy Request
+    - Service Request
+    - Doctor Note
+    - Nurse Note
+    - Vital Sign
+    - Prescription
+    - Pharmacy Return
+    - Room History
+    - Daily Bill List
+    - Ward Services
+    - IPD Billing
+    - IPD Bill List
+    # CathLab
+    - CathLab Requests
+    - CathLab Request List
+    - CathLab
+    - CathLab List
+    - CATHLAB EMR
+    # Endo
+    - Endo
+    - Endo List
+    - Endo Templates
+    - Endo Requests
+    - Endo Request List
+    - Endo EMR
+    # OT
+    - OT Request List
+    - OT
+    - OT List
+    - OT EMR
+    # HD
+    - HD
+    - HD Appointments
+    - HD Requests
+    - HD Request List
+    - HD List
+    - HD EMR
+    # Emergency
+    - Emergency
+    - Emergency Appointments
+    - Emergency List
+    - EDEMR
+    # Daycare
+    - Daycare
+    - Daycare Appointments
+    - Daycare List
+    - DayCare EMR
+    # Imaging — CT
+    - CT List
+    - CT Templates
+    # Imaging — Ultrasound
+    - Ultrasound List
+    - Ultrasound Templates
+    # Imaging — MRI
+    - MRI List
+    - MRI Templates
+    # Imaging — X-Ray
+    - X-Ray List
+    - X-Ray Templates
+    # Imaging — ECG
+    - ECG List
+    - ECG Templates
+    # Imaging — ECHO
+    - ECHO List
+    - ECHO Templates
+    # Lab
+    - Lab Template
+    - Lab Status
+    - Lab Sample Collection
+    - Lab Acknowledge
+    - Lab Testing
+    - Lab Test Done
+    - Lab Result Entry
+    - Lab Result Verification
+    - Lab Unit
+    - Collection Method
+    - Sample Type
+    - Lab Test
+    - Lab Report
+    - Test Script
+    - Special Lab Test
+    - Lab Group
+    # EMR
+    - OPDEMR
+    - Clinical Documents
+    # Membership
+    - Member Card Bill List
+    - Member Card Type List
+    - Member List
+    # Discharge Intimation
+    - Discharge Intimation List
+    # Selling Price
+    - Selling Price
+    # Dashboard
+    - Dashboard
+    # Reports
+    - Follow Up Patient
+    - Sale Items Report
+    - Used Items Report
+    - Purchasing Item
+    - Purchase Request Item
+    - GRN Item
+    - GRN Return Item
+    - Profit
+    - Stock Request Item
+    - Pharmacy Sale Return Item
+    - Stock Transfer Item
+    - Batch Items
+    - Supplier Items
+    - Top Products
+    - Payment Method Report
+    - Stock Damage Item
+    - Supplier Payment
+    - Activity Log
+    - Activity (FOC Price)
+    - Activity (Expiry Update)
+    - Appointments By Doctor
+    - Appointments By Specialization
+    - Referral Report
+    - Patient Registration Summary
+    - Under Care Doctor's Patient Report
+    # FOC variants (keep after Report)
+    - FOC Items
+    - FOC Items In Stock
+  x-notes: |
+    Some sidebar entries (e.g. "FOC Items", "FOC Items In Stock") are not
+    in the TS union but appear as role subject strings at runtime via the
+    `(string & {})` arm. The enum above lists the canonical values from
+    utils.ts:43-226 plus commonly seen runtime variants.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetRolesResponse:
+  type: object
+  description: |
+    Response shape of `roles.getRoles`.
+    Service signature: `Promise<{ roles: Role[]; totalCount: number }>`.
+  required:
+    - roles
+    - totalCount
+  properties:
+    roles:
+      type: array
+      items:
+        $ref: ./trpc-roles.yaml#/Role
+    totalCount:
+      type: integer
+      minimum: 0
+      description: Total matching roles across all pages.
+
+CreateRoleInput:
+  type: object
+  description: |
+    Input for `roles.createRole`. Zod schema: `createRoleSchema` (alias for
+    `baseRoleFormSchema`). Validates the role name, optional description,
+    and the permission set; the permission validator calls
+    `isActionRestricted(subject, action)` and rejects restricted pairs.
+  required:
+    - name
+    - permissions
+  properties:
+    name:
+      type: string
+      minLength: 2
+      maxLength: 30
+      pattern: "^[A-Za-z0-9\\s]+$"
+      description: |
+        2–30 chars; alphanumeric + spaces only; not all digits.
+    description:
+      type: string
+      maxLength: 500
+      description: Optional free-text description.
+    permissions:
+      type: array
+      minItems: 1
+      description: At least one `{ action, subject }` pair is required.
+      items:
+        $ref: ./trpc-roles.yaml#/RolePermissionInput
+
+UpdateRoleInput:
+  type: object
+  description: |
+    Input for `roles.updateRole`. Zod schema: `editRoleSchema` =
+    `baseRoleFormSchema.extend({ id: z.string() })`. Same validation as
+    `CreateRoleInput` plus the `id` of the role to update.
+  required:
+    - id
+    - name
+    - permissions
+  properties:
+    id:
+      type: string
+      description: Role id. No UUID validation at the router layer.
+    name:
+      type: string
+      minLength: 2
+      maxLength: 30
+      pattern: "^[A-Za-z0-9\\s]+$"
+    description:
+      type: string
+      maxLength: 500
+    permissions:
+      type: array
+      minItems: 1
+      items:
+        $ref: ./trpc-roles.yaml#/RolePermissionInput
+
+RolePermissionInput:
+  type: object
+  description: |
+    One `(action, subject)` permission pair. Zod schema is an inline
+    `z.object({ action: z.enum(allActions).or(z.string()), subject: z.enum(subjects).or(z.string()) })`.
+    After parse, the validator runs `isActionRestricted(subject, action)`;
+    any pair where the subject config has `excludedActions` including the
+    given action is rejected with "Contains restricted permissions".
+  required:
+    - action
+    - subject
+  properties:
+    action:
+      $ref: ./trpc-roles.yaml#/Action
+    subject:
+      $ref: ./trpc-roles.yaml#/Subject
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+Role:
+  type: object
+  description: |
+    Role record. TS type `Role` from
+    `src/app/(dashboard)/common/user-management/roles/features/types/index.ts:4-18`.
+    Returned by `roles.createRole`, `roles.getRoleById`, `roles.updateRole`,
+    `roles.deleteRole` and embedded in `roles.getRoles` responses.
+  required:
+    - id
+    - roleId
+    - name
+    - activeUsers
+    - permissions
+    - isSuperadmin
+    - createdAt
+    - updatedAt
+    - createdById
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    roleId:
+      type: string
+      description: Human-readable role code (e.g. "ADMIN", "DOCTOR").
+    name:
+      type: string
+    description:
+      type: string
+      nullable: true
+    activeUsers:
+      type: integer
+      minimum: 0
+      description: Count of users currently assigned to this role.
+    permissions:
+      type: array
+      items:
+        $ref: ./trpc-roles.yaml#/Permission
+    isSuperadmin:
+      type: boolean
+      description: |
+        When true, bypasses the per-permission check in `checkPermission`
+        (utils.ts:1812). Only the seeded superadmin role should have this
+        set to `true`.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+    createdBy:
+      $ref: ./trpc-users.yaml#/UserReference
+      description: |
+        Minimal user shape — `id`, `fullName`, `email`, `username` (per
+        the TS `Pick<User, ...>`). Now defined in trpc-users.yaml.
+    updatedBy:
+      $ref: ./trpc-users.yaml#/UserReference
+      nullable: true
+
+Permission:
+  type: object
+  description: |
+    Role-permission row. TS type `Permission` from
+    `src/app/(dashboard)/common/user-management/roles/features/types/index.ts:20-27`.
+  required:
+    - id
+    - createdAt
+    - updatedAt
+    - action
+    - subject
+    - roleId
+  properties:
+    id:
+      type: string
+      format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    action:
+      $ref: ./trpc-roles.yaml#/Action
+    subject:
+      $ref: ./trpc-roles.yaml#/Subject
+    roleId:
+      type: string
+      format: uuid
+
+# =============================================================================
+# Placeholder cross-references
+# =============================================================================
+
+RoleSummary:
+  type: object
+  description: |
+    Partial Role projection embedded in `User.role`. TS type:
+    `Pick<Role, "id" | "name" | "permissions" | "isSuperadmin">`
+    (trpc-users types/index.ts:24). Owned here.
+  required:
+    - id
+    - name
+    - isSuperadmin
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    isSuperadmin:
+      type: boolean
+    permissions:
+      type: array
+      items:
+        $ref: ./trpc-roles.yaml#/Permission
+
+UserSummary:
+  $ref: ./trpc-users.yaml#/UserSummary
+  description: |
+    Now defined in trpc-users.yaml (resolved). Used by `Role.createdBy`
+    callers that want the narrower shape (no email).
+
+User:
+  $ref: ./trpc-users.yaml#/User
+  description: |
+    Placeholder. The full `User` type is owned by the trpc-users module
+    (pending); the `checkPermission` function (utils.ts:1806-1819) reads
+    `user.role.permissions`.

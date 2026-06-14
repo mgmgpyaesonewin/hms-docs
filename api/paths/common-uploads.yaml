@@ -1,0 +1,423 @@
+# docs/paths/common-uploads.yaml
+# REST endpoints:
+#   GET /api/uploads/image-proxy
+#   GET /api/uploads/pdf-proxy
+#   GET /api/uploads/signed-urls
+# Source: src/app/api/(common)/uploads/image-proxy/route.ts
+# Source: src/app/api/(common)/uploads/pdf-proxy/route.ts
+# Source: src/app/api/(common)/uploads/signed-urls/route.ts
+#
+# This sub-area covers S3 access: signed-URL
+# generation for browser display, server-side
+# proxying for content that can't be displayed
+# inline (PDFs that would otherwise hit CORS),
+# and batch signed-URL generation for file
+# attachments.
+
+/api/uploads/image-proxy:
+  get:
+    summary: Fetch an image from S3 via a signed URL
+    description: |
+      Authenticated query. Takes a `url` query
+      parameter (the S3 object URL) and returns
+      the image bytes, fetched server-side via a
+      pre-signed S3 URL.
+
+      Query parameters:
+        - `url` — required. The S3 object URL.
+          Validated with `z.string().url(...)`.
+
+      Flow:
+        1. `s3Service.getSignedUrl(url, 3600, true)`
+           — generate a pre-signed S3 URL with
+           `expiresIn: 3600` (1 hour) and
+           `inline: true` (intended to set
+           `Content-Disposition: inline`).
+        2. `fetch(signedUrl)` — the server
+           fetches the image bytes from S3.
+        3. The response is forwarded to the
+           client with:
+             - `Content-Type` — the upstream
+               S3 `Content-Type` header (or
+               `application/octet-stream` as
+               fallback).
+             - `Content-Disposition: inline`.
+             - `Cache-Control: private,
+               max-age=3600`.
+
+      Response shape:
+        - The body is the **raw `ArrayBuffer`**
+          of the image bytes — not JSON-wrapped.
+        - The route's TS signature is
+          `Promise<NextResponse<ArrayBuffer>>`.
+        - If S3 returns a non-2xx, the route
+          throws a plain `Error("Failed to fetch
+          image from storage")` — the
+          `enhancedApiHandler` will format this
+          as a 500.
+
+      Source:
+      `src/app/api/(common)/uploads/image-proxy/route.ts:6-40`.
+    tags:
+      - Common / Uploads
+    operationId: rest_common_uploads_image_proxy
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: url
+        required: true
+        schema:
+          type: string
+          format: uri
+        description: |
+          The S3 object URL. Validated with
+          `z.string().url(...)`. The S3 service
+          parses out the key by stripping the
+          bucket URL prefix — so the URL must
+          start with the configured bucket URL
+          (AWS or MinIO, depending on
+          `STORAGE_PROVIDER`).
+    responses:
+      "200":
+        description: |
+          The image bytes, with `Content-Type`
+          forwarded from S3.
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      "400":
+        description: |
+          `url` query param is missing or not a
+          valid URL, OR the URL doesn't start with
+          the configured bucket URL
+          (`parseKeyFromUrl` throws
+          `AppError("Failed to parse key from
+          URL", 400)`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "500":
+        description: |
+          `s3Service.getSignedUrl` failed (logged
+          + re-thrown as 500) OR the S3 `fetch`
+          returned a non-2xx.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/uploads/pdf-proxy:
+  get:
+    summary: Fetch a PDF from S3 (server-side)
+    description: |
+      Authenticated query. Takes a `url` query
+      parameter (the S3 object URL pointing to a
+      PDF) and returns the PDF bytes, fetched
+      server-side. This route is the "CORS
+      workaround" for displaying PDFs in the
+      browser — the server fetches the PDF from
+      S3 and forwards the bytes.
+
+      Query parameters:
+        - `url` — required. The S3 object URL
+          (presumably a PDF). Validated with
+          `z.string().url(...)`.
+
+      Flow:
+        1. `fetch(validated.url)` — the server
+           fetches the PDF directly from S3.
+           **No signed-URL generation** — the
+           URL is expected to be publicly
+           accessible (or the caller is expected
+           to pass a signed URL of their own).
+        2. The response is forwarded to the
+           client with:
+             - `Content-Type: application/pdf`
+               (hard-coded — the upstream
+               `Content-Type` header is NOT
+               forwarded).
+             - `Content-Disposition: inline`.
+             - `Cache-Control: private,
+               max-age=3600`.
+
+      Response shape:
+        - The body is the **raw `ArrayBuffer`**
+          of the PDF bytes.
+        - The route's TS signature is
+          `Promise<NextResponse<ApiResponse<ArrayBuffer | null>>>` —
+          a typed declaration, but the actual
+          return is a raw `ArrayBuffer` (not
+          wrapped in the `ApiResponse` envelope).
+          The TS type is a documentation
+          artifact.
+
+      Source:
+      `src/app/api/(common)/uploads/pdf-proxy/route.ts:6-40`.
+    tags:
+      - Common / Uploads
+    operationId: rest_common_uploads_pdf_proxy
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: url
+        required: true
+        schema:
+          type: string
+          format: uri
+    responses:
+      "200":
+        description: |
+          The PDF bytes, with hard-coded
+          `Content-Type: application/pdf`.
+        content:
+          application/pdf:
+            schema:
+              type: string
+              format: binary
+      "400":
+        description: |
+          `url` query param is missing or not a
+          valid URL.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "500":
+        description: |
+          S3 `fetch` returned a non-2xx
+          (`throw new Error("Failed to fetch
+          PDF from S3")`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/uploads/signed-urls:
+  get:
+    summary: Batch-generate signed S3 URLs
+    description: |
+      Authenticated query. Takes a comma-separated
+      `urls` query parameter and returns an array
+      of pre-signed S3 URLs (one per input URL),
+      valid for 1 hour.
+
+      Query parameters:
+        - `urls` — required, non-empty. A
+          comma-separated list of S3 object URLs.
+          Validated with
+          `z.string().min(1, "URLs are required")`.
+
+      Flow:
+        1. Split `urls` by `,` and filter out
+           empty strings.
+        2. If the resulting array is empty,
+           return
+           `{ success: false, result: null,
+           message: "No URLs provided", error:
+           "No URLs provided" }` (status 400).
+        3. `s3Service.getSignedUrls(urls, 3600,
+           true)` — batch sign all URLs in
+           parallel via `Promise.all`.
+
+      Response shape on success:
+        ```
+        {
+          success: true,
+          result: string[],
+          message: "Signed URLs generated successfully",
+          error: null
+        }
+        ```
+
+      Source:
+      `src/app/api/(common)/uploads/signed-urls/route.ts:6-53`.
+    tags:
+      - Common / Uploads
+    operationId: rest_common_uploads_signed_urls
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: urls
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: |
+          Comma-separated S3 object URLs. Each
+          URL must start with the configured
+          bucket URL (AWS or MinIO). Empty
+          strings (e.g. trailing commas) are
+          filtered out.
+    responses:
+      "200":
+        description: |
+          Array of pre-signed S3 URLs, one per
+          input URL (after filtering empties).
+          Each URL expires in 1 hour.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-uploads.yaml#/GetSignedUrlsResponse
+      "400":
+        description: |
+          `urls` is missing / empty, OR all input
+          URLs were empty after filtering.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-uploads.yaml#/GetSignedUrlsErrorResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "500":
+        description: |
+          `s3Service.getSignedUrl` failed for one
+          of the URLs — the whole batch fails
+          (no partial success). The first failure
+          is re-thrown as `AppError("Failed to
+          generate signed URL", 500)`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — all three
+    routes declare only `auth: { required: true }`,
+    no `permissions` array. Any authenticated
+    user can request signed URLs for any S3
+    object, proxy any image, or proxy any PDF.
+  - **`/api/uploads/signed-urls` is an SSRF /
+    arbitrary-signed-URL endpoint** — the route
+    does not validate the `urls` parameter
+    beyond `z.string().min(1, ...)`. The S3
+    service's `parseKeyFromUrl` does check that
+    the URL starts with the configured bucket
+    URL (s3.service.ts:252-255), so a malicious
+    caller cannot request signed URLs for
+    arbitrary S3 buckets. But within the
+    configured bucket, **any** object key is
+    signable. A user could request signed URLs
+    for objects they have no business accessing
+    (e.g., another tenant's files, if the
+    bucket is shared).
+  - **`/api/uploads/image-proxy` is an SSRF
+    surface for the signed URL** — the route
+    accepts any URL, calls
+    `s3Service.getSignedUrl(url, 3600, true)`,
+    then `fetch(signedUrl)`. The `parseKeyFromUrl`
+    check pins the URL to the configured bucket,
+    so the signed-URL fetch is bounded to the
+    bucket. But the same key-validity
+    consideration as `signed-urls` applies.
+  - **`/api/uploads/pdf-proxy` does NOT use
+    `s3Service.getSignedUrl`** — it `fetch`es
+    `validated.url` directly. The URL is
+    expected to be either publicly accessible
+    or pre-signed by the caller. This means the
+    route will only work for objects the URL
+    itself can access — but there's no bucket
+    check, so a URL pointing to an arbitrary
+    server is `fetch`ed. Server-side SSRF
+    surface.
+  - **No rate limiting on any of the three
+    endpoints** — an authenticated user could
+    generate / proxy an arbitrary number of
+    S3 fetches.
+  - **All three endpoints accept URLs as
+    query params** — this means URLs with
+    special characters (e.g. `&`, `=`, `?`,
+    `#`) need URL-encoding by the caller. The
+    `z.string().url(...)` validator handles
+    basic URL validity, but a malformed
+    encoded URL could still slip through.
+  - **`/api/uploads/image-proxy`'s `Content-Type`
+    is forwarded from S3** — a malicious S3
+    object with a `Content-Type: text/html`
+    header would be served as HTML by the
+    proxy. Combined with the same-origin
+    `sid` cookie, this could enable XSS. The
+    cache-control `private, max-age=3600` does
+    not prevent this.
+  - **`/api/uploads/pdf-proxy` hard-codes
+    `Content-Type: application/pdf`** — even
+    if the upstream S3 object has a different
+    content type, the proxy always claims
+    `application/pdf`. This is safe (no XSS
+    via content-type confusion) but means the
+    proxy will mis-label a non-PDF as a PDF.
+  - **`/api/uploads/signed-urls` does not
+    report partial failures** — `Promise.all`
+    fails fast; if one of the URLs fails to
+    sign (e.g. invalid S3 key), the whole
+    request fails with 500. The caller does
+    not learn which URL was the problem.
+  - **`expiresIn: 3600` (1 hour) is the
+    hard-coded expiry** — both `getSignedUrl`
+    and `getSignedUrls` default to 3600; the
+    routes pass 3600 explicitly. The
+    `getSignedUrl` method's `inline` parameter
+    is `true` for all three routes, but the
+    `if (inline) { }` block in the service is
+    **empty** (s3.service.ts:210-211) — so the
+    `inline` flag has no effect on the
+    `GetObjectCommand` parameters. The
+    `Content-Disposition: inline` is set by the
+    route, not the signed URL itself.
+  - **Bucket selection is env-driven** — the
+    `BUCKET_NAME` is selected at module load
+    time from
+    `STORAGE_PROVIDER === "aws" ? AWS_BUCKET_NAME
+    : MINIO_BUCKET_NAME` (s3.service.ts:20-29).
+    `AWS_BUCKET_NAME` and `MINIO_BUCKET_NAME`
+    come from env vars (no defaults — the
+    `!` non-null assertion will throw at
+    module load if unset). `STORAGE_PROVIDER`
+    defaults to `"aws"` if unset.
+  - **`image-proxy` and `pdf-proxy` use the
+    same schema (single `url` query param) but
+    `pdf-proxy` does not call `s3Service`** —
+    inconsistent. The `pdf-proxy` is a thin
+    pass-through; the `image-proxy` does an
+    extra round-trip through a signed URL. The
+    asymmetry is undocumented.
+  - **`/api/uploads/signed-urls` does not
+    return a "not found" for an invalid key** —
+    `s3Service.getSignedUrl` generates a signed
+    URL for any key that `parseKeyFromUrl`
+    accepts (i.e., a URL that starts with the
+    bucket URL prefix). The signed URL is
+    valid even if the object does not exist —
+    S3 will return 404 to the eventual fetcher.
+    The route does not pre-validate object
+    existence.
+  - **`STORAGE_PROVIDER` env var is read at
+    module load** — so changing providers
+    requires a server restart (or
+    `s3.service.ts` re-evaluation). The
+    `image-proxy` / `pdf-proxy` / `signed-urls`
+    routes do not allow the caller to choose.

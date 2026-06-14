@@ -1,0 +1,220 @@
+# docs/paths/common-departments.yaml
+# REST endpoints: GET / POST /api/departments
+# Source: src/app/api/(common)/departments/route.ts
+#
+# This REST sub-area is the **only** common-lookup
+# sub-area so far that exposes a write endpoint
+# (POST). Update and delete are reached via tRPC.
+
+/api/departments:
+  get:
+    summary: List departments (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      departments.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: { data: Department[]; count: number },
+          message: "",
+          error: null,
+        }
+        ```
+
+      Filters (from `defaultQuerySchema`, interpreted by
+      the repository's `buildWhereQuery`):
+        - `search` — case-insensitive substring match
+          against `name`.
+        - `start` / `end` — `createdAt` range.
+
+      Repository ordering: `createdAt: desc`.
+
+      The repository uses `enhancedApiHandler`'s
+      `validation: { query: defaultQuerySchema }` for
+      input validation. The handler itself receives the
+      parsed `query` via destructuring.
+
+      **Known bug** — the `count` returned in the
+      response is the unfiltered total, not the filtered
+      count (see security notes).
+
+      Source:
+      `src/app/api/(common)/departments/route.ts:13-27`.
+    tags:
+      - Common / Departments
+    operationId: rest_common_departments_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of departments.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-departments.yaml#/GetDepartmentsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+  post:
+    summary: Create a new department
+    description: |
+      Authenticated mutation. Creates a department with
+      the given `name` (and optional `description`),
+      stamps `createdById` / `updatedById` from the
+      session user, and auto-generates a `departmentCode`
+      of the form `DID-NNN`.
+
+      The route uses `enhancedApiHandler` with
+      `validation: { body: createDepartmentsSchema }` —
+      input is parsed and exposed as `body` in the
+      handler. The handler also receives `user` from the
+      session context.
+
+      Service-level guards (not enforced at the REST
+      handler — these are inside the service and surface
+      as 409 / 404 error envelopes):
+        - `findExistingDepartment` (case-insensitive
+          equality on `name`) → throws `AppError(
+          "Department already exists", 409)` if a row
+          with the same name already exists.
+        - The service computes `lastDCode` via
+          `getLastDepartmentCode` (orders by
+          `createdAt: desc`, increments the trailing
+          3-digit number). First department is
+          `DID-001`.
+
+      After create, the service emits an
+      `activityLogger.log({ description: "Created
+      Department", userId: result.createdById, action:
+      "Create", entity: "Department" })`. The `userId`
+      passed to the logger is `result.createdById`
+      (departments-service.ts:39) — i.e., the same as
+      `user!.id` from the route, not a separate value.
+
+      The response is the **bare row** from
+      `prisma.department.create(...)` — no
+      `createdBy` / `updatedBy` user joins are
+      included (departments-repository.ts:101-114).
+
+      Source:
+      `src/app/api/(common)/departments/route.ts:29-47`.
+    tags:
+      - Common / Departments
+    operationId: rest_common_departments_create
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common-departments.yaml#/CreateDepartmentRequest
+    responses:
+      "200":
+        description: The newly created department row.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-departments.yaml#/CreateDepartmentResponse
+      "400":
+        description: |
+          Zod validation failure (from
+          `createDepartmentsSchema`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: |
+          A department with the same `name` already
+          exists (`AppError("Department already exists",
+          409)`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — both `GET` and
+    `POST` declare only `auth: { required: true }`, no
+    `permissions` array. Any authenticated user can read
+    and create departments. The corresponding UI uses
+    `<PermissionGuard>` with `action="Add" /
+    subject="Department"`, so the check exists at the
+    client layer; the server-side REST endpoint does not
+    enforce it.
+  - **Count filter bug** — the `getDepartments`
+    repository's count query is
+    `this.prisma.department.count()` with no `where`
+    argument (departments-repository.ts:36,47), so the
+    `count` returned in the response is the global
+    unfiltered total, not the count of rows matching the
+    current `search` / `start` / `end` filters. The
+    paginated `data` array is correctly filtered, so the
+    UI can show "5 of 137" when the filtered total is
+    actually 5 of (e.g.) 142, with 5 rows hidden by
+    filters. This breaks offset-based pagination when
+    the user filters the table.
+  - **Activity-log userId is the row's `createdById`**
+    — `createDepartment` calls
+    `activityLogger.log({ userId: result.createdById })`
+    (departments-service.ts:39), which is the same value
+    the route injected (`user!.id`). Not a leak, but
+    worth noting if the activity-log row is ever
+    reviewed in isolation.
+  - **No PUT/DELETE on the REST surface** — those are
+    reached via tRPC. The DELETE path in
+    `DepartmentsService.deleteDepartment` does an extra
+    FK-check (`prisma.user.findFirst({ where: {
+    departmentId: id }})`) and throws
+    `AppError("Cannot delete department with associated
+    users", 400)` if any user is still in the department
+    (departments-service.ts:82-90). The Prisma model
+    also has `Item[]`, `Procedure[]`, `Service[]`
+    relations — a delete is FK-constrained on those
+    too, and the surface error would be a Prisma
+    `P2003` (no catch-and-rethrow in the service for
+    that case).
+  - **`departmentCode` is sequential and guessable** —
+    the auto-increment `DID-NNN` pattern makes
+    `departmentCode` predictable. Combined with the
+    fact that the model declares `departmentCode
+    @unique`, callers can probe for the existence of
+    specific department codes by attempting a
+    duplicate-name create. Not a privilege boundary
+    (the field is not a secret), but worth knowing.
+  - **`description` is the only nullable field** —
+    `name` is `@unique` and required at the Zod layer;
+    `description` is `String?` in the Prisma model and
+    optional in the create schema. The TS type declares
+    `description: string | null` even though the create
+    schema does not require it.
+  - **Update-name race** — the service's
+    `updateDepartment` only re-checks the name via
+    `findExistingDepartment` when `department.name !==
+    payload.name` (departments-service.ts:56-63). If
+    two clients concurrently rename two different
+    departments to the same new name, both reads see
+    no collision and both writes succeed; the second
+    write will then fail on the Prisma `@unique`
+    constraint at the DB level (and surface as a
+    generic 500, since the service does not catch
+    P2002). Same pattern as `common-bill-types` and
+    `common-operation-type` — see [[common-bill-types]].

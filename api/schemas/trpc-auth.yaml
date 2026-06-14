@@ -1,0 +1,194 @@
+# docs/schemas/trpc-auth.yaml
+# Schemas for the tRPC `auth` router (src/lib/trpc/routers/auth.ts).
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+LoginInput:
+  type: object
+  description: |
+    Input for `auth.login`. Zod schema: `loginSchema`
+    (src/app/(dashboard)/common/auth/features/schemas/login-schema.ts).
+  required:
+    - username
+    - password
+  properties:
+    username:
+      type: string
+      minLength: 1
+      description: Must match an existing `User.username`.
+    password:
+      type: string
+      minLength: 1
+      format: password
+      description: Plain-text password. Verified server-side against the Argon2 hash.
+
+ChangePasswordInput:
+  type: object
+  description: |
+    Input for `auth.changePassword`. Zod schema: `changePasswordSchema`
+    (src/app/(dashboard)/common/auth/features/schemas/change-password-schema.ts).
+    Adds a `refine` that requires `newPassword === confirmPassword`.
+  required:
+    - currentPassword
+    - newPassword
+    - confirmPassword
+  properties:
+    currentPassword:
+      type: string
+      minLength: 1
+      description: Caller's current password. Verified against Argon2 hash.
+    newPassword:
+      type: string
+      minLength: 8
+      description: |
+        New password. Must satisfy `strongPasswordRegex`: at least one
+        uppercase letter, one lowercase letter, one number, and one
+        special character. (Defined in
+        `src/app/(dashboard)/common/user-management/users/features/schemas/create-user-schema.ts`.)
+    confirmPassword:
+      type: string
+      minLength: 1
+      description: Must equal `newPassword`.
+
+ResetPasswordInput:
+  type: object
+  description: |
+    Input for `auth.resetPassword`. Zod schema: `resetPasswordSchema`
+    (src/app/(dashboard)/common/auth/features/schemas/reset-password-schema.ts).
+    Adds a `refine` that requires `newPassword === confirmPassword`.
+
+    The procedure is also wrapped by `verifyPasswordProcedure` middleware
+    (src/lib/trpc/trpc.ts:148-154) which reads `input.verifyPassword` to
+    re-verify the **caller's** own password. See the `x-security-note` on
+    `/api/trpc/auth.resetPassword` for the input-schema conflict.
+  required:
+    - id
+    - newPassword
+    - confirmPassword
+  properties:
+    id:
+      type: string
+      format: uuid
+      description: ID of the user whose password is being reset.
+    newPassword:
+      type: string
+      minLength: 8
+      description: Same `strongPasswordRegex` constraints as `changePassword.newPassword`.
+    confirmPassword:
+      type: string
+      minLength: 1
+      description: Must equal `newPassword`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+Session:
+  type: object
+  description: |
+    Active session record (Prisma `Session` model, mapped from
+    `prisma/schema.prisma`).
+
+    Returned by:
+      - `auth.login` — bare record (no `include`).
+      - `auth.getSession` — with `user` (and `user.role.permissions`,
+        `user.department`, `user.createdBy`, `user.updatedBy`) included.
+
+    Returned by `auth.heartbeat` and `auth.resumeSession` (REST routes
+    under `(common)/auth/`) with only `sessionId`, `lastSeenAt`, `expiresAt`
+    selected.
+  required:
+    - id
+    - createdAt
+    - updatedAt
+    - expiresAt
+    - lastSeenAt
+    - userId
+    - sessionId
+  properties:
+    id:
+      type: string
+      format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    expiresAt:
+      type: string
+      format: date-time
+      description: Session expiry (computed via `getSessionExpiresAt()`).
+    lastSeenAt:
+      type: string
+      format: date-time
+      description: |
+        Last activity timestamp. Refreshed by heartbeat / resume procedures.
+        A session becomes invalid if `lastSeenAt` is older than
+        `SESSION_INACTIVE_TIMEOUT_MINUTES`.
+    userId:
+      type: string
+      format: uuid
+    sessionId:
+      type: string
+      description: |
+        32-character hex token used as the `sid` cookie value (generated
+        via `crypto.randomBytes(16).toString("hex")`).
+    storeId:
+      type: string
+      format: uuid
+      nullable: true
+      description: |
+        Currently selected store for the session. Read by
+        `storeCheckedProcedure` middleware (src/lib/trpc/trpc.ts:121-130)
+        which throws `AppError("No store selected", 403)` when null.
+    user:
+      $ref: ./trpc-users.yaml#/User
+      description: |
+        Nested user tree. Only present in `auth.getSession` responses.
+        Now defined in trpc-users.yaml (placeholder resolved).
+
+SuccessMessage:
+  type: object
+  description: |
+    Standard success-response wrapper used by `changePassword` and
+    `resetPassword` (and many other procedures across the codebase):
+    `return { message: "..." }`.
+  required:
+    - message
+  properties:
+    message:
+      type: string
+
+# =============================================================================
+# Placeholder cross-references to other modules
+# =============================================================================
+
+User:
+  $ref: ./trpc-users.yaml#/User
+  description: |
+    Placeholder. Owned by the trpc-users module (still pending). Will be
+    materialised when that module is documented. The nested tree under
+    `Session.user` includes `role`, `role.permissions`, `department`,
+    `createdBy`, `updatedBy` (see
+    `AuthService.getSession` — `prisma.user.findUnique` with `include`).
+
+Role:
+  $ref: ./trpc-roles.yaml#/Role
+  description: |
+    Placeholder. Owned by the trpc-roles module (pending). Nested under
+    `Session.user.role` (with `.permissions`).
+
+Permission:
+  $ref: ./trpc-roles.yaml#/Permission
+  description: |
+    Placeholder. Owned by the trpc-roles module (pending). Nested under
+    `Session.user.role.permissions`.
+
+Department:
+  $ref: ./trpc-departments.yaml#/Department
+  description: |
+    Placeholder. Owned by the trpc-departments module (pending). Nested
+    under `Session.user.department`.

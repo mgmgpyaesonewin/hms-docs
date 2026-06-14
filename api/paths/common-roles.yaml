@@ -1,0 +1,150 @@
+# docs/paths/common-roles.yaml
+# REST endpoint: GET /api/roles
+# Source: src/app/api/(common)/roles/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are exposed
+# as tRPC procedures on the `roles` router (or via
+# server actions), NOT as REST routes here.
+
+/api/roles:
+  get:
+    summary: List roles (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      roles with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: { roles: Role[]; totalCount: number },
+          error: ""
+        }
+        ```
+
+      Filters (from `defaultQuerySchema`, interpreted
+      by the repository):
+        - `search` — case-insensitive substring match
+          against `name`.
+        - `start` / `end` — `createdAt` range.
+
+      Repository ordering: `createdAt: desc`.
+
+      Each `Role` includes:
+        - `permissions` — full `Permission[]` (no
+          projection).
+        - `activeUsers` — count of `User` rows
+          assigned to this role with `status: "ACTIVE"`
+          (flattened from `_count.users`).
+        - `createdBy` / `updatedBy` — 4-field projection
+          (`id`, `fullName`, `username`, `email`).
+          Note: this is the **only** common-* endpoint
+          that includes `email` in the publisher
+          projection; other modules use the
+          3-field `Publisher`.
+
+      Source:
+      `src/app/api/(common)/roles/route.ts:10-24`.
+    tags:
+      - Common / Roles
+    operationId: rest_common_roles_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of roles.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-roles.yaml#/GetRolesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — the route
+    declares only `auth: { required: true }`, no
+    `permissions` array. Any authenticated user can
+    read all roles, their permissions, the
+    `isSuperadmin` flag, and active-user counts. This
+    is a substantial PII / capability disclosure — the
+    `permissions` array reveals the full authorization
+    model of the system (action + subject pairs), and
+    `activeUsers` leaks team-size information.
+  - **Response envelope is missing `message` field** —
+    the route emits
+    `{ success: true, result: { roles, totalCount },
+    error: "" }`. The other common-* sub-areas that
+    use `enhancedApiHandler` with success (e.g.
+    `common-departments`) emit
+    `{ success: true, result, message: "", error: null }`.
+    Clients destructuring `result.message` will get
+    `undefined` here (not an error — just undefined).
+  - **Superadmin protection is service-side only** —
+    the `roles` tRPC router (and the corresponding
+    service `updateRole` / `deleteRole` methods)
+    refuse to mutate a role where
+    `isSuperadmin === true`
+    (role-service.ts:62-64, 91-93). The REST
+    `GET /api/roles` does not redact `isSuperadmin`
+    in its projection — so an attacker can read which
+    role is the superadmin role and which users
+    occupy it (via the `createdBy` / `updatedBy`
+    projections and the `activeUsers` count). They
+    cannot mutate it through the tRPC surface, but
+    can identify it.
+  - **`email` is exposed in `createdBy` / `updatedBy`**
+    — this is the only common-* endpoint that does
+    so. Other modules' publisher projections omit
+    `email`. Worth confirming this is intentional —
+    it may be a leak vector.
+  - **Write operations are NOT exposed as REST** —
+    `createRole` / `updateRole` / `deleteRole` are
+    reached via tRPC procedures. The repository
+    `updateRole` is a `prisma.$transaction` that
+    `deleteMany`s all existing `Permission` rows for
+    the role and `createMany`s a fresh set — so an
+    update is a full replace of the permissions
+    array, not a merge.
+  - **`createRole` auto-generates `roleId`** — the
+    service computes `RID-NNN` (3-digit zero-pad)
+    by parsing the most-recent row's `roleId` and
+    incrementing. First role is `RID-001`. Like
+    `common-departments`, the pattern is sequential
+    and guessable. Not a security boundary (the
+    field is not a secret), but the same
+    probe-by-duplicate pattern applies.
+  - **`updateRole` and `deleteRole` have different
+    error status codes for the "not found" case** —
+    `updateRole` uses 404
+    (`AppError("Role not found", 404)`), but
+    `deleteRole` uses 400
+    (`AppError("Role not found", 400)`). The
+    `updateRole` "name exists" check uses 400, not
+    409. The `deleteRole` FK-conflict path uses 400
+    (`"This role is already assigned to a user"`)
+    rather than the more typical 409. The status
+    codes are inconsistent with the rest of the
+    codebase (where 409 is the standard
+    duplicate-name / FK-conflict code — see
+    [[common-bill-types]], [[common-operation-type]]).
+  - **No count/limit bypass** — the repository
+    honours `query.limit === 0 → undefined` and the
+    filter `where` is passed to **both** the
+    `findMany` and the `count` query
+    (role-repository.ts:12-19, 65-67). Unlike
+    `common-departments`, the `totalCount` here is
+    correctly the filtered total.
+  - **`isForeignKeyConstraintViolationError` is
+    imported but the wrapping `try`/`catch` in
+    `deleteRole` re-throws as 400, not 409**
+    (role-service.ts:104-108) — see point above.

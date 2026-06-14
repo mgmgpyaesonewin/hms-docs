@@ -1,0 +1,242 @@
+# docs/schemas/common-roles.yaml
+# Schemas for the common-roles sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/roles
+# Source: src/app/api/(common)/roles/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetRolesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        defaultQuerySchema }` — no extra filters. The
+        repository interprets `query.search` (case-insensitive
+        substring match on `name`) and `query.start` /
+        `query.end` (`createdAt` range), see
+        `role-repository.ts:12-19`. Ordering is
+        `createdAt: desc`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetRolesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/roles`. The
+    repository returns
+    `Promise<{ roles: Role[]; totalCount: number }>`
+    (role-repository.ts:9-75) and the route wraps it
+    in `{ success: true, result, error: "" }` — no
+    `message` field on success (see security notes).
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [roles, totalCount]
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: ./common-roles.yaml#/Role
+        totalCount:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Role:
+  type: object
+  description: |
+    Canonical role shape. TS type `Role` from
+    `src/app/(dashboard)/common/user-management/roles/features/types/index.ts:4-18`.
+
+    Maps to the Prisma `Role` model
+    (prisma/schema.prisma, @@map("roles")). The list
+    endpoint uses `prisma.role.findMany({ select: {
+    ... }})` with an explicit 4-field projection for
+    `createdBy` / `updatedBy` (`id`, `fullName`,
+    `username`, **`email`** — note the inclusion of
+    `email`, which is broader than the canonical
+    3-field `Publisher` shape used by other modules).
+    It also includes a `_count.users` projection
+    (filtered by `status: "ACTIVE"`) that is
+    flattened into the response as `activeUsers`.
+
+    The `permissions` array is included in full
+    (no projection).
+
+    Notable constraints:
+      - `name` is `@unique` in the Prisma model and
+        enforced case-insensitively by the service
+        (`findByName`).
+      - `roleId` is a separate `@unique` business
+        identifier (auto-generated as `RID-NNN` by
+        the service).
+      - `isSuperadmin` controls the
+        "you cannot update/delete a superadmin role"
+        guard (role-service.ts:62-64, 91-93).
+  required:
+    - id
+    - roleId
+    - name
+    - activeUsers
+    - permissions
+    - isSuperadmin
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    roleId:
+      type: string
+      description: |
+        Business identifier, `@unique`. Auto-generated
+        by the service as `RID-NNN` (3-digit
+        zero-pad), incrementing over the most recent
+        row (role-service.ts:21-26). First role is
+        `RID-001`.
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-name
+        check enforced by the service via `findByName`
+        (case-insensitive equality).
+    description:
+      type: string
+      nullable: true
+    activeUsers:
+      type: integer
+      minimum: 0
+      description: |
+        Count of `User` rows assigned to this role
+        with `status: "ACTIVE"`. Flattened from
+        `_count.users` (role-repository.ts:54-62).
+        Inactive users (status ≠ "ACTIVE") are not
+        counted.
+    permissions:
+      type: array
+      items:
+        $ref: ./common-roles.yaml#/Permission
+    isSuperadmin:
+      type: boolean
+      description: |
+        If `true`, the service refuses to update or
+        delete this role
+        (role-service.ts:62-64, 91-93). The
+        superadmin role is treated as immutable
+        from the service layer.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      oneOf:
+        - type: string
+          format: uuid
+        - type: "null"
+    createdBy:
+      type: object
+      description: |
+        4-field projection including `email` (not the
+        canonical 3-field `Publisher`). Slightly broader
+        than other modules.
+      required: [id, fullName, username, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+    updatedBy:
+      oneOf:
+        - type: object
+          required: [id, fullName, username, email]
+          properties:
+            id:
+              type: string
+              format: uuid
+            fullName:
+              type: string
+            username:
+              type: string
+            email:
+              type: string
+              format: email
+        - type: "null"
+
+Permission:
+  type: object
+  description: |
+    A role's permission. TS type `Permission` from
+    `src/app/(dashboard)/common/user-management/roles/features/types/index.ts:20-27`.
+
+    Maps to the Prisma `Permission` model
+    (prisma/schema.prisma). The `action` and `subject`
+    columns are plain `String` at the DB level; the
+    TS type asserts `Action` / `Subject` enums
+    (defined in `roles/features/utils.ts:39-228`)
+    but allows `(string & {})` for forward-compat.
+  required:
+    - id
+    - action
+    - subject
+    - roleId
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    action:
+      type: string
+      description: |
+        Free-form at the DB level; application-layer
+        type is the `Action` union from
+        `roles/features/utils.ts:6-29` (base +
+        special). Includes things like `"View"`,
+        `"Add"`, `"Edit"`, `"Delete"`, `"Export"`,
+        `"Change Status"`, `"Acknowledge"`, etc.
+    subject:
+      type: string
+      description: |
+        Free-form at the DB level; application-layer
+        type is the `Subject` union from
+        `roles/features/utils.ts:43-228` (200+
+        subjects covering every UI menu — e.g.
+        `"User"`, `"Department"`, `"Role"`,
+        `"Patient Registration Summary"`, etc.).
+    roleId:
+      type: string
+      format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

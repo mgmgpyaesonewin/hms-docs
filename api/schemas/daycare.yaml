@@ -1,0 +1,568 @@
+# docs/schemas/daycare.yaml
+# Schemas for the daycare REST module.
+# 7 read-only endpoints; all return
+# `{ success, result, message: "", error: null }`
+# envelopes. Daycare bills are modelled as
+# "ProxyBill" rows with
+# `department = DepartmentEnum.DAYCARE`. The
+# actual row shape varies — most are
+# passthroughs of the upstream
+# Appointment / Patient / ProxyBill
+# projection. See docs/paths/daycare.yaml for
+# the per-endpoint details.
+
+# =============================================================================
+# Response envelopes
+# =============================================================================
+
+GetAppointmentsForDaycareResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/appointments-for-daycare`. The
+    `result` is whatever
+    `DayCareRepository.getAppointmentForDaycare`
+    returns. Expected to be either a bare
+    array of `Appointment` rows (with joined
+    `doctor`, `appointmentType`, etc.) or a
+    paginated `{ appointments, totalCount }`
+    object — the upstream repo return type
+    is not formally typed, so the wire shape
+    is documented as
+    `additionalProperties: true` to be
+    faithful to the codebase.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+      description: |
+        Passthrough of
+        `DayCareRepository.getAppointmentForDaycare(query)`.
+        Typically a list of `Appointment` rows
+        with joined doctor / appointmentType /
+        user, or a paginated wrapper. PII:
+        patient id, doctor id, timestamps.
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetDaycareAppointmentsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/daycare-appointments`. The
+    `result` is
+    `DayCareRepository.getDayCareAppointments(query)`.
+    PII-heavy.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetDaycareConfirmedPatientsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/daycare-confirmed-patients`. The
+    `result` is
+    `DayCareRepository.getDayCareConfirmedPatients(query)`.
+    Despite the endpoint name, the schema
+    exposes **no status filter** — the
+    "confirmed" predicate is hard-coded in
+    the repository.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetDaycareProxyBillListResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/daycare/list`. The `result` is
+    `ProxyBillRepository.getProxyBillList(query)`
+    — i.e., a list of `ProxyBill` rows
+    filtered to
+    `department = DepartmentEnum.DAYCARE`.
+    The row shape is the full `ProxyBill`
+    model with joined `patient`,
+    `appointment`, `pharmacyBill`,
+    `serviceBill`, `procedureBill`,
+    `servicePackageBill`. See
+    `prisma/schema.prisma` for the
+    canonical column list.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetDaycareProxyBillByIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/daycare/{id}`. The `result` is
+    the full `ProxyBill` row for the daycare
+    bill, including the optional
+    `serviceBill`, `procedureBill`,
+    `servicePackageBill`, and
+    `pharmacyBill` sub-objects. The
+    canonical shape is documented in
+    `prisma/schema.prisma` (`ProxyBill` +
+    `ProxyBillServiceBill` +
+    `ProxyBillProcedureBill` +
+    `ProxyBillServicePackageBill` +
+    `ProxyBillPharmacyBill`).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/daycare.yaml#/ProxyBill
+        - type: "null"
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetDaycareProxyBillActivitiesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/daycare/{id}/activities`. The
+    `result` is
+    `ProxyBillRepository.getProxyBillActivites(id)`
+    — the audit-trail rows for the bill.
+    The row shape is per
+    `ProxyBillActivity` (or equivalent log
+    model) — a list of
+    { action, userId, userName, createdAt,
+    remark } entries. The exact column list
+    is not formally documented at the Zod
+    level.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetPatientsForDaycareResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/patients-for-daycare`. The
+    `result` is
+    `DayCareRepository.getPatientForDaycare(query)`.
+    The schema is shared with the OPD
+    patient list. PII-heavy (name, phone,
+    nrcNo, email, township, region, etc.).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+ProxyBill:
+  type: object
+  description: |
+    Canonical `ProxyBill` shape. Maps to the
+    `ProxyBill` Prisma model
+    (`prisma/schema.prisma`). The full row
+    returned by
+    `ProxyBillRepository.getProxyBillById`
+    for the daycare bill.
+
+    Notable columns on the model:
+      - `id` (UUID PK).
+      - `storeId` (FK to `Store`).
+      - `billTypeId` (FK to `BillType`).
+      - `patientId` (FK to `Patient`).
+      - `appointmentId` (FK, nullable).
+      - `admissionId` (FK, nullable).
+      - `endoRequestId` (FK, nullable).
+      - `otRequestId` (FK, nullable).
+      - `hdRequestId` (FK, nullable).
+      - `mainProcedureId` (FK, nullable).
+      - `departmentType`
+        (`DepartmentEnum` — the
+        `DayCareService.department =
+        DepartmentEnum.DAYCARE` field
+        drives the runtime filter on
+        list endpoints).
+      - `patientGroup`, `patientType`
+        (enums).
+      - `date` (`DateTime`).
+      - `subtotal`, `taxAmount`,
+        `taxPercentage`, `discountAmount`,
+        `discountPercentage`, `totalAmount`,
+        `foc`, `paid` (`Decimal?` for
+        paid; other decimals are
+        non-nullable).
+      - `remark` (`String?`).
+      - `paymentStatus`
+        (`BillPaymentStatusEnum`,
+        nullable).
+      - `displayFOCField` (`Boolean
+        @default(false)`).
+      - `createdBy` / `updatedBy` (FK to
+        `User`, nullable).
+      - `isCanceled`, `cancelRemark`
+        (Boolean / String?).
+      - Sub-bills (all optional FK to
+        `ProxyBillServiceBill`,
+        `ProxyBillProcedureBill`,
+        `ProxyBillServicePackageBill`,
+        `ProxyBillPharmacyBill`).
+
+    Per the `createProxyBillSchema` /
+    `superRefine`, at least one of
+    `serviceBill.services`,
+    `serviceBill.teamFees`,
+    `servicePackageBill.servicePackages`,
+    `pharmacyBill.items`,
+    `procedureBill.procedures` must be
+    present — that's the "proxy bill must
+    have content" rule.
+  required:
+    - id
+    - storeId
+    - billTypeId
+    - patientId
+    - date
+    - departmentType
+    - patientType
+    - createdAt
+    - updatedAt
+  properties:
+    id: { type: string, format: uuid }
+    storeId: { type: string, format: uuid }
+    billTypeId: { type: string, format: uuid }
+    patientId: { type: string, format: uuid }
+    appointmentId: { type: string, format: uuid, nullable: true }
+    admissionId: { type: string, format: uuid, nullable: true }
+    endoRequestId: { type: string, format: uuid, nullable: true }
+    otRequestId: { type: string, format: uuid, nullable: true }
+    hdRequestId: { type: string, format: uuid, nullable: true }
+    mainProcedureId: { type: string, nullable: true }
+    departmentType:
+      type: string
+      enum:
+        - OPD
+        - IPD
+        - ED
+        - DAYCARE
+        - OT
+        - CATHLAB
+        - HD
+        - ENDO
+    patientGroup:
+      type: string
+      nullable: true
+    patientType:
+      type: string
+      enum: [OPD, IPD, ED, DAYCARE, EMERGENCY, OTHER]
+    date: { type: string, format: date-time }
+    subtotal: { type: number, minimum: 0 }
+    taxAmount: { type: number, minimum: 0 }
+    taxPercentage: { type: number, minimum: 0 }
+    discountAmount: { type: number, minimum: 0 }
+    discountPercentage: { type: number, minimum: 0 }
+    totalAmount: { type: number, minimum: 0 }
+    foc: { type: number, minimum: 0 }
+    paid: { type: number, nullable: true }
+    remark: { type: string, nullable: true }
+    paymentStatus:
+      type: string
+      enum: [PENDING, PARTIALLY_PAID, PAID, CANCELLED, REFUNDED]
+      nullable: true
+    displayFOCField: { type: boolean }
+    isCanceled: { type: boolean, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    serviceBillId: { type: string, format: uuid, nullable: true }
+    procedureBillId: { type: string, format: uuid, nullable: true }
+    servicePackageBillId: { type: string, format: uuid, nullable: true }
+    pharmacyBillId: { type: string, format: uuid, nullable: true }
+    createdById: { type: string, format: uuid, nullable: true }
+    updatedById: { type: string, format: uuid, nullable: true }
+    serviceBill:
+      $ref: ../schemas/daycare.yaml#/ProxyBillServiceBill
+    procedureBill:
+      $ref: ../schemas/daycare.yaml#/ProxyBillProcedureBill
+    servicePackageBill:
+      $ref: ../schemas/daycare.yaml#/ProxyBillServicePackageBill
+    pharmacyBill:
+      $ref: ../schemas/daycare.yaml#/ProxyBillPharmacyBill
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+ProxyBillServiceBill:
+  type: object
+  description: |
+    The optional `ProxyBillServiceBill`
+    sub-bill — a list of `Service` line
+    items (each with `serviceId`,
+    `servicePrice`, `referredPrice`,
+    `reportingPrice`, `urgentPrice`,
+    `priceType`, `doctorId`, `categoryId`,
+    `categoryName`, `price`, `qty`,
+    `discountPercentage`, `discountAmount`,
+    `foc`, `amount`, `isCancel`,
+    `cancelRemark`, `cancelledById`,
+    `isTeamFee`, `isPriceFromMapping`).
+    The schema's two `.refine`s enforce:
+      1. `cancelRemark` is required when
+         `isCancel` is true.
+      2. `doctorId` is required when
+         `isTeamFee` is true.
+
+    The base sub-bill shape also includes
+    `id`, `proxyBillId`, `patientId`
+    (all optional in the write schema).
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    services:
+      type: array
+      items:
+        $ref: ../schemas/daycare.yaml#/ServiceBillItem
+
+ServiceBillItem:
+  type: object
+  description: |
+    A single service line in the
+    `ProxyBillServiceBill`. Per
+    `serviceBillItemSchema` in
+    `shared/proxy-bill/schemas/proxy-bill.schema.ts`.
+  required: [serviceId]
+  properties:
+    id: { type: string, nullable: true }
+    name: { type: string, nullable: true }
+    serviceBillId: { type: string, nullable: true }
+    serviceId: { type: string }
+    servicePrice:
+      type: object
+      additionalProperties: true
+      description: |
+        Per-group price map (the
+        `subPriceSchema` shape — keys are
+        price-group ids, values are
+        numbers).
+    referredPrice: { type: object, additionalProperties: true }
+    reportingPrice: { type: object, additionalProperties: true }
+    urgentPrice: { type: object, additionalProperties: true }
+    priceType: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    categoryId: { type: string, nullable: true }
+    categoryName: { type: string, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    qty: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    foc: { type: number, nullable: true }
+    amount: { type: number, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean, nullable: true }
+    isTeamFee: { type: boolean, nullable: true }
+    isPriceFromMapping: { type: boolean, nullable: true }
+
+ProxyBillProcedureBill:
+  type: object
+  description: |
+    The optional `ProxyBillProcedureBill`
+    sub-bill — a list of `Procedure` line
+    items. Each item has
+    `procedureId`, `doctorId`, `price`,
+    `localPrice`, `foreignerPrice`,
+    `insurancePrice`, `governmentPrice`,
+    `qty`, discounts, `foc`, `amount`,
+    `isCancel`, `cancelRemark`,
+    `cancelledById`. The schema's `.refine`
+    enforces: `cancelRemark` required when
+    `isCancel` is true.
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    procedures:
+      type: array
+      items:
+        $ref: ../schemas/daycare.yaml#/ProcedureBillItem
+
+ProcedureBillItem:
+  type: object
+  description: |
+    A single procedure line. Per
+    `ProcedureBillItemSchema`.
+  properties:
+    id: { type: string, nullable: true }
+    name: { type: string, nullable: true }
+    procedureBillId: { type: string, nullable: true }
+    procedureId: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    localPrice: { type: number, minimum: 0, nullable: true }
+    foreignerPrice: { type: number, minimum: 0, nullable: true }
+    insurancePrice: { type: number, minimum: 0, nullable: true }
+    governmentPrice: { type: number, minimum: 0, nullable: true }
+    qty: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    foc: { type: number, nullable: true }
+    amount: { type: number, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean, nullable: true }
+
+ProxyBillServicePackageBill:
+  type: object
+  description: |
+    The optional
+    `ProxyBillServicePackageBill` sub-bill —
+    a list of `ServicePackage` line items
+    (`servicePackageId`,
+    `servicePackagePrice`, `price`, `qty`,
+    discounts, `foc`, `amount`).
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    servicePackages:
+      type: array
+      items:
+        $ref: ../schemas/daycare.yaml#/ServicePackageBillItem
+
+ServicePackageBillItem:
+  type: object
+  description: |
+    A single service-package line. Per
+    `ServicePackageBillItemSchema`.
+  properties:
+    id: { type: string, nullable: true }
+    name: { type: string, nullable: true }
+    servicePackageBillId: { type: string, nullable: true }
+    servicePackageId: { type: string, nullable: true }
+    servicePackagePrice:
+      type: object
+      additionalProperties: true
+    price: { type: number, minimum: 0, nullable: true }
+    qty: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    foc: { type: number, nullable: true }
+    amount: { type: number, nullable: true }
+
+ProxyBillPharmacyBill:
+  type: object
+  description: |
+    The optional `ProxyBillPharmacyBill`
+    sub-bill — a list of pharmacy sale
+    items (per `pharmacySaleItemShape`).
+    The schema's three `.refine`s enforce:
+      1. `focQty <= qty`.
+      2. `qty <= stock.qty` (or
+         `qty <= stock.qty + initialQty`
+         for existing items) — stock
+         validation.
+      3. `cancelRemark` required when
+         `isCancel` is true.
+
+    The base sub-bill shape also has
+    `subtotal`, `taxAmount`,
+    `taxPercentage`, `discountAmount`,
+    `discountPercentage`, `totalAmount`,
+    `remark`, `invoiceNo`, `billTypeId`,
+    `storeId`, `date`, `patientId`,
+    `patientGroup`, `proxyBillId` (all
+    optional in the write schema).
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    patientGroup: { type: string, nullable: true }
+    date: { type: string, nullable: true }
+    invoiceNo: { type: string, nullable: true }
+    billTypeId: { type: string, nullable: true }
+    storeId: { type: string, nullable: true }
+    subtotal: { type: number, minimum: 0, nullable: true }
+    taxPercentage: { type: number, minimum: 0, nullable: true }
+    taxAmount: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, minimum: 0, nullable: true }
+    discountAmount: { type: number, minimum: 0, nullable: true }
+    totalAmount: { type: number, minimum: 0, nullable: true }
+    remark: { type: string, nullable: true }
+    items:
+      type: array
+      items:
+        $ref: ../schemas/daycare.yaml#/PharmacySaleItem
+
+PharmacySaleItem:
+  type: object
+  description: |
+    A single pharmacy sale item in the
+    `ProxyBillPharmacyBill`. The shape is
+    `pharmacySaleItemShape` (from
+    `shared/pharmacy/schemas/pharmacy-sale/pharmacy-sale-form-schema.ts`)
+    extended with `id`, `cancelRemark`,
+    `cancelledById`, `isCancel` for the
+    proxy-bill context. The schema's three
+    `.refine`s are listed on
+    `ProxyBillPharmacyBill`.
+  properties:
+    id: { type: string, nullable: true }
+    itemId: { type: string, nullable: true }
+    qty: { type: number, minimum: 0 }
+    focQty: { type: number, minimum: 0 }
+    isNewAddedItem: { type: boolean, nullable: true }
+    initialQty: { type: number, minimum: 0, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    amount: { type: number, minimum: 0, nullable: true }
+    stock:
+      type: object
+      additionalProperties: true
+      description: |
+        Joined `Stock` row (id, batchId,
+        qty, etc.). The schema's stock
+        validation
+        (`qty <= stock.qty + initialQty`)
+        relies on this projection.
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean, nullable: true }

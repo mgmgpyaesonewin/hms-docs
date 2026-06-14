@@ -1,0 +1,182 @@
+# docs/schemas/common-default-setting.yaml
+# Schemas for the common-default-setting sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/default-setting
+# Source: src/app/api/(common)/default-setting/route.ts
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetDefaultSettingResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/default-setting`. The
+    service-level helper returns the bare repository
+    output, and the route wraps it in
+    `{ success: true, result, error: null }` via
+    `enhancedApiHandler`
+    (route.ts:12-26).
+
+    Important: the repository uses `prisma.defaultSetting.
+    findFirst({ include: { paymentMethod, store, ... }})`
+    with **no `where` clause** — so this endpoint returns
+    whichever row happens to come back first (or `null` if
+    the table is empty). It is **not** scoped to the
+    current user's store, despite the Prisma model
+    declaring `storeId @unique` (i.e. one DefaultSetting
+    per store). See security notes.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-default-setting.yaml#/DefaultSetting
+        - type: "null"
+    error:
+      type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+DefaultSetting:
+  type: object
+  description: |
+    Canonical default-setting shape. TS type `DefaultSetting`
+    from
+    `src/app/(dashboard)/common/default-setting/features/type/index.ts:9-31`.
+
+    Maps to the Prisma `DefaultSetting` model
+    (prisma/schema.prisma, @@map("default_setting")).
+    Notable: the model has **no `createdBy` / `updatedBy`**
+    columns (no audit trail at the DB level — the service's
+    `activityLogger.log` calls use the row's `id` as
+    `entityId` but the logged `userId` is the actor, not
+    a row attribute).
+
+    `paymentMethod` and `store` are joined projections
+    (`select: { id: true, name: true }`); `billType` is
+    commented out at the repository and type level but
+    remains in the Prisma model (see security notes).
+
+    The `settings` column is a free-form `Json` blob; the
+    TS type asserts a loose `Settings = { displayTaxField,
+    displayFOCField }` shape, but the runtime does not
+    validate this.
+  required:
+    - id
+    - rounding
+    - expiredAlertDuration
+    - paymentMethodId
+    - paymentMethod
+    - storeId
+    - store
+    - createdAt
+    - updatedAt
+    - settings
+  properties:
+    id:
+      type: string
+      format: uuid
+    rounding:
+      type: string
+      description: |
+        Free-form string (the create schema is just
+        `z.string({ required_error: "Rounding is required" })`).
+        No enum constraint at the runtime layer. Likely
+        expected values are e.g. `"0.5"`, `"1"`, `"1.5"`,
+        `"none"` — but the schema does not enforce this.
+    expiredAlertDuration:
+      type: integer
+      minimum: 1
+      description: |
+        Days-until-expiry threshold for batch-expiry
+        alerts. The create schema requires `min(1)`.
+    paymentMethodId:
+      type: string
+      format: uuid
+    paymentMethod:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    storeId:
+      type: string
+      format: uuid
+      description: |
+        `@unique` in the Prisma model — at most one
+        `DefaultSetting` per `Store`. The model enforces
+        this; the `getDefaultSetting` repository path does
+        not.
+    store:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    billTypeId:
+      type: string
+      format: uuid
+      nullable: true
+      description: |
+        Present in the Prisma model (`String?`); **absent
+        from the TS type and schemas** (commented out).
+        See security notes.
+    settings:
+      oneOf:
+        - $ref: ./common-default-setting.yaml#/Settings
+        - type: "null"
+      description: |
+        `Json?` column in the Prisma model. The
+        application-level type asserts
+        `{ displayTaxField: boolean; displayFOCField: boolean }`,
+        but the type is `JsonValue | null` at the boundary
+        and not validated.
+    version:
+      type: string
+      nullable: true
+      description: |
+        `String?` in the Prisma model; **absent from the
+        TS type and schemas**. Likely reserved for
+        optimistic-concurrency or migrations.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+Settings:
+  type: object
+  description: |
+    Strongly-typed view of the `settings` JSON blob
+    (default-setting/type/index.ts:4-7). The runtime does
+    not validate this shape — it is a TS-only type
+    assertion.
+  required:
+    - displayTaxField
+    - displayFOCField
+  properties:
+    displayTaxField:
+      type: boolean
+      description: |
+        Whether the UI should show tax-input fields. Default
+        `true` per the create schema.
+    displayFOCField:
+      type: boolean
+      description: |
+        Whether the UI should show FOC (free-of-charge)
+        fields. Default `false` per the create schema.

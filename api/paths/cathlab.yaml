@@ -1,0 +1,550 @@
+# docs/paths/cathlab.yaml
+# REST endpoints: cathlab module (src/app/api/(cathlab)/).
+#
+# All endpoints are read-only. The write operations (create /
+# update / delete CathLab, create / update / delete
+# CathLabRequest, update company-direct items, update
+# service items) live on the services but are reached via
+# server actions / tRPC — they are NOT part of this
+# documentation set.
+#
+# Endpoints exposed:
+#   - GET /api/cathlab
+#   - GET /api/cathlab/{id}
+#   - GET /api/cathlab/{id}/audits
+#   - GET /api/cathlab/patients-for-cathlab
+#   - GET /api/cath-lab-requests-for-billing
+#   - GET /api/cathlab-requests
+#   - GET /api/cathlab-requests/{id}
+#   - GET /api/cathlab-infection-screening
+#
+# All endpoints use `enhancedApiHandler` with
+# `auth: { required: true }` and **no RBAC permissions**.
+
+/api/cathlab:
+  get:
+    summary: List cathlabs (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      non-deleted CathLabs (`isDeleted: false`) with the
+      total row count.
+
+      Response shape:
+        ```
+        { cathLabs: CathLabWithPaymentStatus[]; totalCount: number }
+        ```
+
+      Filters (from `getCathLabsSchema`):
+        - `search` — case-insensitive substring match against
+          `cathLabRequest.requestId`, `patient.patientId`,
+          `patient.name`, or `admission.admissionId`.
+        - `start` / `end` — `createdAt` range.
+        - `storeId` — exact match on CathLab's `storeId`.
+        - `patientType` — exact match on Patient's `patientType`.
+        - `patientGroup` — exact match on Patient's
+          `patientGroup` (cast to Prisma `PatientGroup`).
+
+      The repository also derives a `paymentStatus: PAID |
+      UNPAID` field on each row by walking
+      `admission.ipddailyBills.ipdfinalBillWithDailyBills.ipdFinalBill.paymentStatus`
+      (cathlab.repository.ts:296-308).
+
+      Source:
+      `src/app/api/(cathlab)/cathlab/route.ts:6-25`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: storeId
+        schema:
+          type: string
+      - in: query
+        name: patientType
+        schema:
+          type: string
+      - in: query
+        name: patientGroup
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Paginated list of cathlabs.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetCathLabsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab/{id}:
+  get:
+    summary: Get a cathlab by id
+    description: |
+      Authenticated query. Returns the fully-populated
+      CathLab with all items (`cathLabWithItemsValidator`):
+      `store`, `patient` (with `memberList.memberCard`),
+      `admission` (with `deposits` and the deeply-nested
+      `ipddailyBills[].ipdfinalBillWithDailyBills[].ipdFinalBill`),
+      `cathLabServiceItems`, `CathLabProcedureItem`,
+      `cathLabCompanyDirectItems`, `CathLabPharmacySale`,
+      `CathLabAudit`.
+
+      May be `null` if the id does not match — the service
+      does not 404 on miss. The handler also does not throw
+      400 for malformed ids; Prisma will return null.
+
+      Source:
+      `src/app/api/(cathlab)/cathlab/[id]/route.ts:5-22`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_byId
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: The cathlab (full shape) or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetCathLabByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab/{id}/audits:
+  get:
+    summary: Get a cathlab's audit trail
+    description: |
+      Authenticated query. Returns the CathLab with the
+      `CathLabAudit` array included
+      (`cathLabWithAuditsValidator`,
+      cathlab.repository.ts:175-208). Each audit entry
+      has `createdBy` / `updatedBy` projections that
+      include a `role.name` field — distinctive from the
+      rest of the application (which only projects
+      `id`/`fullName`/`username`).
+
+      Returns `null` if the id does not match.
+
+      Source:
+      `src/app/api/(cathlab)/cathlab/[id]/audits/route.ts:5-22`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_audits
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: The cathlab with its audit entries, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetCathLabAuditsByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab/patients-for-cathlab:
+  get:
+    summary: List patients eligible for cathlab
+    description: |
+      Authenticated query. Returns patients that have at
+      least one `CathLabRequest` with the given status
+      (the repo filter is
+      `CathLabRequest: { some: { cathLabRequestStatus: ... } }`,
+      cathlab.repository.ts:319-326).
+
+      Note: the `cathLabRequestStatus` filter is **required
+      to be present** in the parsed query object — the
+      `where` clause is built unconditionally with
+      `cathLabRequestStatus: query.cathLabRequestStatus`,
+      so omitting it would make the search match only
+      patients whose `cathLabRequestStatus` is `undefined`.
+      The Zod schema marks it `.optional()` but the repo
+      treats it as required.
+
+      `includePatientId` short-circuits the search to a
+      single patient (overrides the rest of the filters).
+      Otherwise the `search` filter matches against
+      `name`, `phoneNo`, or `patientId` (substring,
+      case-insensitive).
+
+      Response shape:
+        ```
+        { patients: Patient[]; totalCount: number }
+        ```
+      (`patients` are full Prisma rows — no projection.)
+
+      Source:
+      `src/app/api/(cathlab)/cathlab/patients-for-cathlab/route.ts:6-25`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_patients
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: cathLabRequestStatus
+        schema:
+          $ref: ../schemas/cathlab.yaml#/CathRequestStatus
+      - in: query
+        name: includePatientId
+        schema:
+          type: string
+      - in: query
+        name: hasAdmission
+        schema:
+          type: boolean
+      - in: query
+        name: patientType
+        schema:
+          type: string
+      - in: query
+        name: patientGroup
+        schema:
+          type: string
+      - in: query
+        name: region
+        schema:
+          type: string
+      - in: query
+        name: township
+        schema:
+          type: string
+      - in: query
+        name: checkHasPendingBills
+        schema:
+          type: boolean
+      - in: query
+        name: hasNewBornRecord
+        schema:
+          type: boolean
+      - in: query
+        name: currentAdmissionId
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Paginated list of patients.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetPatientsForCathLabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cath-lab-requests-for-billing:
+  get:
+    summary: List billable cathlab requests for an admission
+    description: |
+      Authenticated query. Returns a list of small
+      `{ id, label }` mappings for approved CathLab
+      requests that:
+        - Belong to the given `patientId` and `admissionId`.
+        - Have `cathLabRequestStatus: APPROVED`.
+        - Have **no** non-deleted `CathLab` linking back
+          (i.e. the request has not yet been turned into a
+          billable CathLab record).
+
+      The handler maps each `cathLabRequest` row to
+      `{ id: r.id, label: r.requestId ?? "Unknown Request ID" }`
+      (cathlab.service.ts:97-101).
+
+      Both `patientId` and `admissionId` are required.
+
+      Source:
+      `src/app/api/(cathlab)/cath-lab-requests-for-billing/route.ts:6-33`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_billable_requests
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: admissionId
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: List of billable cathlab requests.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetBillableCathLabRequestsForAdmissionResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab-requests:
+  get:
+    summary: List cathlab requests (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      CathLabRequests with the total row count.
+
+      Response shape:
+        ```
+        { cathLabRequests: CathLabRequest[]; totalCount: number }
+        ```
+
+      Filters (from `getCathLabRequestsSchema`):
+        - `search`, `start`, `end` — from `defaultQuerySchema`.
+        - `status` — `CathRequestStatus` enum.
+        - `gender` — patient gender enum.
+        - `admissionId` — exact match (no UUID refinement).
+        - `patientId` — exact match (no UUID refinement).
+        - `sourceDepartment` — `OPD` | `ED` | `IPD` (inline
+          enum).
+
+      Each row includes nested `admission` (id only),
+      `patient` (full row), `referralDoctor`, `referralClinic`,
+      `anesthesiaType`, and the
+      `cathLabRequestCardiologist` /
+      `cathLabRequestAssistantDoctor` /
+      `cathLabRequestAssistantNurses` join tables with their
+      respective projections.
+
+      Source:
+      `src/app/api/(cathlab)/cathlab-requests/route.ts:6-25`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_request_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: status
+        schema:
+          $ref: ../schemas/cathlab.yaml#/CathRequestStatus
+      - in: query
+        name: gender
+        schema:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+      - in: query
+        name: admissionId
+        schema:
+          type: string
+      - in: query
+        name: patientId
+        schema:
+          type: string
+      - in: query
+        name: sourceDepartment
+        schema:
+          $ref: ../schemas/cathlab.yaml#/CathSourceDepartment
+    responses:
+      "200":
+        description: Paginated list of cathlab requests.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetCathLabRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab-requests/{id}:
+  get:
+    summary: Get a cathlab request by id
+    description: |
+      Authenticated query. Returns the single CathLabRequest
+      with the same shape as the list endpoint (via
+      `cathLabRequestValidator`). May be `null` if the id
+      does not match.
+
+      Source:
+      `src/app/api/(cathlab)/cathlab-requests/[id]/route.ts:5-22`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_request_byId
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: The cathlab request (full shape) or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetCathLabRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab-infection-screening:
+  get:
+    summary: Get infection-screening summary for a patient
+    description: |
+      Authenticated query. Returns a small
+      `{ hasApprovedRequest, cathLabRequestId, displayLabel,
+      isPositiveAlert }` shape summarizing the latest
+      approved CathLab request's infection-screening data
+      for the given patient.
+
+      The service walks the most recent APPROVED
+      `CathLabRequest` for the patient, reads the four
+      screening markers (`hbAg`, `hcv`, `hiv`, `vdrl`) plus
+      `otherScreening`, and computes a `displayLabel` via
+      `getInfectionScreeningDisplay`
+      (`src/utils/infection-screening.ts:9`):
+        - `"Positive"` — at least one marker is positive.
+        - `"Negative"` — all markers are negative.
+        - `"Pending"` — markers are still pending/awaiting.
+
+      `isPositiveAlert` is a convenience flag set to
+      `displayLabel === "Positive"`.
+
+      When no approved request exists, the response is
+      `{ hasApprovedRequest: false, cathLabRequestId: null,
+      displayLabel: null, isPositiveAlert: false }`.
+
+      Source:
+      `src/app/api/(cathlab)/cathlab-infection-screening/route.ts:6-31`.
+    tags:
+      - Cathlab
+    operationId: rest_cathlab_infection_screening
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: |
+          Infection-screening summary. The shape is always
+          present (never `null`), even when no approved
+          request exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/cathlab.yaml#/GetInfectionScreeningForPatientResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all eight endpoints above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** on any of the eight
+    endpoints. All use `auth: { required: true }` with no
+    `permissions` array. Cathlab data is clinically
+    sensitive — RBAC gating may be appropriate.
+  - **All endpoints are read-only.** Write operations
+    (create / update / delete CathLab, create / update /
+    delete CathLabRequest, update company-direct items,
+    update service items, etc.) live on the services but
+    are reached via server actions / tRPC — they are NOT
+    exposed as REST routes. This REST module is read-only.
+  - **Two path params are misnamed or misleading**:
+      - `/api/cath-lab-requests-for-billing` takes a
+        `patientId` and `admissionId` as query params
+        (both required), not a path param.
+      - `/api/cathlab-infection-screening` takes a
+        `patientId` as a query param (required), not a
+        path param.
+  - **`cathLabRequestStatus` is `.optional()` in the Zod
+    schema but the repo treats it as required** — the
+    `where` clause is built unconditionally with
+    `cathLabRequestStatus: query.cathLabRequestStatus`,
+    so omitting it would make the search match only
+    patients whose `cathLabRequestStatus` is `undefined`
+    (i.e. none).
+  - **Some `getById` endpoints return `null` instead of
+    404** for missing records:
+      - `GET /api/cathlab/{id}` — returns `null`.
+      - `GET /api/cathlab/{id}/audits` — returns `null`.
+      - `GET /api/cathlab-requests/{id}` — returns `null`.
+    The `getInfectionScreeningForPatient` endpoint
+    DOES return a structured response (with all flags
+    `false`/`null`) when there's no approved request.
+  - **`paymentStatus` is derived**, not stored — the
+    repo walks a deeply-nested relation on every list
+    call. The derivation is `PAID` if **any** linked daily
+    bill is in a `PAID` IPD final bill, else `UNPAID`.
+  - **Two parallel REST sub-areas** are exposed under
+    `cathlab` and `cathlab-requests` (and the
+    `cath-lab-requests-for-billing` summary). The two
+    are conceptually distinct entities (CathLab is the
+    billable record, CathLabRequest is the upstream
+    request that gates the billable one).
+  - **`CathLabAudit.createdBy.role.name` is included in
+    the audits response** — distinctive from the rest of
+    the application, which only projects
+    `id`/`fullName`/`username` for the publisher
+    projection.
+  - **`patientGroup` and `patientType` filter inputs
+    are accepted as raw strings** (not nativeEnum), with
+    the repo casting to Prisma enum types. Malformed
+    values will throw at the Prisma layer, surfaced as a
+    generic 500.
+  - **Dead code** — the service file contains a
+    commented-out earlier version of `deleteCathLab`
+    (lines 398-511), and a commented-out block of
+    `updateCathLabCompanyDirectItems`
+    (lines 627-652), superseded by the active versions.

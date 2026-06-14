@@ -1,0 +1,482 @@
+# docs/paths/trpc-store-mapping.yaml
+# tRPC router: storeMapping (src/lib/trpc/routers/store-mapping.ts)
+# CRUD over the `StoreMapping` model — the user × store join that
+# drives per-user store switching. 8 procedures; 7 use
+# `authProcedure`, `deleteStoreMapping` uses `verifyPasswordProcedure`
+# (caller's password re-verified). **None** use `authorizeProcedure`.
+# See the security notes at the bottom.
+x-trpc-source: src/lib/trpc/routers/store-mapping.ts
+x-trpc-router: storeMapping
+
+/api/trpc/storeMapping.getStoreMappings:
+  post:
+    summary: List users with at least one store mapping (paginated)
+    description: |
+      Authenticated query. Returns a paginated list of **users**
+      (not `StoreMapping` rows) with the side relation
+      `mappedStores[]` and the post-filter, pre-pagination count.
+
+      Response shape:
+        ```
+        { data: UserWithMappedStores[], count: number }
+        ```
+      The field name `data` is used (same as `Store` / `Department`),
+      not `storeMappings` or `users`.
+
+      The repository's `buildWhereQuery` filters to users with
+      `mappedStores: { some: {} }` — only users that have at
+      least one store mapping. There is no "list all
+      StoreMapping rows" endpoint.
+
+      Search filter (from `defaultQuerySchema`):
+        - `search` — case-insensitive substring match against
+          `username` only (the repo's `buildWhereQuery` overrides
+          the default search to only target `username`).
+
+      **No date-range filter is applied** — the repository's
+      `buildWhereQuery` only handles `search`.
+
+      Source: `src/lib/trpc/routers/store-mapping.ts:12-19`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_getStoreMappings
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of users with at least one store mapping.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-store-mapping.yaml#/GetStoreMappingsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/storeMapping.storeMappingTotalCounts:
+  post:
+    summary: Get total count of distinct users with a store mapping
+    description: |
+      Authenticated query. Returns
+      `prisma.storeMapping.groupBy({ by: ["userId"] })` — the raw
+      groupBy result is forwarded.
+
+      **The response is NOT a single integer** — it's a list of
+      `{ userId: string }` records (one per distinct user with a
+      mapping). The total count is derivable client-side as
+      `result.length`.
+
+      This is a **silent contract difference** vs every other
+      `*TotalCounts` tRPC procedure documented so far — the
+      typical shape is `{ count: number }` or a bare integer.
+      The router name (`storeMappingTotalCounts`) and service
+      name (`getTotalCounts`) suggest a single number, but the
+      implementation returns the raw groupBy result.
+
+      The query input is not honoured — the router does
+      `storeMappingTotalCounts: authProcedure.query(...)` with no
+      `.input(...)`, so any payload sent on the wire is ignored.
+
+      Source: `src/lib/trpc/routers/store-mapping.ts:21-26`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_storeMappingTotalCounts
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          Array of `{ userId }` records. The array length is the
+          "number of distinct users with at least one mapping".
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                required: [userId]
+                properties:
+                  userId:
+                    type: string
+                    format: uuid
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/storeMapping.getStoreMappingById:
+  post:
+    summary: Get a user (with mapped stores) by user id
+    description: |
+      Authenticated query. Returns the user (with `mappedStores[]`
+      and `_count.mappedStores`) — **the input `id` is the user's
+      id**, not a `StoreMapping` row id (there is no row id
+      exposed in the public surface; the table has `id`, `userId`,
+      `storeId` but the row is identified by `userId` for routing
+      purposes).
+
+      The repository calls
+      `prisma.user.findFirst({ where: { id } })` — the table being
+      queried is `User`, not `StoreMapping`. The
+      `select` includes `mappedStores[]` and `_count.mappedStores`
+      but no other user fields.
+
+      Returns `null` if the user does not exist (no tRPC throw /
+      404 envelope).
+
+      Source: `src/lib/trpc/routers/store-mapping.ts:28-35`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_getStoreMappingById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: |
+              User id (passed to
+              `prisma.user.findFirst({ where: { id } })`). No
+              UUID refinement at the router layer
+              (`input: z.string()`).
+    responses:
+      "200":
+        description: The user (with `mappedStores[]`), or `null`.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-store-mapping.yaml#/UserWithMappedStoresById
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/storeMapping.createStoreMapping:
+  post:
+    summary: Create a store mapping (user × store) — 1 user, N stores
+    description: |
+      Authenticated mutation. Maps a user to one or more stores.
+      Internally creates one `StoreMapping` row per `storeId` in
+      a `prisma.$transaction`.
+
+      Validation:
+        - `userId` non-empty.
+        - `storeId` non-empty (`z.array(z.string()).min(1)`).
+        - If the user already has a `StoreMapping.userId` row
+          (per `storeMappingRepository.findExistingUser` which is
+          actually a `prisma.storeMapping.findFirst`) → 409
+          `AppError("User already exists", 409)`.
+
+      **The 409 message is misleading** — it says "User already
+      exists" but the check is really "this user already has at
+      least one store mapping". The user themselves may exist in
+      the `User` table without a `StoreMapping` row; the check
+      is exclusively against `StoreMapping`.
+
+      Side effects:
+        - Sets `createdById` and `updatedById` to `ctx.user.id`.
+        - Logs the create via `activityLogger` (in the service —
+          description: "Created Store Mapping", action: "Create",
+          entity: "StoreMapping").
+        - Calls `revalidatePath("/set-up/store-mapping")`.
+
+      **Returns the array of created rows** (one per `storeId`).
+      Source: `src/lib/trpc/routers/store-mapping.ts:37-52`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_createStoreMapping
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-store-mapping.yaml#/CreateStoreMappingInput
+    responses:
+      "200":
+        description: Array of created `StoreMapping` rows.
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../schemas/trpc-store-mapping.yaml#/CreatedStoreMappingRow
+      "400":
+        description: Validation failure (Zod).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: |
+          User already has a store mapping (misleading message:
+          "User already exists"). Use `updateStoreMapping` to
+          change the mapped store list.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/storeMapping.updateStoreMapping:
+  post:
+    summary: Update a user's store mappings (full replace)
+    description: |
+      Authenticated mutation. Replaces the user's full set of
+      store mappings with the supplied list. Internally
+      `prisma.$transaction`s:
+        1. `deleteMany` on `StoreMapping.userId`.
+        2. `create` (one per `storeId`).
+
+      Validation:
+        - `userId` non-empty.
+        - `storeId` non-empty.
+        - If the user has no `StoreMapping.userId` row → 404
+          `AppError("User not found", 404)`. (Same misleading
+          check as the create case — the check is against
+          `StoreMapping`, not `User`.)
+
+      Side effects:
+        - Sets `createdById` and `updatedById` to `ctx.user.id`
+          (the new rows are stamped with the updater's id even
+          though they are conceptually "new" rows).
+        - Logs the update via `activityLogger` (description:
+          "Updated Store Mapping", action: "Update", entity:
+          "StoreMapping").
+        - Calls `revalidatePath("/set-up/store-mapping")`.
+
+      **Returns the array of new rows** (one per `storeId`).
+      Source: `src/lib/trpc/routers/store-mapping.ts:54-69`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_updateStoreMapping
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-store-mapping.yaml#/UpdateStoreMappingInput
+    responses:
+      "200":
+        description: Array of newly created `StoreMapping` rows.
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: ../schemas/trpc-store-mapping.yaml#/CreatedStoreMappingRow
+      "400":
+        description: Validation failure (Zod).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: |
+          User has no `StoreMapping` rows (misleading message:
+          "User not found"). Use `createStoreMapping` first to
+          bootstrap.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/storeMapping.deleteStoreMapping:
+  post:
+    summary: Delete a user's store mappings (caller password re-verified)
+    description: |
+      **Sensitive.** Built on `verifyPasswordProcedure`, which
+      requires the caller's session **and** re-verifies their
+      current password before running the mutation.
+
+      Validation:
+        - Caller must have a valid `sid` cookie.
+        - Caller's current password must verify.
+        - If the user has no `StoreMapping` rows → 404
+          `AppError("User not found", 404)`.
+
+      Side effects:
+        - `prisma.$transaction` containing one
+          `StoreMapping.deleteMany({ where: { userId } })`.
+        - The transaction wrapper is unnecessary (single op) but
+          is preserved.
+        - Calls `revalidatePath("/set-up/store-mapping")`.
+
+      **Returns the `deleteMany` result** (a
+      `BatchPayload`-shaped object — `{ count: number }`).
+
+      Source: `src/lib/trpc/routers/store-mapping.ts:71-84`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_deleteStoreMapping
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-store-mapping.yaml#/DeleteStoreMappingInput
+    responses:
+      "200":
+        description: Result of the `deleteMany` operation.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [count]
+              properties:
+                count:
+                  type: integer
+                  minimum: 0
+                  description: Number of rows deleted.
+      "401":
+        description: No valid session, or caller's password verification failed.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: User has no `StoreMapping` rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-security-note: |
+      The router does
+        `deleteStoreMapping: verifyPasswordProcedure.input(z.object({ id: z.string() }))`
+      which **overrides** the base input schema. The base schema
+      requires `verifyPassword`, but the chained `.input({ id })`
+      does not include it. The middleware reads
+      `input.verifyPassword` directly, so at runtime the procedure
+      will read `undefined` from input and
+      `authService.checkPassword(userId, undefined)` will throw.
+
+      This is the **same pattern** as `auth.resetPassword`,
+      `departments.deleteDepartment`, `stores.deleteStore`, and
+      `suppliers.deleteSupplierById` (see their
+      `x-security-note`s).
+
+      Additional naming inconsistency: the input field is `id`
+      (matches the Zod `z.string()` for an opaque id) but the
+      service treats it as `userId` (calls
+      `prisma.storeMapping.deleteMany({ where: { userId: input.id } })`).
+      The field is renamed at the call site — the wire shape is
+      `{ id }` but the wire semantic is "user id to delete".
+
+/api/trpc/storeMapping.getSwitchStores:
+  post:
+    summary: Get the current user's mapped stores (for the store-switcher)
+    description: |
+      Authenticated query. Returns the **current user** (id,
+      fullName) with a reduced `mappedStores[]` projection (just
+      `store: { id, name }` per entry — no `createdBy`,
+      `updatedBy`, `updatedAt`, or `_count`).
+
+      Uses `ctx.user.id` from the session, NOT a request input.
+
+      Used by the client shell to populate the "switch store"
+      dropdown. Source:
+      `src/lib/trpc/routers/store-mapping.ts:86-91`.
+    tags:
+      - StoreMapping
+    operationId: trpc_storeMapping_getSwitchStores
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Current user with mapped stores.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-store-mapping.yaml#/SwitchStoresResponse
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all eight procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **None** of the eight procedures use `authorizeProcedure`.
+    Any authenticated user can list, count, get, create, update,
+    and (with password re-verification) delete store mappings.
+    Store mappings drive per-user store switching, so this is a
+    privileged surface — worth gating behind a
+    `manage_store_mappings` action subject.
+  - `deleteStoreMapping` has the same input-schema-override bug
+    as `auth.resetPassword` / `departments.deleteDepartment` /
+    `stores.deleteStore` / `suppliers.deleteSupplierById`. The
+    `verifyPasswordMiddleware` reads `input.verifyPassword` from
+    the input that does not include it.
+  - **Misleading "User already exists" / "User not found"
+    errors**: the service's
+    `storeMappingRepository.findExistingUser(userId)` queries
+    `prisma.storeMapping.findFirst({ where: { userId } })` — the
+    check is really "user already has at least one
+    `StoreMapping` row" / "user has no `StoreMapping` rows", not
+    whether the user themselves exist. The error messages
+    "User already exists" (409 on create) and "User not found"
+    (404 on update / delete) are misleading. The user may exist
+    in `User` without any mapping.
+  - **`getStoreMappingById` takes a user id, not a `StoreMapping`
+    row id.** The router reads `id` from the input and passes it
+    straight to `prisma.user.findFirst({ where: { id } })` — the
+    table being queried is `User`, not `StoreMapping`. The
+    response includes `mappedStores[]` as a side relation.
+  - **`storeMappingTotalCounts` returns the raw
+    `prisma.storeMapping.groupBy` result**, NOT a single count
+    integer. The array length is the "number of distinct users
+    with a mapping" — but clients that read the field as a
+    single number will get a runtime error. This is a
+    silent-contract gotcha.
+  - **No `permission.subject` enforcement on the read endpoints**
+    — `getStoreMappings`, `getStoreMappingById`, and
+    `getSwitchStores` are all `authProcedure` and return the
+    full user-list / store-list. The `_count.mappedStores` per
+    row leaks the mapping distribution.
+  - **No date-range filter on `getStoreMappings`** — the
+    repository's `buildWhereQuery` only handles `search` (and
+    filters to users with `mappedStores: { some: {} }`).
+  - **Module-level singleton service is exported but unused**:
+    `storeMappingService = new StoreMappingService(new
+    StoreMappingRepository(prisma))` is exported from
+    `store-mapping.service.ts:58-60`, but the router creates a
+    fresh `StoreMappingService` on every call. The singleton is
+    presumably for future use but adds a bit of dead code.

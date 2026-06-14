@@ -1,0 +1,109 @@
+# docs/schemas/common-specialization.yaml
+# Schemas for the common-specialization sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/specialization
+# Source: src/app/api/(common)/specialization/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetSpecializationsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        The route uses `apiHandler` with manual
+        `validateSearchParams(getSpecializationsSchema,
+        ...)`. The schema is
+        `baseQuerySchema.transform(transformPaginationSchema)`,
+        so the post-transform shape is
+        `{ page, limit, offset, search?, start?, end? }`.
+        The repository interprets `query.search`
+        (case-insensitive substring match on `name`)
+        and `query.start` / `query.end` (`createdAt`
+        range, `gte` / `lte`). Ordering is
+        `createdAt: desc`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetSpecializationsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/specialization`. The
+    repository returns
+    `Promise<{ specializations: Specialization[]; totalCount: number }>`
+    (specialization.repository.ts:11-53) and the route
+    wraps it in
+    `{ success: true, result, error: "" }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [specializations, totalCount]
+      properties:
+        specializations:
+          type: array
+          items:
+            $ref: ./common-specialization.yaml#/Specialization
+        totalCount:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Specialization:
+  type: object
+  description: |
+    Canonical specialization shape. TS type
+    `Specialization` from
+    `src/app/(dashboard)/common/specialization/features/types/index.ts:1-16`.
+
+    Maps to the Prisma `Specialization` model
+    (prisma/schema.prisma, @@map("specializations")).
+    The list endpoint includes `createdBy` /
+    `updatedBy` as a `Publisher` projection
+    (`select: { id: true, fullName: true, username: true }`).
+    The helper `getSpecializationById` /
+    `getSpecializationByName` use
+    `include: { createdBy: true, updatedBy: true }`
+    (full `User` row — see security notes).
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdBy
+    - updatedBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-name
+        check enforced by the service via
+        `getSpecializationByName` (case-insensitive
+        equality).
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher

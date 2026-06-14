@@ -1,0 +1,159 @@
+# docs/paths/common-specialization.yaml
+# REST endpoint: GET /api/specialization
+# Source: src/app/api/(common)/specialization/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are reached via
+# server actions / tRPC — they are NOT exposed as REST
+# routes here.
+
+/api/specialization:
+  get:
+    summary: List specializations (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      specializations with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            specializations: Specialization[],
+            totalCount: number,
+          },
+          error: ""
+        }
+        ```
+
+      Filters (from `getSpecializationsSchema`,
+      interpreted by the repository's
+      `findSpecializationsAndCount`):
+        - `search` — case-insensitive substring match
+          against `name`.
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`).
+
+      Repository ordering: `createdAt: desc`.
+
+      Note on auth: this route uses the bare
+      `apiHandler` wrapper. Authentication is checked
+      manually via `verifyApiAuth()` at the start of
+      the handler — equivalent to
+      `auth: { required: true }` in
+      `enhancedApiHandler`, but bypasses the
+      `auth.permissions` and `auth.assertStoreId`
+      machinery entirely. The error envelope is the
+      `apiHandler` default
+      (`{ success: false, message: "Internal Server
+      Error", result: null, error: <err msg> }`).
+
+      Source:
+      `src/app/api/(common)/specialization/route.ts:14-29`.
+    tags:
+      - Common / Specialization
+    operationId: rest_common_specialization_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of specializations.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-specialization.yaml#/GetSpecializationsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions** — auth is checked manually
+    via `verifyApiAuth()` at the top of the handler;
+    the route does not declare
+    `auth: { required: true, permissions: [...] }`.
+    Any authenticated user can list specializations.
+    Consistent with the other single-endpoint
+    common-lookup routes (anesthesia-type,
+    bill-types, operation-type, etc.).
+  - **Dead `params` declaration** — the handler
+    signature is `(req, { params }: { params:
+    Promise<{ id: number }> })` and the first line
+    is `await params`, but the route file has no
+    `[id]` segment. The `params` object is always
+    empty `{}` and the `await` is a no-op. The
+    `id: number` type is also wrong (the Prisma id
+    is a UUID string). Looks like a copy-paste
+    leftover from a sibling route. Same pattern as
+    [[common-anesthesia-type]],
+    [[common-bill-types]],
+    [[common-operation-type]]. Not blocking.
+  - **No `message` field on success** — the response
+    envelope is `{ success: true, result, error: "" }`
+    (no `message` field). The other `common-*`
+    sub-areas that use `enhancedApiHandler` emit
+    `{ success: true, result, message: "", error: null }`
+    or similar. The `apiHandler` error path is
+    `{ success: false, message: "Internal Server
+    Error", result: null, error: <err> }`.
+  - **The list endpoint uses `select: { id, fullName,
+    username }` for `createdBy` / `updatedBy`**, while
+    the helper `getSpecializationById` /
+    `getSpecializationByName` use
+    `include: { createdBy: true, updatedBy: true }`
+    (which returns the full `User` row, exposing
+    `password` hash and other PII). The service's
+    `createSpecialization` /
+    `updateSpecialization` paths use these helpers
+    internally for the duplicate-name check. Same
+    pattern as [[common-anesthesia-type]],
+    [[common-operation-type]],
+    [[common-bill-types]].
+  - **Write operations (create / update / delete)
+    are NOT exposed as REST routes** — they live on
+    `SpecializationService` and are reached via
+    server actions / tRPC (not part of this
+    documentation set). This REST sub-area is
+    read-only.
+  - **Delete is guarded by `prisma.doctor.count`**
+    — the repository's `deleteSpecialization` does a
+    pre-check on `Doctor` rows referencing this
+    specialization and throws
+    `AppError("Cannot delete specialization: it is
+    assigned to existing doctors", 400)`
+    (specialization.repository.ts:76-85). Status is
+    400, not 409 — inconsistent with
+    [[common-bill-types]]'s FK handling.
+  - **Update uses 400 for "not found"** — the
+    service's `updateSpecialization` throws
+    `AppError("Specialization not found", 400)`
+    rather than 404 (specialization.service.ts:49).
+    Inconsistent with the 404 used by
+    `updateRole` ([[common-roles]]) and
+    `updateServiceCategory`
+    ([[common-service-category]]).
+  - **Service logger `context` typo** — the service
+    instantiates its child logger with
+    `context: "bill-type-service"`
+    (specialization.service.ts:10), a copy-paste
+    leftover from `BillTypeService`. Same typo as
+    [[common-operation-type]]. The context string
+    is observable in Winston log output.
+  - **Update-name race** — the service
+    `updateSpecialization` re-fetches the row by id
+    then re-fetches by name (two separate queries).
+    Between these queries, a concurrent request
+    could rename a different row to the target name
+    and the second query would surface a stale "name
+    exists" 409. Not covered by a transaction; same
+    pattern as
+    [[common-anesthesia-type]],
+    [[common-bill-types]],
+    [[common-operation-type]].

@@ -1,0 +1,755 @@
+# docs/schemas/imaging.yaml
+# OpenAPI component schemas for the `imaging` module's
+# REST surface (`src/app/api/(imaging)/`).
+#
+# The imaging module is structured around 6 imaging
+# "types" (CT, ECG, ECHO, MRI, Ultrasound, X-Ray) — all
+# sharing a single `ImagingList` data model with a
+# `type` discriminator. The per-type `*ListValidator`
+# in the repositories is just an alias of the shared
+# `imagingListValidator` (see
+# `repositories/imaging.repository.ts`).
+#
+# This file documents the response envelopes and the
+# core shared shapes (ImagingList, ImagingService,
+# ImagingTemplate, etc.). The 6 imaging types all share
+# the same `ImagingList` body — only the list / detail
+# / activities envelopes differ per type.
+
+# =============================================================================
+# Master imaging service
+# =============================================================================
+
+GetImagingServiceResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+  description: |
+    Result is the strategy-dispatched imaging list
+    from `ImagingRepository.getImagingService` (shape
+    depends on the strategies registered for the
+    requested module — see
+    `strategies/imaging-strategy-registry.ts`).
+
+# =============================================================================
+# Imaging templates
+# =============================================================================
+
+GetImagingTemplatesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        templates:
+          type: array
+          items: { $ref: "#/ImagingTemplate" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetImagingTemplateByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingTemplate" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+DeleteImagingTemplateResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    message:
+      type: string
+      example: "Imaging template deleted successfully"
+    error: { nullable: true }
+  required: [success, message, error]
+  description: |
+    Note: no `result` field on delete — the service
+    returns only `success` + `message` + `error`.
+
+ImagingTemplate:
+  type: object
+  description: |
+    Mirrors `ImagingTemplateWithRelations` (derived
+    from `imagingTemplateValidator` in
+    `imaging-template.repository.ts`).
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string }
+    type:
+      type: string
+      enum: [CT, MRI, X_RAY, ULTRASOUND, ECHO, ECG]
+      description: "`ImagingType` enum."
+    template: { type: string }
+    createdById: { type: string, format: uuid }
+    updatedById: { type: string, format: uuid }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+
+# =============================================================================
+# Imaging list (shared by all 5 type-trees)
+# =============================================================================
+
+GetCTListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+  description: |
+    Result is the CT list envelope from
+    `CTRepository.getCTList` — typically
+    `{ ctLists, totalCount }` or the raw
+    `ImagingList[]` array, depending on the
+    repository's shape.
+
+GetCTDetailsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingList" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetCTListActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingListActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetCTServiceActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingServiceActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetCTAddOnResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/CTAddOn" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# ECG
+GetECGListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetECGDetailsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingList" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetECGListActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingListActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetECGServiceActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingServiceActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# ECHO
+GetECHOListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetECHODetailsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingList" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetECHOListActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingListActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetECHOServiceActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingServiceActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# MRI
+GetMRIListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetMRIDetailsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingList" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetMRIListActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingListActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetMRIServiceActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingServiceActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# Ultrasound
+GetUltrasoundListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetUltrasoundDetailsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingList" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetUltrasoundListActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingListActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetUltrasoundServiceActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingServiceActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# X-Ray
+GetXRayListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: {}
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetXRayDetailsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/ImagingList" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetXRayListActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingListActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetXRayServiceActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/ImagingServiceActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# =============================================================================
+# Shared body schemas
+# =============================================================================
+
+ImagingList:
+  type: object
+  description: |
+    The shared `ImagingList` body used by all 6
+    imaging types (CT, ECG, ECHO, MRI, Ultrasound,
+    X-Ray). The shape is the
+    `Prisma.ImagingListGetPayload<typeof imagingListValidator>`
+    — i.e. the result of the shared
+    `imagingListValidator` in
+    `repositories/imaging.repository.ts`.
+
+    Note that for detail endpoints, the type wrapper
+    `ImagingListWithRequiredOpdBilling` makes
+    `opdBilling` and `services[].opdBillingService`
+    non-nullable. The structure below is the base
+    shape (with nullable).
+  properties:
+    id: { type: string, format: uuid }
+    type:
+      type: string
+      enum: [CT, MRI, X_RAY, ULTRASOUND, ECHO, ECG]
+    referralDoctor:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        doctorId: { type: string }
+        title: { type: string }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+    referralClinic:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        clinicId: { type: string }
+        name: { type: string }
+    opdBilling:
+      type: object
+      nullable: true
+      description: |
+        The OPD billing row (and its parent `Bill`).
+        Null for IPD imaging lists. For detail
+        responses (CT, etc.) the `opdBilling` is
+        guaranteed non-null per the
+        `ImagingListWithRequiredOpdBilling` type
+        wrapper.
+      properties:
+        id: { type: string }
+        bill:
+          type: object
+          properties:
+            invoiceNo: { type: string }
+            remark: { type: string, nullable: true }
+            appointmentId: { type: string, format: uuid, nullable: true }
+            store: {}
+        patient:
+          $ref: "./common-patients.yaml#/Patient"
+    ipdDailyBill:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        invoiceNo: { type: string, nullable: true }
+        remark: { type: string, nullable: true }
+        store:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+        admission:
+          type: object
+          properties:
+            patient:
+              $ref: "./common-patients.yaml#/Patient"
+            discharges:
+              type: object
+              properties:
+                isFinalBillPaid: { type: boolean }
+    imagingListNewBorn:
+      type: object
+      nullable: true
+      description: |
+        Optional new-born baby reference (used for
+        obstetric imaging).
+      properties:
+        newBornBaby:
+          type: object
+          properties:
+            patient: { $ref: "./common-patients.yaml#/Patient" }
+    services:
+      type: array
+      description: |
+        The line-item services (one per billing
+        service row). Ordered by `createdAt` ASC,
+        `id` ASC. Each item carries either
+        `ipdDailyService` or `opdBillingService`
+        (NOT both).
+      items: { $ref: "#/ImagingService" }
+    opdPackageBill:
+      type: object
+      nullable: true
+      properties:
+        patient: { $ref: "./common-patients.yaml#/Patient" }
+        store:
+          type: object
+          properties:
+            name: { type: string }
+    opdEmrImagingModuleJoints:
+      type: array
+      description: |
+        Join rows to OPD-EMR imaging modules. The
+        embedded `opdEmr` carries the related OPD
+        EMR, with `opdEmrServices[]`, `patient`,
+        `doctor`, etc.
+      items:
+        type: object
+        properties:
+          opdEmr:
+            type: object
+            properties:
+              appointmentId: { type: string, format: uuid, nullable: true }
+              patient: { $ref: "./common-patients.yaml#/Patient" }
+              doctor:
+                type: object
+                properties:
+                  doctorId: { type: string }
+                  title: { type: string }
+                  user:
+                    type: object
+                    properties:
+                      fullName: { type: string }
+              opdEmrServices:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    serviceId: { type: string }
+                    qty: { type: integer }
+                    priceType: { type: string }
+                    price: { type: number }
+                    amount: { type: number }
+                    foc: { type: integer }
+                    imagingServiceId: { type: string, format: uuid, nullable: true }
+                    service:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        addOthersForCt: { type: boolean }
+                    doctor:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        doctorId: { type: string }
+                        specialization: { type: string, nullable: true }
+                        title: { type: string }
+                        user:
+                          type: object
+                          properties:
+                            fullName: { type: string }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+ImagingService:
+  type: object
+  description: |
+    A line item on an `ImagingList`. The sub-row
+    references either an `IPDDailyService` (for IPD
+    imaging) or an `OPDBillingService` (for OPD
+    imaging) — NOT both. Optional `addOn` and
+    `result` link to the CT add-on and the result
+    document.
+  properties:
+    id: { type: string, format: uuid }
+    imagingListId: { type: string, format: uuid }
+    type:
+      type: string
+      enum: [CT, MRI, X_RAY, ULTRASOUND, ECHO, ECG]
+    status:
+      type: string
+      enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+      description: |
+        `ImagingServiceStatus` (see
+        `imaging-service.types.ts`).
+    ipdDailyService:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        priceType: { type: string, nullable: true }
+        qty: { type: integer }
+        foc: { type: integer }
+        service:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            addOthersForCt: { type: boolean }
+        doctor:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            doctorId: { type: string }
+            specialization: { type: string, nullable: true }
+            title: { type: string }
+            user:
+              type: object
+              properties:
+                fullName: { type: string }
+    opdBillingService:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        priceType: { type: string, nullable: true }
+        qty: { type: integer }
+        foc: { type: integer }
+        service:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            addOthersForCt: { type: boolean }
+        doctor:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            doctorId: { type: string }
+            specialization: { type: string, nullable: true }
+            title: { type: string }
+            user:
+              type: object
+              properties:
+                fullName: { type: string }
+    addOn:
+      type: object
+      nullable: true
+      description: |
+        Reference to the CT add-on for this
+        service (CT-specific). Just an `id` stub
+        in the validator.
+      properties:
+        id: { type: string, format: uuid }
+    result:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        result: { type: string }
+        attachments:
+          type: array
+          items: { type: string, format: uri }
+        printOption: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        readingDoctors:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              doctor:
+                type: object
+                properties:
+                  id: { type: string }
+                  doctorId: { type: string }
+                  title: { type: string }
+                  specialization: { type: string, nullable: true }
+                  user:
+                    type: object
+                    properties:
+                      fullName: { type: string }
+
+CTAddOn:
+  type: object
+  description: |
+    CT add-on billing summary. Returned by
+    `CTService.getAddOn`. The full shape comes
+    from `CTAddOnWithRelations` (see
+    `ct.types.ts`) which is built from the
+    `ctAddOnValidator` in `ct.repository.ts`.
+    Includes `serviceItems` (additional
+    services), `pharmacyItems` (pharmacy
+    add-ons), the parent `imagingService`, and
+    the `dailyBill` link.
+  properties:
+    id: { type: string, format: uuid }
+    imagingServiceId: { type: string, format: uuid }
+    dailyBillId: { type: string, format: uuid, nullable: true }
+    serviceItems:
+      type: array
+      items: {}
+    pharmacyItems:
+      type: array
+      items: {}
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+ImagingListActivityLog:
+  type: object
+  description: |
+    Activity-log entry for an `ImagingList` write
+    event (create, result-add, status change, etc.).
+    Returned by the per-type
+    `*Service.getXListActivities`.
+  properties:
+    id: { type: string, format: uuid }
+    entity:
+      type: string
+      example: "CT List"
+    entityId: { type: string, format: uuid }
+    action:
+      type: string
+      example: "Create"
+    description: { type: string }
+    remark: { type: string, nullable: true }
+    userId: { type: string, format: uuid }
+    user:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    timestamp: { type: string, format: date-time }
+
+ImagingServiceActivityLog:
+  type: object
+  description: |
+    Activity-log entry for an `ImagingService`
+    write event (status change, etc.). Returned by
+    the per-type
+    `*Service.getXServiceActivities`.
+  properties:
+    id: { type: string, format: uuid }
+    entity:
+      type: string
+      example: "CT Service"
+    entityId: { type: string, format: uuid }
+    action: { type: string, example: "Update" }
+    description: { type: string }
+    remark: { type: string, nullable: true }
+    userId: { type: string, format: uuid }
+    user:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    timestamp: { type: string, format: date-time }

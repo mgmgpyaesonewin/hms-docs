@@ -1,0 +1,661 @@
+# docs/paths/endo.yaml
+# REST endpoints: endo (Endoscopy) module under
+# `src/app/api/(endo)/`. 12 read endpoints + 1
+# mutation (POST `/api/endo/report`).
+#
+# Endpoints exposed:
+#   - GET  /api/endo/list
+#   - GET  /api/endo/{id}
+#   - GET  /api/endo/{id}/activities
+#   - GET  /api/endo/report/{id}
+#   - POST /api/endo/report
+#   - GET  /api/endo-requests
+#   - GET  /api/endo-requests/{id}
+#   - GET  /api/endo-requests/{id}/report
+#   - GET  /api/endo-requests-for-proxy
+#   - GET  /api/endo-infection-screening
+#   - GET  /api/appointments-for-endo
+#   - GET  /api/patients-for-endo
+#
+# All 12 GET routes use `enhancedApiHandler` with
+# `auth: { required: true }` and **no RBAC**. The single
+# POST route (`/api/endo/report`) also has no RBAC.
+#
+# The module is organised around a `EndoContainerService`
+# (see `shared/endo/services/endo-container.service.ts`)
+# that wires together a 7-dep composition tree:
+# `EndoService` ← `EndoRepository` + `ProxyBillRepository`
+# + `ProxyBillStockService` + 4 phlebotomy services. The
+# 9 GET routes that go through `EndoService.*` use
+# `service.endoService.getXxx(...)`. The two
+# `endo-requests` routes go through a separate
+# `EndoRequestService`. The `/endo/report` GET routes use a
+# standalone `endoReportService` (no container).
+
+# =============================================================================
+# Endo proxy-bill list / detail / activity
+# =============================================================================
+#
+# Backed by `EndoService.getProxyBillList` /
+# `getProxyBillById` / `getProxyBillActivites`. The
+# `EndoService` extends `ProxyBillTemplateService` with
+# `department = DepartmentEnum.ENDO` and
+# `pharmacyBillInvoicePrefix = "ENDO"` (so IPD daily bills
+# generated from endo bills are prefixed `ENDO/...`).
+
+/api/endo/list:
+  get:
+    operationId: getEndoList
+    summary: Endo proxy-bill list
+    description: |
+      Authenticated query. Returns a paginated list of
+      `ProxyBill` rows scoped to `departmentType: ENDO`.
+      Service: `EndoService.getProxyBillList` →
+      `EndoRepository.getEndoList`. Validation:
+      `getProxyBillListSchema`
+      (`billTypeId`, `patientType`, `patientGroup`,
+      `storeId`, `paymentStatus`, `departmentType`,
+      plus standard pagination). The repository
+      forces `departmentType: DepartmentEnum.ENDO`
+      server-side regardless of the query.
+
+      Response shape: `{ proxyBills: ProxyBill[]; count:
+      number }`.
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      No RBAC permissions declared. PII-heavy: the join
+      includes the full `Patient` row (name, phone,
+      patientId, guardian, etc.). Worth gating behind
+      a `manage_proxy_bill` action subject.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: billTypeId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: storeId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        required: false
+        schema: { type: string }
+      - in: query
+        name: departmentType
+        required: false
+        schema: { type: string }
+        description: |
+          Accepted but ignored — the repository always
+          filters by `DepartmentEnum.ENDO`.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo/{id}:
+  get:
+    operationId: getEndoById
+    summary: Endo proxy-bill detail
+    description: |
+      Returns a single endo `ProxyBill` row by id.
+      Service: `EndoService.getProxyBillById` (inherited
+      from `ProxyBillTemplateService`). The detail payload
+      is the full `ProxyBill` (including
+      `serviceBill.serviceBillItems`,
+      `procedureBill.procedureBillItem`,
+      `pharmacySale.items`, `ipdDailyBill.admission`,
+      `proxyBillRequestLink.endoReport` — see
+      `ProxyBilling` type).
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ProxyBill id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo/{id}/activities:
+  get:
+    operationId: getEndoActivities
+    summary: Endo proxy-bill activity log
+    description: |
+      Returns the activity-log entries for a single endo
+      `ProxyBill`. Service: `EndoService.getProxyBillActivites`
+      → `EndoProxyBillRepository.getProxyBillActivities`
+      (inherited from the proxy-bill template). Items are
+      written via `activityLogger.log` from the various
+      proxy-bill write paths.
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ProxyBill id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Endo report — read & create
+# =============================================================================
+#
+# The `EndoReport` is the patient-facing writeup that gets
+# attached to a `ProxyBillRequestLink` (i.e. to the endo
+# proxy bill that was generated for the request). One
+# report per proxy bill, either a text/template entry OR
+# a single file attachment (mutually exclusive — see
+# `EndoReportService.validateExclusiveReportEntry`).
+
+/api/endo/report:
+  post:
+    operationId: createEndoReport
+    summary: Create an Endo Report
+    description: |
+      Creates a new `EndoReport` linked to a proxy bill
+      via the `ProxyBillRequestLink` junction. Service:
+      `EndoReportService.createEndoReport` →
+      `EndoReportRepository.create`.
+
+      Validation: `createEndoReportSchema`
+      (`proxyBillId` required UUID; `templateId?`,
+      `result?`, `attachmentUrls: string[]` (max 1)).
+
+      The repository asserts that the
+      `ProxyBillRequestLink` exists, is not deleted, and
+      has `requestType: "ENDO"` — throws otherwise with
+      a plain `Error` (NOT a typed `AppError`).
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      No RBAC. Side-effect: the report is created with
+      `status: ENTERED`. The `session.user.id` is used
+      for `createdById` and `updatedById`.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/endo.yaml#/CreateEndoReportRequest
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+          The result is the new `EndoReport` with full
+          relations (proxy bill + patient + surgeons +
+          anesthetists, etc.).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/CreateEndoReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "400":
+        description: |
+          Validation error. The `validateExclusiveReportEntry`
+          guard throws `AppError` 400 for:
+            - more than one attachment,
+            - neither text/template nor attachment,
+            - both text/template and attachment.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo/report/{id}:
+  get:
+    operationId: getEndoReportById
+    summary: Endo Report detail
+    description: |
+      Returns a single `EndoReport` by id. Service:
+      `EndoReportService.getEndoReportById` →
+      `EndoReportRepository.findById`. Filters by
+      `isDeleted: false`. The result includes the full
+      proxy-bill chain (`proxyBillRequestLink.proxyBill.*`
+      + `proxyBillRequestLink.endoRequest.*`).
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: EndoReport id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoReportByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Endo report not found (or has been deleted).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Endo requests — the "request" layer above the proxy bill
+# =============================================================================
+#
+# `EndoRequest` is the operation order (date/time, type,
+# surgeon team, vitals, infection screening). One request
+# becomes one proxy bill at billing time (linked via
+# `ProxyBillRequestLink`). Status state machine:
+# `REQUESTED → APPROVED → COMPLETED`, with `CANCELLED` as
+# a terminal side-branch.
+
+/api/endo-requests:
+  get:
+    operationId: getEndoRequestList
+    summary: Endo request list
+    description: |
+      Paginated list of `EndoRequest` rows. Service:
+      `EndoRequestService.getEndoRequestList` →
+      `EndoRequestRepository.findEndoRequests`.
+
+      Validation: `getEndoRequestsSchema`
+      (baseQuerySchema + `module: EndoRequestModule`
+      defaulting to `OPD`, `isFromOPD: boolean`,
+      `status: EndoRequestStatus?`,
+      `gender: patientGenders?`, `urgency: Urgency?`,
+      `admissionId?`, `patientId?`, plus standard
+      pagination).
+
+      Search performs case-insensitive substring matches
+      on `patient.patientId`, `patient.name`,
+      `admission.admissionId`,
+      `appointment.appointmentId`, and `requestId`. The
+      `start`/`end` query range filters on
+      `operationDate`.
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: module
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, ED]
+        description: |
+          `EndoRequestModule`. Defaults to `OPD`. The
+          `isFromOPD` query param, when `true`, forces
+          the filter to `patient.patientType IN (OPD,
+          EMERGENCY)` regardless of `module`.
+      - in: query
+        name: isFromOPD
+        required: false
+        schema: { type: string }
+        description: |
+          String `"true"` coerces to `true`. Overrides
+          the `module` filter to be `OPD | EMERGENCY`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [REQUESTED, APPROVED, COMPLETED, CANCELLED]
+      - in: query
+        name: gender
+        required: false
+        schema: { type: string }
+      - in: query
+        name: urgency
+        required: false
+        schema: { type: string }
+      - in: query
+        name: admissionId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoRequestListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo-requests/{id}:
+  get:
+    operationId: getEndoRequestById
+    summary: Endo request detail
+    description: |
+      Returns a single `EndoRequest` by id. Service:
+      `EndoRequestService.getEndoRequestById` →
+      `EndoRequestRepository.findEndoRequestById`. The
+      payload is the full request with surgical team
+      (surgeons, anesthetists, assistant doctors,
+      assistant nurses), operation / anesthesia types,
+      referral doctor, referral clinic, and the active
+      `proxyBillRequestLinks` (with their `endoReport`).
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: EndoRequest id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: |
+          Endo request not found. (`findEndoRequestById`
+          returns `null` and the route returns it in the
+          envelope — no `AppError` thrown here.)
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo-requests/{id}/report:
+  get:
+    operationId: getEndoReportByEndoRequestId
+    summary: Endo Report by Endo Request id
+    description: |
+      Returns the `EndoReport` linked to a given
+      `EndoRequest` (via the active `ProxyBillRequestLink`).
+      Service: `EndoReportService.getEndoReportByEndoRequestId`
+      → `EndoReportRepository.findByEndoRequestId`. Useful
+      for the IPD flow, where the report is looked up by
+      request id rather than proxy bill id.
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: EndoRequest id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+          Result may be `null` (no report yet).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoReportByEndoRequestIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Endo for proxy-bill — billable IPD request picker
+# =============================================================================
+
+/api/endo-requests-for-proxy:
+  get:
+    operationId: getEndoRequestsForProxy
+    summary: IPD endo requests eligible to bill
+    description: |
+      Returns a tiny label/value picker of IPD `EndoRequest`
+      rows eligible to be billed as a proxy bill for the
+      given `patientId` + `admissionId`. Service:
+      `EndoService.getBillableIpdEndoRequestsForProxy` →
+      `EndoRequestRepository.findBillableIpdEndoRequestsForProxy`.
+
+      Filters: `module: IPD`, `status: APPROVED`,
+      `hasServicesAdded: false`, no active
+      (`isDeleted: false`) `ProxyBillRequestLink`. The
+      response is a list of `{ id, label: requestId ??
+      "Unknown Request ID" }`.
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: admissionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoRequestsForProxyResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Endo infection screening — derived from EndoRequest serology
+# =============================================================================
+
+/api/endo-infection-screening:
+  get:
+    operationId: getEndoInfectionScreening
+    summary: Endo infection-screening display
+    description: |
+      Returns the infection-screening display label
+      derived from a single endo request's
+      serology fields (HB Ag, HCV, HIV, VDRL,
+      `otherScreening`). Service:
+      `EndoService.getInfectionScreening` →
+      `EndoRequestService.getInfectionScreening` →
+      `getInfectionScreeningDisplay` (in
+      `src/utils/infection-screening.ts`).
+
+      Response shape: `{ hasApprovedRequest, endoRequestId,
+      displayLabel: "Positive" | "Negative" | "Pending" |
+      null, isPositiveAlert }`. If the request id is
+      not found, all four fields are returned as
+      `false` / `null`.
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: endoRequestId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetEndoInfectionScreeningResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Patient / appointment lookup (drives the Endo request form)
+# =============================================================================
+
+/api/appointments-for-endo:
+  get:
+    operationId: getAppointmentsForEndo
+    summary: Appointments eligible for Endo (per patient)
+    description: |
+      Returns the appointments for a given patient that
+      are eligible to be billed as endo. Service:
+      `EndoService.getAppointmentsForEndo` →
+      `EndoRepository.getAppointmentsForEndo`.
+
+      Validation: `getAppointmentForProxySchema`
+      (`patientId` required). If `includeAppointmentId` is
+      provided, returns that single appointment;
+      otherwise returns all appointments where the
+      patient has an `APPROVED` endo request with no
+      active `ProxyBillRequestLink` and no `OPDEMR` row
+      for the `ENDO_OPD` / `ENDO_ED` `moduleType`.
+
+      Response is a list of `Appointment & { ProxyBill,
+      appointmentType }` (no `totalCount`).
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetAppointmentsForEndoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/patients-for-endo:
+  get:
+    operationId: getPatientsForEndo
+    summary: Patients eligible for Endo
+    description: |
+      Returns the paginated list of patients that are
+      eligible for endo (have an `APPROVED` endo request
+      with no services added and no active
+      `IPDEmrRequestLink`). Service:
+      `EndoService.getPatientsForEndo` →
+      `EndoRepository.getPatientsForEndo`.
+
+      Validation: `getPatientsSchema` (the shared
+      patients schema). `includePatientId` (when set)
+      short-circuits to that single patient ignoring
+      the endo-eligibility filter.
+
+      PII-heavy: full `Patient` rows, plus their
+      `appointments` (filtered to `CONFIRMED` with an
+      `APPROVED` endo request).
+    tags: [Endo]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      No RBAC. PII-heavy: name, phone, patientId, etc.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/endo.yaml#/GetPatientsForEndoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

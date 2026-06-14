@@ -1,0 +1,185 @@
+# docs/paths/common-suppliers.yaml
+# REST endpoint: GET /api/suppliers
+# Source: src/app/api/(common)/suppliers/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are reached via
+# server actions (supplier-actions.ts) — they are NOT
+# exposed as REST routes here.
+
+/api/suppliers:
+  get:
+    summary: List suppliers (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      suppliers with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            suppliers: Supplier[],
+            count: number,
+          },
+          message: "",
+          error: ""
+        }
+        ```
+
+      Filters (from `querySupplierSchema`, interpreted
+      by the repository's `buildWhereFilter`):
+        - `search` — case-insensitive substring match
+          against `supplierId`, `companyName`,
+          `phoneNo`, or `email` (4-branch `OR`).
+        - `start` / `end` — `createdAt` range, with
+          the **end bound being `lt` (exclusive)**
+          rather than `lte` (inclusive). This is a
+          subtle inconsistency with other modules
+          (see security notes).
+        - `supplierType` — exact match against the
+          `MANUFACTURER` / `DISTRIBUTOR` native
+          enum.
+        - `status` — exact match against the
+          `ACTIVE` / `INACTIVE` native enum.
+
+      Repository ordering: `createdAt: desc`.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` but no
+      `permissions` array, so any authenticated user
+      can read the full list.
+
+      Source:
+      `src/app/api/(common)/suppliers/route.ts:6-17`.
+    tags:
+      - Common / Suppliers
+    operationId: rest_common_suppliers_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: supplierType
+        schema:
+          type: string
+          enum: [MANUFACTURER, DISTRIBUTOR]
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Paginated list of suppliers.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-suppliers.yaml#/GetSuppliersResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — the route
+    declares only `auth: { required: true }`, no
+    `permissions` array. Any authenticated user can
+    read the full supplier list, including PII
+    (company name, phone number, email, address,
+    type, status, createdBy / updatedBy). The
+    corresponding UI uses `<PermissionGuard>` with
+    `action="View" / subject="Supplier"`, so the
+    check exists at the client layer; the server-side
+    REST endpoint does not enforce it. This is the
+    same pattern as
+    [[common-anesthesia-type]],
+    [[common-bill-types]], [[common-roles]], etc.
+  - **`createdBy` / `updatedBy` omit `id`** — the
+    list endpoint's repository uses
+    `include: { createdBy: { select: { fullName:
+    true, username: true } } }` — a 2-field
+    projection with **no `id`**. The canonical
+    3-field `Publisher` (used elsewhere) includes
+    `id`. This means the API consumer has no way to
+    look up the creator / updater by id from this
+    response. Likely a leftover from an earlier
+    design that didn't need the id, or an
+    intentional minimization of disclosed fields —
+    but it is inconsistent with the rest of the
+    codebase and worth flagging.
+  - **End-bound is `lt`, not `lte`** — the
+    repository's `buildWhereFilter` does
+    `where.createdAt = { gte: query.start, lt:
+    query.end }` (supplier-repository.ts:223-229).
+    The other `common-*` sub-areas that support a
+    `start` / `end` range use `lte` for the upper
+    bound (see [[common-anesthesia-type]],
+    [[common-bill-types]]). A supplier created at
+    exactly `end` will be excluded from the
+    filtered count, which is inconsistent with the
+    other modules and may surprise consumers.
+  - **`status` coercion is surprising** — the
+    service's `createSupplier` / `updateSupplierById`
+    coerce `data.status` (a `z.boolean()` at the
+    schema layer) to `ACTIVE` or `INACTIVE` based on
+    truthiness
+    (supplier-service.ts:44, 120):
+    `status: data.status ? supplierStatus.ACTIVE :
+    supplierStatus.INACTIVE`. A non-empty string
+    like `"INACTIVE"` would be truthy and end up
+    stored as `ACTIVE`. Worth documenting at the
+    API level: callers should pass `true` for
+    `ACTIVE` and `false` for `INACTIVE` (or just
+    omit the field and let the DB default
+    `ACTIVE` apply).
+  - **`supplierId` is sequential and guessable** —
+    the `generateCustomId("SID", lastSupplier?.supplierId)`
+    pattern produces `SID-001`, `SID-002`, etc. Not
+    a security boundary on its own (the field is
+    not a secret), but the same probe-by-duplicate
+    pattern as [[common-departments]],
+    [[common-roles]], [[common-selling-price-groups]].
+  - **No `data` field — but envelope has both
+    `message` and `error`** — the success shape
+    `{ success: true, result, message: "", error: "" }`
+    has an empty `error: ""` (string, not `null`).
+    Most other `common-*` sub-areas use `error: null`
+    or omit the field. The shape is valid OpenAPI
+    but clients comparing `error` to `null` will
+    see a non-null empty string.
+  - **Write path uses server actions, not REST** —
+    `createSupplier` / `updateSupplierById` /
+    `deleteSupplierById` are reached via
+    `supplier-actions.ts` server actions. The
+    repository's `updateSupplierById` is a 5-step
+    `prisma.$transaction` that `deleteMany`s
+    `SupplierContactPerson` and
+    `SupplierPaymentInfo` for the supplier and
+    re-`createMany`s them — full replace, not
+    merge. The repository's `deleteSupplierById`
+    catches FK violations via
+    `isForeignKeyConstraintViolationError` and
+    re-throws as
+    `AppError("Supplier is in use and cannot be
+    deleted", 400)` (supplier-repository.ts:188-202)
+    — note the 400 status, not 409.
+  - **No `bank` join in the response** — the
+    `Supplier` model has a commented-out `bank` /
+    `bankId` join on the `paymentInfos` projection
+    (supplier-repository.ts:107-113, types
+    comment-out at
+    suppliers/features/types/index.ts:65-68). The
+    columns exist in the DB but are not exposed
+    via this endpoint. Latent feature.
+  - **`contactPersons` / `paymentInfos` not in
+    list response** — these child relations are
+    only included by `getSupplierById` (the
+    per-supplier detail endpoint), not by
+    `getSuppliers` (the list endpoint). The list
+    response shape has no place for them.

@@ -1,0 +1,451 @@
+# docs/schemas/trpc-suppliers.yaml
+# Schemas for the tRPC `suppliers` router
+# (src/lib/trpc/routers/suppliers.ts). CRUD over the `Supplier` model.
+# 5 of 6 procedures use `authProcedure`; `deleteSupplierById` uses
+# `verifyPasswordProcedure` (caller's password re-verified). **None**
+# use `authorizeProcedure`. See the security notes in
+# docs/paths/trpc-suppliers.yaml.
+#
+# Re-uses the shared `Publisher` type from common.yaml for createdBy /
+# updatedBy projections on list / by-id responses.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateSupplierInput:
+  type: object
+  description: |
+    Input for `suppliers.createSupplier`. Zod schema
+    `createSupplierSchema` in
+    `src/app/(dashboard)/common/set-up/suppliers/features/schemas/create-supplier-schema.ts`.
+
+    The schema accepts an array of `paymentInfos` and applies a
+    `transform` that **filters out empty entries** (entries where
+    every field is `null`/empty). The same transform appears on the
+    update schema.
+  required:
+    - companyName
+    - phoneNo
+    - supplierType
+    - contactPersons
+  properties:
+    companyName:
+      type: string
+      minLength: 1
+      description: |
+        Required. Must be unique across the table (`@unique` in Prisma).
+        Service-side check via `supplierRepository.getSupplierByCompanyName`
+        → 409 `SUPPLIER_ERRORS.DUPLICATE_COMPANY_NAME` on collision.
+    phoneNo:
+      type: string
+      minLength: 1
+      description: |
+        Required. Must be unique (`@unique` in Prisma). Service-side check
+        → 409 `SUPPLIER_ERRORS.DUPLICATE_PHONE_NO` on collision.
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: |
+        Optional. If present, must be unique (`@unique` in Prisma).
+        Service-side check → 409 `SUPPLIER_ERRORS.DUPLICATE_EMAIL`.
+        The service normalises missing values to `null` before writing.
+    address:
+      type: string
+      nullable: true
+      description: Optional. Normalised to `null` when missing.
+    supplierType:
+      type: string
+      enum: [MANUFACTURER, DISTRIBUTOR]
+      description: |
+        `SupplierType` enum. Persisted on the supplier row
+        (`supplier_type` column).
+    status:
+      type: boolean
+      default: true
+      description: |
+        Boolean flag. The service translates to
+        `supplierStatus.ACTIVE` (true) or `supplierStatus.INACTIVE` (false).
+        Note this is the inverse of the storage form — the wire shape
+        is a boolean, the storage is an enum string.
+    contactPersons:
+      type: array
+      description: |
+        At least one contact person is required. The service persists
+        these via `contactPersons: { createMany: { data } }` — full
+        replacement on update.
+      items:
+        $ref: ./trpc-suppliers.yaml#/ContactPersonInput
+    paymentInfos:
+      type: array
+      description: |
+        Bank / payment method entries. The Zod schema applies a
+        `transform` that drops entries where every field is null/empty
+        (i.e. an "empty row" the user might have left in the form).
+        The bankId field is currently commented out in the schema — see
+        x-implementation-note on the schema.
+      items:
+        $ref: ./trpc-suppliers.yaml#/PaymentInfoInput
+
+UpdateSupplierInput:
+  type: object
+  description: |
+    Input for `suppliers.updateSupplierById`. The router does
+    `updateSupplierSchema.merge(validateIdSchema)` so the input must
+    include both the update payload and the `id` of the row to update.
+  required:
+    - id
+    - companyName
+    - phoneNo
+    - supplierType
+    - contactPersons
+  allOf:
+    - $ref: ./trpc-suppliers.yaml#/CreateSupplierInput
+    - type: object
+      properties:
+        id:
+          type: string
+          description: |
+            Supplier id. No UUID refinement at the router layer
+            (`validateIdSchema` is just `z.string()`).
+  x-update-side-effect: |
+    The repository's `updateSupplierById` runs a `prisma.$transaction`
+    that:
+      1. `deleteMany` on `SupplierContactPerson` for this supplier.
+      2. `createMany` with the new contact-person rows.
+      3. `deleteMany` on `SupplierPaymentInfo` for this supplier.
+      4. `createMany` with the new payment-info rows.
+      5. `update` the parent `Supplier` row.
+
+    This is a **full-replacement** pattern for the child tables.
+    The supplier's own id is NOT regenerated.
+
+DeleteSupplierInput:
+  type: object
+  description: |
+    Input for `suppliers.deleteSupplierById`. Built on
+    `verifyPasswordProcedure` (caller's current password is re-verified).
+    The router does
+    `verifyPasswordProcedure.input(validateIdSchema)` — same input-
+    schema-override pattern as `auth.resetPassword`, `stores.deleteStore`,
+    and `departments.deleteDepartment`. See x-security-note on the
+    path operation.
+  required:
+    - id
+  properties:
+    id:
+      type: string
+      description: Supplier id. No UUID refinement at the router layer.
+
+# =============================================================================
+# Inline input shapes (used by the array items)
+# =============================================================================
+
+ContactPersonInput:
+  type: object
+  description: |
+    Contact-person row passed inside `contactPersons`. Required fields:
+    `name`, `phoneNo`. Optional: `position` (nullable string), `email`
+    (nullable string). Persisted to the `SupplierContactPerson` table.
+  required:
+    - name
+    - phoneNo
+  properties:
+    name:
+      type: string
+      minLength: 1
+    position:
+      type: string
+      nullable: true
+    phoneNo:
+      type: string
+      minLength: 1
+    email:
+      type: string
+      nullable: true
+
+PaymentInfoInput:
+  type: object
+  description: |
+    Payment-info row passed inside `paymentInfos`. All fields are
+    nullable (the user may have just added a placeholder row that
+    should be filtered out — see the schema `transform`). Persisted to
+    the `SupplierPaymentInfo` table.
+
+    The `bankId` field is currently commented out in the source Zod
+    schema (no comment, no planned change) — the corresponding Prisma
+    column is present but the wire shape doesn't surface it. Captured
+    as `x-implementation-note`.
+  properties:
+    paymentMethodId:
+      type: string
+      format: uuid
+      nullable: true
+    accountNumber:
+      type: string
+      nullable: true
+    paymentFrequency:
+      type: string
+      enum: [WEEKLY, MONTHLY, QUATERLY, YEARLY]
+      nullable: true
+      description: |
+        `PaymentFrequency` enum. **Note the typo** in the source enum
+        — the value is `QUATERLY` (one A), not `QUARTERLY`. Preserved
+        verbatim from
+        `src/app/(dashboard)/common/set-up/suppliers/features/types/index.ts:18`.
+  x-implementation-note: |
+    The `bankId` field is commented out in the source Zod schema
+    (`create-supplier-schema.ts:26`) but the corresponding
+    `SupplierPaymentInfo.bankId` Prisma column exists. The bank join
+    (`select: { name: true }` on `bank`) is also commented out in
+    `supplier-repository.ts:108-113`. Looks like an in-progress feature.
+
+# =============================================================================
+# Response / output schemas
+# =============================================================================
+
+SupplierQueryInput:
+  type: object
+  description: |
+    Input for `suppliers.getSuppliers`. The Zod schema
+    `querySupplierSchema` extends `paginationSchema` and applies a
+    `transform` that adds `offset: (page - 1) * limit`. The effective
+    shape after the transform is
+    `{ search?, start?, end?, supplierType?, status?, page, limit, offset }`.
+  required:
+    - page
+    - limit
+    - offset
+  properties:
+    search:
+      type: string
+      description: |
+        Case-insensitive substring match against
+        `supplierId`, `companyName`, `phoneNo`, `email` (union).
+    start:
+      type: string
+      format: date-time
+      description: Inclusive lower bound for `createdAt`.
+    end:
+      type: string
+      format: date-time
+      description: Exclusive upper bound for `createdAt`.
+    supplierType:
+      type: string
+      enum: [MANUFACTURER, DISTRIBUTOR]
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    page:
+      type: integer
+      minimum: 1
+      default: 1
+    limit:
+      type: integer
+      minimum: 0
+      default: 10
+    offset:
+      type: integer
+      minimum: 0
+      description: Computed `(page - 1) * limit`.
+
+GetSuppliersResponse:
+  type: object
+  description: |
+    Response shape of `suppliers.getSuppliers`. Service signature
+    (supplier-repository.ts:32-34):
+    `Promise<{ suppliers: Supplier[]; count: number }>`.
+
+    Note the field name is `suppliers` (not `data`) and `count` (not
+    `totalCount`) — different from `Store` / `Department` which use
+    `{ data, count }` / `{ departments, count }`. The supplier service
+    does not slice the count to a "filtered" count — the repo uses the
+    same `where` for both `findMany` and `count`, so `count` is the
+    post-filter, pre-pagination total.
+  required:
+    - suppliers
+    - count
+  properties:
+    suppliers:
+      type: array
+      items:
+        $ref: ./trpc-suppliers.yaml#/Supplier
+    count:
+      type: integer
+      minimum: 0
+
+GetTotalSuppliersCountResponse:
+  type: object
+  description: |
+    Response shape of `suppliers.getTotalSuppliersCount`. Returns
+    the unpaginated total of `prisma.supplier.count()` with no `where`
+    filter.
+  properties:
+    count:
+      type: integer
+      minimum: 0
+
+Supplier:
+  type: object
+  description: |
+    Canonical supplier shape. TS type `Supplier` from
+    `src/app/(dashboard)/common/set-up/suppliers/features/types/index.ts:26-49`.
+
+    Maps to the Prisma `Supplier` model. The `supplierId` column is a
+    human-friendly code (e.g. `SID00001`) generated by
+    `generateCustomId("SID", lastSupplier?.supplierId)` on create —
+    monotonic with the previous row, not derived from the UUID.
+
+    `createdBy` / `updatedBy` projections are present on `getSuppliers`
+    and `getSupplierById` (selecting only `fullName` + `username`).
+    On `getSupplierById` the embedded `contactPersons[]` /
+    `paymentInfos[]` are also included.
+  required:
+    - id
+    - supplierId
+    - companyName
+    - phoneNo
+    - supplierType
+    - status
+    - createdById
+    - updatedById
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    supplierId:
+      type: string
+      description: |
+        Human-friendly supplier id (e.g. `SID00001`). Unique across
+        the table (`@unique` in Prisma). Generated client-side by
+        `generateCustomId`.
+    companyName:
+      type: string
+      description: Unique across the table.
+    phoneNo:
+      type: string
+      description: Unique across the table.
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: Unique when present (`@unique`).
+    address:
+      type: string
+      nullable: true
+    supplierType:
+      type: string
+      enum: [MANUFACTURER, DISTRIBUTOR]
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    contactPersons:
+      type: array
+      description: |
+        **Only present on `getSupplierById`**. Each entry includes
+        `id`, `supplierId`, `name`, `position`, `phoneNo`, `email`.
+      items:
+        $ref: ./trpc-suppliers.yaml#/ContactPerson
+    paymentInfos:
+      type: array
+      description: |
+        **Only present on `getSupplierById`**. Each entry includes
+        `id`, `supplierId`, `accountNumber`, `paymentFrequency`,
+        `paymentMethodId`, and the joined `paymentMethod: { name }`
+        (bank join is commented out in the repo).
+      items:
+        $ref: ./trpc-suppliers.yaml#/PaymentInfo
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    - `suppliers.getSuppliers` populates `createdBy` / `updatedBy`
+      (selecting `fullName`, `username`). No `contactPersons` /
+      `paymentInfos` on list.
+    - `suppliers.getSupplierById` populates `createdBy` / `updatedBy`
+      AND `contactPersons[]` AND `paymentInfos[]` (with `paymentMethod`
+      joined).
+    - **Mutations do not return the row** — `createSupplier`,
+      `updateSupplierById`, and `deleteSupplierById` all return
+      `{ message: "..." }`. There is no bare-response shape for this
+      router (unlike `Store` / `Department` which return the bare
+      Prisma record).
+
+ContactPerson:
+  type: object
+  description: |
+    Materialised contact-person row (read shape). Differs from the
+    input shape only in that the `id` and `supplierId` are populated.
+  required:
+    - id
+    - name
+    - phoneNo
+  properties:
+    id:
+      type: string
+      format: uuid
+    supplierId:
+      type: string
+      format: uuid
+    name:
+      type: string
+    position:
+      type: string
+      nullable: true
+    phoneNo:
+      type: string
+    email:
+      type: string
+      nullable: true
+
+PaymentInfo:
+  type: object
+  description: |
+    Materialised payment-info row (read shape) with the joined
+    `paymentMethod: { name }`. The bank join is commented out in the
+    repository.
+  required:
+    - id
+  properties:
+    id:
+      type: string
+      format: uuid
+    supplierId:
+      type: string
+      format: uuid
+    accountNumber:
+      type: string
+      nullable: true
+    paymentFrequency:
+      type: string
+      enum: [WEEKLY, MONTHLY, QUATERLY, YEARLY]
+      nullable: true
+    paymentMethodId:
+      type: string
+      format: uuid
+      nullable: true
+    paymentMethod:
+      type: object
+      nullable: true
+      description: Joined `PaymentMethod` row.
+      properties:
+        name:
+          type: string

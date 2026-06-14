@@ -1,0 +1,208 @@
+# docs/paths/common-service-sub-category.yaml
+# REST endpoint: GET /api/service-sub-category
+# Source: src/app/api/(common)/service-sub-category/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are reached via
+# server actions / tRPC — they are NOT exposed as REST
+# routes here.
+
+/api/service-sub-category:
+  get:
+    summary: List service sub-categories (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      service sub-categories with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            serviceSubCategory: ServiceSubCategory[],
+            totalCount: number,
+          },
+          error: ""
+        }
+        ```
+
+      Filters (from `getServiceSubCategorySchema`,
+      interpreted by the repository's
+      `findServiceSubCategory`):
+        - `search` — case-insensitive substring match
+          against `name` **or** the parent
+          `serviceCategory.name`
+          (service-sub-category-repository.ts:41-62).
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`).
+        - `categoryId` — `where.serviceCategoryId =
+          query.categoryId` (wired through). This is
+          the **only** filter that differs from
+          [[common-service-category]] — the parent
+          endpoint accepts `categoryId` but does
+          **not** wire it.
+        - `departmentId` — accepted but **not
+          wired** into the `where` clause. Silently
+          dropped.
+
+      Repository ordering: `createdAt: desc`. The
+      `findMany` and `count` queries are wrapped in
+      a `prisma.$transaction` for snapshot
+      consistency (the same pattern as
+      [[common-service-category]]).
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` but no
+      `permissions` array, so any authenticated
+      user can read the full list.
+
+      Source:
+      `src/app/api/(common)/service-sub-category/route.ts:6-23`.
+    tags:
+      - Common / Service Sub Category
+    operationId: rest_common_service_sub_category_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: categoryId
+        schema:
+          type: string
+        description: |
+          Wired through to
+          `where.serviceCategoryId`. Use this to
+          list sub-categories of a specific parent
+          `ServiceCategory`.
+      - in: query
+        name: departmentId
+        schema:
+          type: string
+        description: |
+          Accepted but **not used** by the
+          repository — silently dropped.
+    responses:
+      "200":
+        description: Paginated list of service sub-categories.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-service-sub-category.yaml#/GetServiceSubCategoryResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — the route
+    declares only `auth: { required: true }`, no
+    `permissions` array. Any authenticated user can
+    read the full list of service sub-categories
+    (and the joined `serviceCategory` parent row).
+  - **Inconsistent response envelope** — the success
+    shape is `{ success: true, result, error: "" }`
+    (no `message` field). The other `common-*`
+    sub-areas that use `enhancedApiHandler` emit
+    `{ success: true, result, message: "", error: null }`
+    or similar.
+  - **`categoryId` IS wired, `departmentId` is NOT**
+    — this is the asymmetric counterpart to
+    [[common-service-category]], where neither
+    filter is used. The `categoryId` filter here
+    is properly applied via
+    `where.serviceCategoryId = query.categoryId`
+    (service-sub-category-repository.ts:71-73).
+    The `departmentId` filter is silently dropped,
+    same as the sibling endpoint. Likely a
+    half-implemented feature.
+  - **Search matches parent `serviceCategory.name`
+    too** — the repository's `where.OR` includes a
+    nested relation match on
+    `serviceCategory.name` (lines 50-58), so
+    searching for `"Cardiology"` (a parent
+    category name) will return all sub-categories
+    under Cardiology. This is broader than the
+    typical `name` substring search — worth
+    documenting in the API contract.
+  - **Write path uses server actions / tRPC, not
+    REST** — `createServiceSubCategory` /
+    `updateServiceSubCategory` /
+    `deleteServiceSubCategory` are reached via
+    server actions or tRPC. The REST surface is
+    read-only.
+  - **Service activity-log typo** — the
+    `updateServiceSubCategory` activity log emits
+    `entity: "Servicev Sub Category"`
+    (service-sub-category-service.ts:104) — a
+    `v`-suffix typo. Same typo on
+    `updateServiceCategory` (`entity: "Servicev
+    Category"`, line 92).
+  - **Service method name is wrong** —
+    `ServiceSubCategoryService.getServiceCategoryById`
+    is a method on the sub-category service that
+    calls
+    `repository.findServiceSubCategoryById` (i.e.,
+    a sub-category fetch). The method name says
+    "Category" but the implementation fetches a
+    sub-category — a copy-paste from
+    `ServiceCategoryService`. Not exposed via this
+    REST endpoint, but the bug is latent for any
+    caller that reaches the service directly.
+  - **Repository helper name is malformed** —
+    `findServiceSubCategoryByIdatServiceCategory`
+    (service-sub-category-repository.ts:99-103) is
+    the only name of its kind in the repo. The
+    method does
+    `prisma.service.findFirst({ where: {
+    subCategoryId: id }})` — i.e., a check that
+    uses the `Service` model (not
+    `ServiceCategory`) and matches on
+    `subCategoryId` (the FK on `Service`). The
+    method name has no obvious interpretation —
+    the "IdatService" substring is a probable
+    transliteration/typo of "IdAtService" or
+    "IdAndService". The service uses this helper
+    in its `deleteServiceSubCategory` pre-check:
+    `existinginServiceCategory`
+    (service-sub-category-service.ts:117-126) —
+    another malformed name. Both the helper and
+    its call site silently use the wrong model:
+    the `Service` model's `subCategoryId` is a
+    denormalized column; the intended check is
+    "no `Service` references this sub-category",
+    which the implementation does correctly, just
+    with a confusing name.
+  - **Delete uses 409 for FK / in-use** — the
+    repository's `deleteServiceSubCategory`
+    catches
+    `isForeignKeyConstraintViolationError` and
+    re-throws as
+    `AppError("This service sub category has
+    previous history.You cannot delete right
+    now.", 409)`
+    (service-sub-category-repository.ts:142-160)
+    — same pattern and same "history.You" typo as
+    [[common-service-category]]. The service also
+    has a redundant pre-check via the malformed
+    `findServiceSubCategoryByIdatServiceCategory`
+    helper that throws the same 409 — so the
+    pre-check is reachable on the happy path and
+    the repository catch is reachable if the
+    pre-check is bypassed.
+  - **`@@index([name])` is redundant** — same as
+    the parent. `name @unique` already provides
+    an index.
+  - **Service uses 400 for "name already exists"
+    on create, 409 on update** — the
+    `createServiceSubCategory` throws
+    `AppError("Service Sub Category with same name
+    already exists", 400)` (line 38), but the
+    matching update path throws 409 (line 86).
+    Inconsistent within the same service. The 409
+    is the project standard; the 400 is the
+    outlier.

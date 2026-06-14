@@ -1,0 +1,710 @@
+# docs/paths/common-inventory.yaml
+# REST endpoints (13 total — note: manifest says
+# 10, the actual route count is 13):
+#   GET /api/inventory/all-stocks-count
+#   GET /api/inventory/batch-stock-qty
+#   GET /api/inventory/stock-adjustment
+#   GET /api/inventory/stock-highest-purchased-price
+#   GET /api/inventory/stock-info
+#   GET /api/inventory/stock-movements
+#   GET /api/inventory/stock-movements/summary/[itemId]
+#   GET /api/inventory/stock-requests
+#   GET /api/inventory/stock-requests/target-store-stock
+#   GET /api/inventory/stocks
+#   GET /api/inventory/store-stocks
+#   GET /api/inventory/total-stock-qty
+#   GET /api/inventory/unique-batches
+# Source: src/app/api/(common)/inventory/*/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions or other routes (e.g. via the
+# shared `pharmacy` services). The endpoints are
+# small projections of the stock domain — most
+# return aggregate counts / sums / distinct batches
+# for use in pharmacy sale flows.
+
+# -----------------------------------------------------------------------------
+# /api/inventory/all-stocks-count
+# -----------------------------------------------------------------------------
+/api/inventory/all-stocks-count:
+  get:
+    summary: Get total stock qty for an item across all stores
+    description: |
+      Authenticated query. Returns the total
+      stock quantity for the given `itemId`,
+      aggregated across all stores.
+
+      Query parameters:
+        - `itemId` — required, UUID.
+          `z.string().uuid().nonempty()`.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: { totalStockQty: number } | null,
+          message: "",
+          error: null
+        }
+        ```
+
+      Source:
+      `src/app/api/(common)/inventory/all-stocks-count/route.ts:7-31`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_all_stocks_count
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: |
+          Total stock quantity across all stores
+          for the given item.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetAllStocksCountResponse
+      "400":
+        description: `itemId` is missing or not a UUID.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/batch-stock-qty
+# -----------------------------------------------------------------------------
+/api/inventory/batch-stock-qty:
+  get:
+    summary: Get stock quantity for a batch
+    description: |
+      Authenticated query. Returns the stock
+      quantity for a specific batch.
+
+      Response shape:
+        ```
+        { success: true, result: ..., error: null, message: "" }
+        ```
+
+      Source:
+      `src/app/api/(common)/inventory/batch-stock-qty/route.ts:6-29`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_batch_stock_qty
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Batch stock qty.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetBatchStockQtyResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-adjustment
+# -----------------------------------------------------------------------------
+/api/inventory/stock-adjustment:
+  get:
+    summary: List stock adjustments (paginated, scoped to current store)
+    description: |
+      Authenticated query. Returns a paginated
+      list of stock adjustments, scoped to the
+      caller's `storeId` (extracted from the
+      session by `verifyApiAuth()` and required
+      — the route throws 401 if `storeId` is
+      missing).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: { adjustments: ..., totalCount: number } | ...,
+          error: ""
+        }
+        ```
+      No `message` field on success.
+
+      The route uses `apiHandler` (bare) with
+      manual `verifyApiAuth()` and `defaultQuerySchema`.
+
+      Source:
+      `src/app/api/(common)/inventory/stock-adjustment/route.ts:9-30`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_adjustment_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of stock adjustments.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStockAdjustmentResponse
+      "401":
+        description: No valid session, or no `storeId` in session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-highest-purchased-price
+# -----------------------------------------------------------------------------
+/api/inventory/stock-highest-purchased-price:
+  get:
+    summary: Get the highest purchased price for an item
+    description: |
+      Authenticated query. Returns the highest
+      `pricePerUnit` across all stock rows for
+      the given `itemId`.
+
+      Query parameters:
+        - `itemId` — required, UUID.
+          `z.string().nonempty().uuid()`.
+
+      Response shape:
+        ```
+        { success: true, result: number | null, error: "" }
+        ```
+
+      Source:
+      `src/app/api/(common)/inventory/stock-highest-purchased-price/route.ts:13-31`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_highest_purchased_price
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Highest purchased price, or `null` if no stock exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStockHighestPurchasedPriceResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-info
+# -----------------------------------------------------------------------------
+/api/inventory/stock-info:
+  get:
+    summary: Get stock info (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of stock info rows.
+
+      The route uses `apiHandler` (bare) with
+      manual `verifyApiAuth()` and `getStockInfoSchema`.
+
+      Source:
+      `src/app/api/(common)/inventory/stock-info/route.ts:12-29`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_info
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of stock info rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStockInfoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-movements
+# -----------------------------------------------------------------------------
+/api/inventory/stock-movements:
+  get:
+    summary: List stock movements (paginated, scoped to current store)
+    description: |
+      Authenticated query. Returns a paginated
+      list of stock movements, scoped to the
+      caller's `storeId` (extracted from the
+      session by `enhancedApiHandler` with
+      `assertStoreId: true`).
+
+      Response shape:
+        ```
+        { success: true, result: ... }
+        ```
+      No `message` / `error` fields on success.
+
+      Source:
+      `src/app/api/(common)/inventory/stock-movements/route.ts:12-32`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_movements_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of stock movements.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStockMovementsResponse
+      "401":
+        description: No valid session, or no `storeId` in session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-movements/summary/[itemId]
+# -----------------------------------------------------------------------------
+/api/inventory/stock-movements/summary/{itemId}:
+  get:
+    summary: Get summarized stock movement for an item
+    description: |
+      Authenticated query. Returns a
+      per-`StockMovementType` aggregate for the
+      given `itemId` on a given `date`,
+      scoped to the caller's `storeId`.
+
+      Path parameters:
+        - `itemId` — the item's primary key
+          (UUID string).
+
+      Query parameters:
+        - `date` — date, defaults to
+          `new Date()`. `z.coerce.date().default(new Date())`.
+
+      Response shape:
+        ```
+        { success: true, result: ... }
+        ```
+      No `message` / `error` fields on success.
+
+      Source:
+      `src/app/api/(common)/inventory/stock-movements/summary/[itemId]/route.ts:14-43`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_movements_summary
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: date
+        schema:
+          type: string
+          format: date-time
+    responses:
+      "200":
+        description: Summarized stock movement for the given item.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStockMovementsSummaryResponse
+      "401":
+        description: No valid session, or no `storeId` in session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-requests
+# -----------------------------------------------------------------------------
+/api/inventory/stock-requests:
+  get:
+    summary: List stock requests (paginated, scoped to current store)
+    description: |
+      Authenticated query. Returns a paginated
+      list of stock requests, scoped to the
+      caller's `storeId` (via `assertStoreId:
+      true` and `verifyApiAuth()`).
+
+      Response shape:
+        ```
+        { success: true, result: ..., message: "", error: "" }
+        ```
+
+      Source:
+      `src/app/api/(common)/inventory/stock-requests/route.ts:29-44`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_requests_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of stock requests.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStockRequestsResponse
+      "401":
+        description: No valid session, or no `storeId` in session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stock-requests/target-store-stock
+# -----------------------------------------------------------------------------
+/api/inventory/stock-requests/target-store-stock:
+  get:
+    summary: Get target store stock for a stock request
+    description: |
+      Authenticated query. Returns the stock
+      info for the **target store** in a
+      stock request.
+
+      Query parameters:
+        - `storeId` — the target store id.
+          `z.string()` (not `.uuid()`).
+        - `itemId` — the item id. `z.string()`
+          (not `.uuid()`).
+
+      Response shape:
+        ```
+        { success: true, result: ... }
+        ```
+      No `message` / `error` fields on success.
+
+      Source:
+      `src/app/api/(common)/inventory/stock-requests/target-store-stock/route.ts:29-44`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stock_requests_target_store_stock
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: storeId
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: itemId
+        required: true
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Target store stock for the request.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetTargetStoreStockResponse
+      "401":
+        description: No valid session, or no `storeId` in session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/stocks
+# -----------------------------------------------------------------------------
+/api/inventory/stocks:
+  get:
+    summary: List stocks (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of stock rows.
+
+      The route uses `apiHandler` (bare) with
+      manual `verifyApiAuth()` and `getStocksSchema`.
+
+      Source:
+      `src/app/api/(common)/inventory/stocks/route.ts:10-30`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_stocks_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of stock rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStocksResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/store-stocks
+# -----------------------------------------------------------------------------
+/api/inventory/store-stocks:
+  get:
+    summary: List unique stocks by store
+    description: |
+      Authenticated query. Returns a paginated
+      list of unique stock rows by store id
+      (uses `findUniqueStocksByStoreId`).
+
+      Source:
+      `src/app/api/(common)/inventory/store-stocks/route.ts:10-30`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_store_stocks
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of unique stock rows by store.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetStocksResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/total-stock-qty
+# -----------------------------------------------------------------------------
+/api/inventory/total-stock-qty:
+  get:
+    summary: Get total stock qty (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of total stock qty rows (uses
+      `getTotalStockQty` repository method).
+
+      Notable: the route is **NOT** wrapped in
+      `apiHandler` / `enhancedApiHandler` — it's
+      a bare `async function GET(req)`. There is
+      no auth decorator, no permissions. The
+      session is checked via the manual
+      `verifyApiAuth()` call.
+
+      Source:
+      `src/app/api/(common)/inventory/total-stock-qty/route.ts:13-28`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_total_stock_qty
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of total-stock-qty rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetTotalStockQtyResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# /api/inventory/unique-batches
+# -----------------------------------------------------------------------------
+/api/inventory/unique-batches:
+  get:
+    summary: Get unique batches for an item
+    description: |
+      Authenticated query. Returns the list of
+      unique batches for a given `itemId`.
+
+      Query parameters:
+        - `itemId` — required. `z.string()`
+          (not `.uuid()` — no UUID
+          validation).
+
+      Response shape:
+        ```
+        { success: true, result: Batch[], error: null, message: "" }
+        ```
+
+      Source:
+      `src/app/api/(common)/inventory/unique-batches/route.ts:6-32`.
+    tags:
+      - Common / Inventory
+    operationId: rest_common_inventory_unique_batches
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: itemId
+        required: true
+        schema:
+          type: string
+    responses:
+      "200":
+        description: List of unique batches.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-inventory.yaml#/GetUniqueBatchesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** on any
+    of the 13 routes — all declare only
+    `auth: { required: true }` (or
+    `auth: { required: true, assertStoreId:
+    true }` for the store-scoped ones), no
+    `permissions` array. Any authenticated
+    user can read stock info, batch qty,
+    stock movements, stock requests, etc.
+  - **Six routes use `assertStoreId: true`**
+    (or manual `verifyApiAuth()` with
+    `storeId` check):
+      - `stock-adjustment`
+      - `stock-movements`
+      - `stock-movements/summary/[itemId]`
+      - `stock-requests`
+      - `stock-requests/target-store-stock`
+      - `stock-movements` itself
+    These throw 401 if the session has no
+    `storeId`. This is the multi-tenant
+    boundary for the stock domain.
+  - **The `total-stock-qty` route is a bare
+    `async function GET(req)`** — not
+    wrapped in `apiHandler` /
+    `enhancedApiHandler`. It manually calls
+    `verifyApiAuth()` and `validateSearchParams`.
+    See [[common-auth]] (heartbeat / resume
+    session) for the same pattern.
+  - **`itemId` is not consistently typed
+    across routes**:
+      - `all-stocks-count` —
+        `z.string().uuid().nonempty()`.
+      - `unique-batches` — `z.string()`
+        (no UUID validation).
+      - `stock-highest-purchased-price` —
+        `z.string().nonempty().uuid()`.
+      - `target-store-stock` —
+        `z.string()` (no UUID validation).
+  - **`getUniqueBatches` is silently
+    misnamed** — the repository's
+    `getUniqueBatches(itemId)` returns
+    stock rows (not just batches). The
+    "unique" in the name likely refers to
+    `distinct: ['batchId']` (or similar)
+    on the Prisma query.
+  - **`getAllStocksCount` throws 400 if
+    `itemId` is falsy** — the service
+    re-checks `if (!itemId)` (the Zod
+    schema already requires
+    `uuid().nonempty()`, so this is a
+    redundant check, not a double-guard
+    against bad input).
+  - **`getHighestPurchasedPrice` returns
+    `number | null`** — `null` when no
+    stock exists for the item. The
+    `Stock.pricePerUnit` column is
+    `Decimal` in the Prisma model; the
+    repository converts to `Number` for
+    the response (lossy for very large
+    values).
+  - **`stock-adjustment`'s response key
+    is `adjustments`, not `data`** —
+    the `StockAdjustmentService.getStockAdjustments`
+    returns the result of
+    `repository.findAdjustments`, which
+    has its own shape.
+  - **The `batch-stock-qty` /
+    `total-stock-qty` / `stocks` /
+    `store-stocks` / `stock-info`
+    endpoints all use `getStocksSchema` or
+    related variants** — the shape is
+    consistent (pagination +
+    optional itemId / storeId / batchId
+    filters). The `defaultQuerySchema`
+    is used for `stock-adjustment`.
+  - **`stock-movements/summary/[itemId]`
+    has `date` default to `new Date()`**
+    — `z.coerce.date().default(new Date())`.
+    Coercion accepts ISO date strings,
+    timestamps, etc. The aggregate is
+    scoped to the caller's `storeId` and
+    the given `date`.
+  - **`stock-requests/target-store-stock`
+    has the same 401 semantics as
+    `stock-movements`** — `assertStoreId:
+    true` throws if the session has no
+    `storeId`. The query params are
+    `storeId` (target store) and `itemId`
+    (the item to look up stock for). The
+    `storeId` query param is for the
+    target store, NOT the caller's
+    store — the route does not verify
+    that the caller has access to the
+    target store.

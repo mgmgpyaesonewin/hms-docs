@@ -1,0 +1,75 @@
+# docs/schemas/common-uploads.yaml
+# Schemas for the common-uploads sub-area of the
+# `common` REST module. Three endpoints:
+#   GET /api/uploads/image-proxy
+#   GET /api/uploads/pdf-proxy
+#   GET /api/uploads/signed-urls
+# Source: src/app/api/(common)/uploads/image-proxy/route.ts
+# Source: src/app/api/(common)/uploads/pdf-proxy/route.ts
+# Source: src/app/api/(common)/uploads/signed-urls/route.ts
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetSignedUrlsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/uploads/signed-urls` on success.
+    The route returns the array of pre-signed
+    S3 URLs (one per input URL, after filtering
+    empty strings), wrapped in the standard
+    envelope (signed-urls/route.ts:46-51).
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: array
+      description: |
+        Pre-signed S3 URLs. Each URL is
+        `https://<bucket>.<endpoint>/<key>?<sig>`
+        and expires in 1 hour
+        (`expiresIn: 3600`).
+      items:
+        type: string
+        format: uri
+    message:
+      type: string
+      enum: ["Signed URLs generated successfully"]
+    error:
+      type: "null"
+
+GetSignedUrlsErrorResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/uploads/signed-urls` on the
+    "no URLs" 400 path
+    (signed-urls/route.ts:32-40). The same
+    message is returned in both `message` and
+    `error` fields. Notable: `result: null`
+    (not `result: []`) and `success: false`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [false]
+    result:
+      type: "null"
+    message:
+      type: string
+      enum: ["No URLs provided"]
+    error:
+      type: string
+      enum: ["No URLs provided"]

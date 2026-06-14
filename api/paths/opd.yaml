@@ -1,0 +1,1494 @@
+# docs/paths/opd.yaml
+# REST endpoints: OPD module under
+# `src/app/api/(opd)/`. 27 read endpoints, no
+# mutations on the REST surface.
+#
+# Endpoints exposed:
+#   - GET  /api/main-procedures
+#   - GET  /api/opd-billing-log/{id}
+#   - GET  /api/opd-billing-pharmacy-sale
+#   - GET  /api/opd-billings
+#   - GET  /api/opd-billings/{id}
+#   - GET  /api/opd-billings/{id}/details
+#   - GET  /api/opd-billings/appointments
+#   - GET  /api/opd-billings/doctor-consultation-service
+#   - GET  /api/opd-billings/pharmacy-sale-invoices
+#   - GET  /api/opd-billings/post-paid-bill
+#   - GET  /api/opd-billings/pre-paid-bill
+#   - GET  /api/opd-billings/services-for-opd
+#   - GET  /api/opd-emr-services-by-appointment
+#   - GET  /api/opd-ot-request
+#   - GET  /api/opd-ot-request/{id}
+#   - GET  /api/opd-refund-bills
+#   - GET  /api/opd-refund-bills/{id}
+#   - GET  /api/opd-refund-bills/find-opd-billings
+#   - GET  /api/opd-refund-bills/find-opd-billings/{id}
+#   - GET  /api/package-bills
+#   - GET  /api/package-bills/{id}
+#   - GET  /api/package-bills/room-types
+#   - GET  /api/package-bills/service-packages
+#   - GET  /api/procedures
+#   - GET  /api/proxybill-by-patientId/{id}
+#   - GET  /api/service-package
+#   - GET  /api/service-package/{id}
+#
+# All 27 routes are GET. The module has NO
+# POST / PUT / PATCH / DELETE on the REST
+# surface — `POST /api/main-procedures`,
+# `PUT /api/main-procedures`, and
+# `DELETE /api/main-procedures` exist on
+# `route.ts` but are NOT yet exposed (the route
+# file declares them but the service does not
+# implement them as REST handlers — they are
+# intended for the future).
+#
+# Routes split across 4 patterns:
+#   1. **`enhancedApiHandler` +
+#      `auth: { required: true }`** — the
+#      dominant pattern (most of the list / by-id
+#      endpoints).
+#   2. **`apiHandler` + explicit
+#      `verifyApiAuth()`** — used by
+#      `/opd-billings` (list).
+#   3. **`apiHandler` (no explicit
+#      `verifyApiAuth()`)** — used by the simple
+#      by-id routes (e.g. `/opd-billings/{id}`,
+#      `/opd-billing-log/{id}`,
+#      `/opd-billing-pharmacy-sale`,
+#      `/proxybill-by-patientId/{id}`,
+#      `/opd-billings/{id}/details`).
+#   4. **Raw `GET` + manual session check** —
+#      `/package-bills/room-types` does a manual
+#      `AuthService.getSession()` check then
+#      raw `prisma.opdPackageBill.findMany`. No
+#      service layer, no `*Handler` wrapper.
+#
+# No RBAC on any of the 27 endpoints.
+
+# =============================================================================
+# Procedure (lookup) — list
+# =============================================================================
+#
+# Backed by `ProcedureService` →
+# `ProcedureRepository`. The create / update /
+# delete handlers exist in `route.ts` but are
+# not yet wired to a service implementation
+# (they are placeholders for future work).
+
+/api/procedures:
+  get:
+    operationId: getProcedures
+    summary: Procedure list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `Procedure` rows. Service:
+      `ProcedureService.findProcedures` →
+      `ProcedureRepository.findProcedures`.
+
+      Search matches `procedureId` and `name`
+      (case-insensitive contains). Filters:
+      `status`, `departmentId`. Date filter
+      (`start`/`end`) is against `createdAt`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+      - in: query
+        name: departmentId
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Procedures for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetProceduresResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Main procedure (lookup) — list / create / update / delete
+# =============================================================================
+#
+# Backed by `MainProcedureService` →
+# `MainProcedureRepository`. The route file
+# declares `GET / POST / PUT / DELETE` on the
+# same path; the 3 mutations are placeholders
+# (the service implements them, but the route
+# wraps them with `enhancedApiHandler`).
+
+/api/main-procedures:
+  get:
+    operationId: getMainProcedures
+    summary: Main procedure list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `MainProcedure` rows. Service:
+      `MainProcedureService.findMainProcedures`
+      → `MainProcedureRepository.findMainProcedures`.
+
+      Search matches `name` (case-insensitive
+      contains). Filters: `status`. Date
+      filter is against `createdAt`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Main procedures for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMainProceduresResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+  post:
+    operationId: createMainProcedure
+    summary: Create a main procedure
+    description: |
+      Authenticated mutation. Creates a
+      `MainProcedure` row. Service:
+      `MainProcedureService.createMainProcedure`
+      → `MainProcedureRepository.createProcedure`.
+
+      Throws 400 with `"Main procedure with
+      same name already exists"` if the name
+      is taken (case-insensitive).
+    tags: [OPD]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string, minLength: 1 }
+              status:
+                type: string
+                enum: [ACTIVE, INACTIVE]
+                default: ACTIVE
+    responses:
+      "200":
+        description: Created main procedure.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MainProcedureMutationResponse" }
+      "400": { $ref: "#/components/responses/BadRequest" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+  put:
+    operationId: updateMainProcedure
+    summary: Update a main procedure
+    description: |
+      Authenticated mutation. Updates a
+      `MainProcedure` row by id. Throws 400
+      with `"Main procedure with same name
+      already exists"` if the new name is
+      taken by another row.
+    tags: [OPD]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string, minLength: 1 }
+              status:
+                type: string
+                enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Updated main procedure.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MainProcedureMutationResponse" }
+      "400": { $ref: "#/components/responses/BadRequest" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+  delete:
+    operationId: deleteMainProcedure
+    summary: Delete a main procedure
+    description: |
+      Authenticated mutation. Deletes a
+      `MainProcedure` row by id. Throws 409
+      with `"This Main Procedure is in use and
+      cannot be deleted!"` if the row has
+      child references (foreign-key
+      constraint).
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Deletion confirmation.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MainProcedureMutationResponse" }
+      "409": { $ref: "#/components/responses/Conflict" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Service package — list / by-id
+# =============================================================================
+#
+# Backed by `ServicePackageService` →
+# `ServicePackageRepository`. The list endpoint
+# projects the service-package with the full
+# include tree. The by-id endpoint additionally
+# includes `category` / `subCategory` /
+# `department` on each `service`.
+
+/api/service-package:
+  get:
+    operationId: getServicePackages
+    summary: Service package list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `ServicePackage` rows. Service:
+      `ServicePackageService.findServicePackage`
+      →
+      `ServicePackageRepository.findServicePackage`.
+
+      Search matches `servicePackageId` and
+      `name` (case-insensitive contains).
+      Filter: `status` (mapped to
+      `isActive: boolean`).
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Service packages for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetServicePackagesResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/service-package/{id}:
+  get:
+    operationId: getServicePackageById
+    summary: Service package by id
+    description: |
+      Authenticated query. Returns a single
+      `ServicePackage` by id with the full
+      nested include tree (services with
+      category / subCategory / department,
+      procedures, room types). Service:
+      `ServicePackageService.findServicePackageById`
+      →
+      `ServicePackageRepository.findServicePackageById`.
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Service package (or `null` if not found).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetServicePackageByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD billing — list
+# =============================================================================
+#
+# Backed by `OpdBillingService.getOPDBillings` →
+# `OpdBillingRepository.findAndCount`.
+
+/api/opd-billings:
+  get:
+    operationId: getOPDBillings
+    summary: OPD billing list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `OPDBilling` rows. Service:
+      `OpdBillingService.getOPDBillings` →
+      `OpdBillingRepository.findAndCount`.
+
+      Filters: `patientType` (mapped to enum
+      OPD / IPD / EMERGENCY / LOCAL / FOREIGNER),
+      `billTypeId`, `paymentMethodId`,
+      `patientGroup`, `doctorId`, `storeId`,
+      `opdBillingPaymentStatus` (PAID / UNPAID /
+      CANCEL), `serviceId`, `patientId`,
+      `memberCardTypeId`, `isConsignment`
+      (boolean transform), `isBuyMemberCard`
+      (boolean transform). Date filter against
+      `createdAt`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: patientType
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER]
+      - in: query
+        name: billTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: paymentMethodId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: doctorId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: storeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: opdBillingPaymentStatus
+        schema: { type: string }
+      - in: query
+        name: serviceId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: memberCardTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: isConsignment
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: isBuyMemberCard
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+    responses:
+      "200":
+        description: OPD billings for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDBillingsResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD billing — by-id / details / log
+# =============================================================================
+
+/api/opd-billings/{id}:
+  get:
+    operationId: getOPDBillingById
+    summary: OPD billing by id (decorated)
+    description: |
+      Authenticated query. Returns a single
+      `OPDBilling` by id with the full
+      decoration chain. Service:
+      `OpdBillingService.getById` →
+      `OpdBillingRepository.findById` then
+      6-stage decoration (see
+      `GetOPDBillingByIdResponse`).
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OPD billing (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDBillingByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/opd-billings/{id}/details:
+  get:
+    operationId: getOPDBillingByIdDetails
+    summary: OPD billing by id (un-decorated)
+    description: |
+      Authenticated query. Returns a single
+      `OPDBilling` by id **without** the
+      decoration chain. Service:
+      `OpdBillingService.getByBillingId` →
+      `OpdBillingRepository.findById` (raw).
+
+      Difference vs `/api/opd-billings/{id}`:
+      no `cancellable` flags, no member-card
+      decoration, no pharmacy-sale-return
+      backfill, no proxy-pharmacy-item
+      backfill.
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Raw OPD billing (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDBillingByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD billing log — by billing id
+# =============================================================================
+
+/api/opd-billing-log/{id}:
+  get:
+    operationId: getOPDBillingLogById
+    summary: OPD billing activity log
+    description: |
+      Authenticated query. Returns the
+      activity-log rows for the given OPD
+      billing id. Service:
+      `OpdBillingService.getLogById` →
+      `OpdBillingRepository.findLogById`.
+
+      Note: the `result` is an **array** of
+      log rows (not a paginated wrapper).
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Activity-log rows for the billing.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDBillingLogResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD billing pharmacy-sale (admin)
+# =============================================================================
+
+/api/opd-billing-pharmacy-sale:
+  get:
+    operationId: getOPDBillingPharmacySale
+    summary: OPD billing–pharmacy-sale join table
+    description: |
+      Authenticated query. Returns the raw
+      `oPDBillingPharmacySale` rows (the
+      link-table between OPD billings and
+      pharmacy sales). No decoration. Service:
+      `OpdBillingService.getOPDBillingPharmacySale`
+      →
+      `OpdBillingRepository.getOPDBillingPharmacySale`.
+
+      Used for the link-table admin screen.
+    tags: [OPD]
+    responses:
+      "200":
+        description: OPD-billing-pharmacy-sale link rows.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDBillingPharmacySaleResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD appointments for billing
+# =============================================================================
+
+/api/opd-billings/appointments:
+  get:
+    operationId: getAppointmentsForOpd
+    summary: Appointments for OPD billing
+    description: |
+      Authenticated query. Returns
+      appointments matching the filter,
+      decorated with member-card data when
+      `memberCardId` is provided. Service:
+      `OpdBillingService.getAppointments` →
+      `OpdBillingRepository.getAppointments`.
+
+      Two special-case filters:
+        - If `appointmentId` is set AND no
+          `status` / `isConsignment`, filters
+          to that single appointment id.
+        - If `appointmentId` is NOT set,
+          filters to appointments with no OPD
+          bill OR with a `CANCEL`-status OPD
+          bill (for the create form).
+
+      If `patientId` is missing, returns
+      `appointments: []`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: isConsignment
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [BOOKED, CONFIRMED, CANCELLED, COMPLETED, REQUESTED, APPROVED]
+      - in: query
+        name: appointmentId
+        schema: { type: string, nullable: true }
+      - in: query
+        name: memberCardId
+        schema: { type: string, nullable: true }
+    responses:
+      "200":
+        description: Appointments for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetAppointmentsForOpdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD pre-paid / post-paid bill by appointment
+# =============================================================================
+
+/api/opd-billings/pre-paid-bill:
+  get:
+    operationId: getPrePaidBillByAppointment
+    summary: Pre-paid OPD bill by appointment
+    description: |
+      Authenticated query. Returns the
+      pre-paid `OPDBilling` for the given
+      appointment (NOT decorated). Service:
+      `OpdBillingService.getPrePaidBillByAppointment`
+      →
+      `OpdBillingRepository.getPrePaidBillByAppointment`.
+
+      Returns `result: null` if no pre-paid
+      bill matches.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: appointmentId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        schema: { type: string, enum: [PAID, UNPAID, CANCEL, REFUNDED] }
+      - in: query
+        name: isConsignment
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+    responses:
+      "200":
+        description: Pre-paid OPD bill (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPrePaidBillByAppointmentResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/opd-billings/post-paid-bill:
+  get:
+    operationId: getPostPaidBillByAppointment
+    summary: Post-paid proxy bill by appointment
+    description: |
+      Authenticated query. Returns the
+      post-paid proxy bill for the given
+      appointment, with `serviceBill.serviceBillItems`
+      decorated with member-card data. Service:
+      `OpdBillingService.getPostPaidBillByAppointment`
+      →
+      `OpdBillingRepository.getPostPaidBillByAppointment`.
+
+      Returns `result: null` if no post-paid
+      bill matches. The `serviceBill` decoration
+      is skipped (returns the raw bill) when
+      there are no `serviceBillItems`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: appointmentId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        schema: { type: string, enum: [PAID, UNPAID, CANCEL, REFUNDED] }
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: memberCardId
+        schema: { type: string, nullable: true }
+      - in: query
+        name: isConsignment
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+    responses:
+      "200":
+        description: Post-paid proxy bill (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPostPaidBillByAppointmentResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD pharmacy-sale invoices (for billing)
+# =============================================================================
+
+/api/opd-billings/pharmacy-sale-invoices:
+  get:
+    operationId: getPharmacySalesForOpd
+    summary: Pharmacy-sale invoices for OPD billing
+    description: |
+      Authenticated query. Returns pharmacy
+      sales matching the filter, enriched with
+      `backFillSaleReturns` (which adds
+      `returnedQty` / `remainingQty` to each
+      item). Service:
+      `OpdBillingService.getPharmacySaleInvoices`
+      →
+      `OpdBillingRepository.getPharmacySaleInvoices`.
+
+      Always filtered to `isDeleted: false` and
+      `departmentType: PHARMACY`. Two special-case
+      filters:
+        - If `includesPharmacySaleId` is set,
+          filters to that single id (no other
+          filters applied).
+        - If `ids` is set, filters to that id
+          set (no other filters applied).
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: isWalkin
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: isConsignment
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: paymentStatus
+        schema: { type: string, enum: [PAID, UNPAID, CANCEL, REFUNDED] }
+      - in: query
+        name: status
+        schema: { type: string, enum: [PENDING, ISSUED, CANCELLED, RETURNED] }
+      - in: query
+        name: ids
+        schema:
+          type: array
+          items: { type: string, format: uuid }
+        style: form
+        explode: true
+      - in: query
+        name: includesPharmacySaleId
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Pharmacy sales for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPharmacySalesForOpdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD doctor consultation service
+# =============================================================================
+
+/api/opd-billings/doctor-consultation-service:
+  get:
+    operationId: getDoctorConsultationService
+    summary: Doctor consultation service
+    description: |
+      Authenticated query. Returns the first
+      `DoctorService` row for the given doctor
+      where the service is a consultation
+      service. Service:
+      `OpdBillingService.getDoctorConsultationService`
+      →
+      `OpdBillingRepository.getDoctorConsultationService`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: doctorId
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Doctor's consultation service (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetDoctorConsultationServiceResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD services for OPD (member-card decorated)
+# =============================================================================
+
+/api/opd-billings/services-for-opd:
+  get:
+    operationId: getServicesForOpd
+    summary: Services for OPD (member-card decorated)
+    description: |
+      Authenticated query. Returns services
+      matching the filter, decorated with
+      member-card data when `patientId` AND
+      `memberCardId` are both present.
+      Service:
+      `OpdBillingService.getServicesForOpd` →
+      `ServicesService.getServices` →
+      `ServicesForOpdDecorator.decorate`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: categoryId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: departmentId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: status
+        schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      - in: query
+        name: module
+        schema: { type: string }
+      - in: query
+        name: isInitialService
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: isMapService
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: isConsultationService
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: addOthersForCt
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: serviceType
+        schema:
+          type: string
+          enum: [LAB_TEST, INITIAL_SERVICE, CONSULTATION_SERVICE, ADD_OTHERS_FOR_CT, ROUND_SERVICE, IN_HOUSE_DOCTOR_SERVICE, TELE_CONSULTANT_SERVICE]
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid, nullable: true }
+      - in: query
+        name: memberCardId
+        schema: { type: string, format: uuid, nullable: true }
+    responses:
+      "200":
+        description: Services for the page (decorated with member-card data when applicable).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetServicesForOpdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD EMR services by appointment
+# =============================================================================
+#
+# The only OPD endpoint that uses the
+# contracts/Query pattern.
+
+/api/opd-emr-services-by-appointment:
+  get:
+    operationId: getOpdEmrServicesByAppointment
+    summary: OPD EMR services for an appointment
+    description: |
+      Authenticated query. Returns the OPD-EMR
+      services for the given (appointment,
+      patient) pair, split into imaging /
+      lab / pharmacy-request buckets.
+      Implementation: `GetOpdEmrServicesByAppointmentQuery`
+      (a `Query<>` interface implementation).
+
+      Throws 400 with `"OPD EMR not found!"` if
+      the (appointment, patient) pair has no
+      `OPDEMR` row.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: appointmentId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: OPD EMR services.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOpdEmrServicesByAppointmentResponse" }
+      "400":
+        description: OPD EMR not found for the (appointment, patient) pair.
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD OT request — list / by-id
+# =============================================================================
+#
+# Backed by the `opdOTRequestService` singleton
+# (no container — uses 3 private repos).
+
+/api/opd-ot-request:
+  get:
+    operationId: getOPDOTRequests
+    summary: OPD OT request list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `OPDOTRequest` rows with the
+      deep include tree. Service:
+      `opdOTRequestService.getOPDOTRequests` →
+      `OPDOTRequestRepository.getOPDOTRequests`.
+
+      Search matches: `patient.name`,
+      `patient.patientId`, `appointmentId`,
+      `room.name`. Filters: `gender`,
+      `buildingId`, `wardId`, `roomTypeId`,
+      `urgentOrElective`, `status`, and
+      `start/end` against `operationDate`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: gender
+        schema: { type: string, enum: [MALE, FEMALE, OTHER] }
+      - in: query
+        name: buildingId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: wardId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: roomTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: urgentOrElective
+        schema: { type: string, enum: [URGENT, ELECTIVE] }
+      - in: query
+        name: status
+        schema: { type: string, enum: [REQUESTED, BOOKED, CONFIRMED, COMPLETED, CANCELLED, APPROVED] }
+    responses:
+      "200":
+        description: OPD OT requests for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDOTRequestsResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/opd-ot-request/{id}:
+  get:
+    operationId: getOPDOTRequestById
+    summary: OPD OT request by id
+    description: |
+      Authenticated query. Returns a single
+      `OPDOTRequest` by id with the deep
+      include tree. Service:
+      `opdOTRequestService.findById` →
+      `OPDOTRequestRepository.findById`.
+
+      Returns `result: null` if not found (no
+      HTTP 404).
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OPD OT request (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDOTRequestByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD refund bill — list / by-id
+# =============================================================================
+#
+# Backed by `OpdRefundService` (via
+# `OpdRefundServiceContainer`).
+
+/api/opd-refund-bills:
+  get:
+    operationId: getOPDRefundBills
+    summary: OPD refund bill list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `OpdRefundBill` rows. Service:
+      `OpdRefundService.list` →
+      `OpdRefundRepository.list`.
+
+      Search matches: `refundBillInvoiceNo`,
+      `opdBilling.invoiceNo`, and
+      `opdBilling.patient.{name, phoneNo, patientId}`.
+      Date filter against `dateTime`.
+      `patientType` filter is special-cased:
+      `OPD` filters to non-emergency OR walk-in
+      bills; any other value filters to
+      `EMERGENCY` patient type.
+      `isCredit` is mapped to
+      `opdBilling.isConsignment`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: patientType
+        schema: { type: string }
+      - in: query
+        name: billTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: isCredit
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+    responses:
+      "200":
+        description: OPD refund bills for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDRefundBillsResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/opd-refund-bills/{id}:
+  get:
+    operationId: getOPDRefundBillById
+    summary: OPD refund bill by id
+    description: |
+      Authenticated query. Returns a single
+      `OpdRefundBill` by id with the full
+      include tree. Service:
+      `OpdRefundService.view` →
+      `OpdRefundRepository.view`.
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OPD refund bill (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDRefundBillByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OPD refundable find — search / by-id
+# =============================================================================
+#
+# Used by the refund form's "find a bill to
+# refund" picker.
+
+/api/opd-refund-bills/find-opd-billings:
+  get:
+    operationId: findOpdBillingsForRefund
+    summary: Search OPD billings for refund
+    description: |
+      Authenticated query. Returns OPD billings
+      matching the filter, each decorated with
+      `refundCheck: { message, isRefundable }`.
+      Service:
+      `OpdRefundService.findOpdBillings` →
+      `OpdBillingService.getOPDBillings` →
+      `OpdRefundService.getOpdBillRefundStatus`
+      (per-bill refundable check).
+
+      Returns `{ opdBillings: [], totalCount: 0 }`
+      when `query.search` is missing — the
+      filter is required for any work to
+      happen.
+
+      The `refundCheck.message` may be one of:
+        - `null` (refundable).
+        - `"Cannot refund a credit bill!"`.
+        - `"No refundable amount left!"`.
+        - `"Can't refund cancelled bill!"`.
+        - `"No refundable items found!"`.
+        - `"No refundable items left!"`.
+
+      Note: the response uses `messag: ""`
+      (typo) alongside the `result` key.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: patientType
+        schema: { type: string, enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER] }
+      - in: query
+        name: billTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: paymentMethodId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: doctorId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: storeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: opdBillingPaymentStatus
+        schema: { type: string }
+      - in: query
+        name: serviceId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: memberCardTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: isConsignment
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+      - in: query
+        name: isBuyMemberCard
+        schema:
+          type: boolean
+          description: Coerced from string — `"true"` → `true`.
+    responses:
+      "200":
+        description: OPD billings with refund-check status.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDFindOpdBillingsResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/opd-refund-bills/find-opd-billings/{id}:
+  get:
+    operationId: findOpdBillingForRefundById
+    summary: OPD bill + refundable items
+    description: |
+      Authenticated query. Returns the OPD
+      billing for the given id, filtered to
+      only the still-refundable services,
+      procedures, and pharmacy items, plus the
+      list of approved sale-returns. Service:
+      `OpdRefundService.getOpdBillWithRefundables`
+      →
+      `OpdBillingService.getById` (decorated)
+      + `OpdRefundService.excludeRefundedItemsFromOpdBill`.
+
+      The OPD billing is filtered to
+      services/procedures that are NOT already
+      in any refund bill, AND are not cancelled,
+      AND are marked cancellable.
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OPD billing + refundable items.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOPDFindOpdBillingByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Package bill — list / by-id
+# =============================================================================
+#
+# Backed by `opdPackageBillServiceContainer`
+# (a 3-dep composition root).
+
+/api/package-bills:
+  get:
+    operationId: getPackageBills
+    summary: OPD package bill list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `OpdPackageBill` rows. Service:
+      `OpdPackageBillService.getPackageBills`
+      →
+      `OpdPackageBillRepository.getPackageBills`.
+
+      Search matches: `invoiceNo`, and
+      `patient.{name, phoneNo, patientId}`. Filters:
+      `patientType`, `billTypeId`,
+      `paymentMethodId`, `patientGroup`,
+      `storeId`, `patientId`. Date filter
+      against `createdAt`. The repository
+      skips the `storeId` filter when its value
+      is the literal string `"null"`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: patientType
+        schema: { type: string, enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER] }
+      - in: query
+        name: billTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: paymentMethodId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: storeId
+        schema: { type: string, format: uuid, description: "Skipped when value is the literal string `\"null\"`." }
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Package bills for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPackageBillsResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/package-bills/{id}:
+  get:
+    operationId: getPackageBillById
+    summary: OPD package bill by id
+    description: |
+      Authenticated query. Returns a single
+      `OpdPackageBill` by id. Service:
+      `OpdPackageBillService.show` →
+      `OpdPackageBillRepository.show`.
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Package bill (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPackageBillByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Package bill — room-types (standalone raw route)
+# =============================================================================
+#
+# This is the only route in the OPD module
+# that does NOT use any `*Handler` wrapper.
+# It manually does `AuthService.getSession()`
+# then `prisma.opdPackageBill.findMany` and
+# returns the flattened room-types. No
+# pagination, no decoration.
+
+/api/package-bills/room-types:
+  get:
+    operationId: getPackageBillRoomTypes
+    summary: Room types covered by a patient's package bills
+    description: |
+      Authenticated query. Returns the
+      room-type / days / package-name tuples
+      for all `OpdPackageBill` rows belonging
+      to the given patient.
+
+      **Non-standard route implementation**:
+      manual `AuthService.getSession()` check,
+      raw `prisma.opdPackageBill.findMany` with
+      a deeply-nested `select`, no
+      `*Handler` wrapper, no service layer.
+      Returns a non-standard envelope:
+      `{ roomTypes: [...] }` directly (no
+      `success` / `result` / `error` /
+      `message`).
+
+      Returns 400 with
+      `{ error: "patientId is required" }` when
+      `patientId` is missing. Returns 500 with
+      `{ error: "Internal server error" }` on
+      any unhandled exception.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Room types covered by the patient's package bills.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPackageBillRoomTypesResponse" }
+      "400":
+        description: "`{ error: \"patientId is required\" }`"
+      "401":
+        description: "`{ error: \"Unauthorized\" }`"
+      "500":
+        description: "`{ error: \"Internal server error\" }`"
+
+# =============================================================================
+# Package bill — service-packages (member-card decorated)
+# =============================================================================
+
+/api/package-bills/service-packages:
+  get:
+    operationId: getPackageBillServicePackages
+    summary: Service packages for package bill
+    description: |
+      Authenticated query. Returns
+      `ServicePackage` rows (force-filtered to
+      `status: ACTIVE` even when no `status` is
+      in the query), decorated with
+      member-card `memberCardTypeServicePackage`
+      / `memberCardServicePackageUsage` (always
+      applied). Service:
+      `OpdPackageBillService.getServicePackages`
+      → `ServicePackageService.findServicePackage`
+      + `ServicePackagesForOpdDecorator.decorate`.
+    tags: [OPD]
+    parameters:
+      - in: query
+        name: search
+        schema: { type: string }
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: memberCardId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: "Force-overridden to `ACTIVE` when missing."
+    responses:
+      "200":
+        description: Service packages (decorated with member-card data).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPackageBillServicePackagesResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Proxy bill by patient id (catch-all)
+# =============================================================================
+#
+# Returns ALL proxy bills for a patient — no
+# pagination, no filter, no decoration.
+
+/api/proxybill-by-patientId/{id}:
+  get:
+    operationId: getProxyBillByPatientId
+    summary: All proxy bills for a patient
+    description: |
+      Authenticated query. Returns every
+      `ProxyBill` row for the given patient
+      (no pagination). Service:
+      `OpdBillingService.getProxyBillByPatientId`
+      →
+      `OpdBillingRepository.getProxyBillByPatientId`.
+
+      Note: the route has a leftover
+      `console.log("Patient Id route", id)`
+      statement in the handler.
+    tags: [OPD]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: All proxy bills for the patient.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetProxyBillByPatientIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }

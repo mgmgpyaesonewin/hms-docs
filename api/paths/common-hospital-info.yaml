@@ -1,0 +1,133 @@
+# docs/paths/common-hospital-info.yaml
+# REST endpoint: GET /api/hospital-info
+# Source: src/app/api/(common)/hospital-info/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create-or-update) are exposed via a
+# `next-safe-action` server action
+# (`hospital-info.actions.ts`), NOT as REST routes.
+
+/api/hospital-info:
+  get:
+    summary: Get the hospital info singleton
+    description: |
+      Authenticated query. Returns the singleton
+      `HospitalInfo` row, or `null` if none exists.
+
+      Response shape:
+        ```
+        { success: true, result: HospitalInfo | null }
+        ```
+
+      The repository uses
+      `prisma.hospitalInfo.findFirst({ include: {
+      phoneNos: true }})` with no `where` clause.
+      Combined with the Prisma model declaring
+      `name @unique` (so at most one row is expected),
+      this returns the (single) row in practice.
+
+      Note on auth: this route uses the bare
+      `apiHandler` wrapper, **not**
+      `enhancedApiHandler`. Authentication is checked
+      manually via `verifyApiAuth()` at the start of
+      the handler. The success envelope is
+      `{ success: true, result }` — there is no
+      `error` / `message` field on success.
+
+      Source:
+      `src/app/api/(common)/hospital-info/route.ts:12-19`.
+    tags:
+      - Common / Hospital Info
+    operationId: rest_common_hospital_info_get
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          The hospital info row, or `null` if none
+          exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-hospital-info.yaml#/GetHospitalInfoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — auth is checked
+    manually via `verifyApiAuth()`. Any authenticated
+    user can read hospital info. The corresponding
+    setup page would typically gate edits with a
+    `PermissionGuard` for action="Edit" /
+    subject="Hospital Info", but the REST endpoint
+    itself does not enforce it.
+  - **Inconsistent response envelope** — the success
+    shape is `{ success: true, result }` (no
+    `error` / `message` field). All other
+    common-* sub-areas emit
+    `{ success: true, result, message: "", error: null }`
+    or `{ success: true, result, error: "" }`. Clients
+    written against the more typical envelope will
+    fail to destructure `error` on a 200 response
+    (the field is `undefined`, not `null`).
+  - **Write path is a server action, not REST** —
+    `hospital-info.actions.ts` exports a
+    `next-safe-action` action that calls
+    `hospitalInfoService.createHospitalInfo(data)`.
+    The service's
+    `createHospitalInfo` is upsert-like: if no row
+    exists, it creates; if one exists, it
+    updates the existing row (so the
+    `name @unique` constraint is the only thing
+    preventing a second row from being created).
+  - **Update is a 3-step transaction** — the
+    repository's `update` does `deleteMany` +
+    `createMany` (for phoneNos) + `update` (for the
+    main row) inside a single
+    `prisma.$transaction([...])` call. So a partial
+    update cannot leave the phoneNos table out of
+    sync with the main row.
+  - **Old logos are never deleted** — the
+    `createHospitalInfo` server action detects a
+    logo change (`isNewLogo`) and was meant to enqueue
+    a `DELETE_HOSPITAL_INFO_LOGO_JOB` pg-boss job to
+    garbage-collect the previous S3 object, but the
+    call is commented out (hospital-info-service.ts:48-59,
+    TODO note: "having issues with .send method / will
+    look into it later"). Old logos stay in S3 forever.
+    The job handler at
+    `features/jobs/delete-hospital-info-logo.job.ts`
+    exists but has no producer.
+  - **`phoneNos[].type` is a free-form string** — the
+    Prisma column has no enum; the service uses
+    `"primary"` and `"additional"`. Direct DB
+    inserts (or future code paths) could use any
+    value.
+  - **`HospitalPhoneNumber` has no `onDelete`
+    behavior** — the Prisma relation does not declare
+    `onDelete: Cascade` (or anything), so if the
+    parent `HospitalInfo` row is ever deleted, the
+    phone rows would be orphaned. In practice the
+    service does not expose a delete path, so this
+    is latent.
+  - **`phoneNos[].number` is unbounded at the DB
+    level** — the create schema enforces
+    `.max(20, ...)`, but the Prisma column is plain
+    `String`. Direct inserts bypass the limit.
+  - **`apiHandler` vs `enhancedApiHandler`
+    inconsistency** — this route uses bare
+    `apiHandler` with manual `verifyApiAuth()`. The
+    same module's other endpoints use
+    `enhancedApiHandler` (e.g.
+    `common-departments` and `common-roles`). The
+    route is **missing** `auth.assertStoreId` and
+    `auth.permissions` machinery that the rest of
+    the project gets "for free" via
+    `enhancedApiHandler`.

@@ -1,0 +1,544 @@
+# docs/schemas/trpc-purchase-requests.yaml
+# Schemas for the tRPC `purchaseRequests` router
+# (src/lib/trpc/routers/purchase-requests.ts). **Read-mostly**
+# tRPC surface over the `PurchaseRequest` model — the router
+# exposes only 3 procedures:
+#   - `purchaseRequests.createPurchaseRequest` — create with
+#     nested `purchaseRequestItems[]` (full-replacement pattern
+#     on the children table).
+#   - `purchaseRequests.getPurchaseRequests` — paginated,
+#     searchable list.
+#   - `purchaseRequests.getPurchaseRequestById` — single row.
+#
+# All 3 use `authProcedure` (no `authorizeProcedure`).
+#
+# IMPORTANT: The router does NOT expose `update` or `delete` —
+# the service has `updatePurchaseRequestById` and
+# `deletePurchaseRequestById` methods
+# (purchase-requests.service.ts:68-167), but they are reached
+# via the REST surface under
+# `src/app/api/(pharmacy)/purchase-request/*` (out of scope
+# here) and `next-safe-action` server actions invoked from
+# RSC, not via tRPC.
+#
+# The `createPurchaseRequest` service method also auto-generates
+# a monthly-reset id (`PR-YYYYMM-####` format) via
+# `generateMonthlyResetId("PR", ...)` (purchase-requests.service.ts:18-20).
+# The generated id is NOT part of the client input — it's added
+# server-side.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreatePurchaseRequestInput:
+  type: object
+  description: |
+    Input for `purchaseRequests.createPurchaseRequest`. The Zod
+    schema `createPurchaseRequestSchema` is a re-export of
+    `purchaseRequestFormSchema`
+    (create-purchase-request.ts:4).
+
+    Server-side augmentation (not part of the wire input):
+      - `purchaseRequestId` is generated via
+        `generateMonthlyResetId("PR", ...)` and added to the
+        payload before `prisma.purchaseRequest.create`.
+      - `createdById` / `updatedById` are stamped with
+        `ctx.user?.id`.
+      - Each `purchaseRequestItem` row has
+        `remainingRequestedQty` initialised to
+        `requestedStockQty` (the requested qty minus whatever's
+        been received since).
+
+    Side effects:
+      - Calls `activityLogger.log` with action "Create", entity
+        "Purchase Request".
+  required:
+    - requestedDate
+    - priorityStatus
+    - purchaseRequestItems
+    - status
+    - totalRequestedAmt
+  properties:
+    requestedDate:
+      type: string
+      format: date
+      description: |
+        Required. Date the purchase was requested. Coerced via
+        `z.coerce.date()`.
+    priorityStatus:
+      $ref: ./trpc-purchase-requests.yaml#/PriorityStatus
+    status:
+      $ref: ./trpc-purchase-requests.yaml#/Status
+      description: |
+        Defaults to `PENDING` on the wire schema
+        (`z.nativeEnum(Status).default(Status.PENDING)`).
+    totalRequestedAmt:
+      type: number
+      minimum: 0
+      default: 0
+      description: |
+        Sum of `totalCost` across all `purchaseRequestItems`.
+        Defaults to 0. The client is responsible for computing
+        this; the server does not re-derive it.
+    purchaseRequestItems:
+      type: array
+      minItems: 0
+      description: |
+        Items being requested. Each entry's `id` is the **item
+        id** (FK to `Item.id`), not a generated `PurchaseRequestItem`
+        id — the server creates the join rows. The server
+        normalises:
+          - `requestedStockQuantity: item.requestedStockQty`
+          - `latestPurchasedPrice: item.latestPurchasedPrice`
+            (passed through — `Prisma.Decimal` allowed)
+          - `latestPurchasedDate: item.latestPurchasedDate` (null
+            if missing)
+          - `remainingRequestedQty: item.requestedStockQty`
+            (initialised equal to the request)
+          - `stockInHand: item.stockInHand`
+          - `totalCost: item.totalCost`
+      items:
+        $ref: ./trpc-purchase-requests.yaml#/PurchaseRequestItemInput
+    advancedSearchItems:
+      type: array
+      description: |
+        Optional. Same shape as `PurchaseRequestItemInput[]`.
+        On the wire schema this is a parallel array but the
+        service / repository **does NOT use it** on the
+        `createPurchaseRequest` path — only `purchaseRequestItems`
+        is persisted. This field is an artifact of the form
+        schema being shared between create and the advanced
+        search UI; on the tRPC create path it is silently
+        ignored.
+      items:
+        $ref: ./trpc-purchase-requests.yaml#/PurchaseRequestItemInput
+
+QueryPurchaseRequestsInput:
+  type: object
+  description: |
+    Input for `purchaseRequests.getPurchaseRequests`. The Zod
+    schema `queryPurchaseRequestsSchema` is built from
+    `z.object({ ... }).merge(paginationSchema).transform(...)`.
+    The transform adds `offset: (page - 1) * limit` to the
+    shape.
+  required:
+    - page
+    - limit
+    - offset
+  properties:
+    search:
+      type: string
+      description: |
+        Case-insensitive **contains** match against
+        `purchaseRequestId`, `createdBy.username`, and
+        `updatedBy.username` (union of three). The repository's
+        `buildWhereFilter` does NOT search on item names /
+        itemIds here — only on the PR id and the two user
+        usernames. (Different from `trpc-items.getItems` which
+        searches on item fields.)
+    start:
+      type: string
+      format: date
+      description: |
+        Inclusive lower bound for `requestedDate`.
+        `gte: query.start` in the Prisma where clause.
+    end:
+      type: string
+      format: date
+      description: |
+        **Exclusive** upper bound for `requestedDate`.
+        `lt: query.end` in the Prisma where clause. This is the
+        `lt` / exclusive style (same as `trpc-suppliers.getSuppliers`,
+        different from `trpc-items.getItems` which uses `lte`).
+    status:
+      $ref: ./trpc-purchase-requests.yaml#/Status
+    priorityStatus:
+      $ref: ./trpc-purchase-requests.yaml#/PriorityStatus
+    page:
+      type: integer
+      minimum: 1
+      default: 1
+    limit:
+      type: integer
+      minimum: 0
+      default: 10
+    offset:
+      type: integer
+      minimum: 0
+
+GetPurchaseRequestByIdInput:
+  type: object
+  description: |
+    Input for `purchaseRequests.getPurchaseRequestById`. The
+    Zod schema is `validateIdSchema` (z.object({ id: z.string() }))
+    — a raw `string` with no UUID refinement at the router
+    layer.
+  required:
+    - id
+  properties:
+    id:
+      type: string
+      description: Purchase request id (uuid).
+
+# =============================================================================
+# Response / output schemas
+# =============================================================================
+
+GetPurchaseRequestsResponse:
+  type: object
+  description: |
+    Response shape of `purchaseRequests.getPurchaseRequests`.
+    Repository signature
+    (purchase-requests-repository.ts:101-129):
+    `Promise<{ purchaseRequests: PurchaseRequest[]; count: number }>`.
+
+    The full side-relation tree is included via
+    `purchaseRequestValidator` (Prisma `include` with `select`
+    projections on the joins).
+  required:
+    - purchaseRequests
+    - count
+  properties:
+    purchaseRequests:
+      type: array
+      items:
+        $ref: ./trpc-purchase-requests.yaml#/PurchaseRequest
+    count:
+      type: integer
+      minimum: 0
+      description: |
+        Post-filter, pre-pagination total. Computed via
+        `prisma.purchaseRequest.count({ where })` in the same
+        repository call as the list query
+        (Promise.all on lines 119-126).
+
+GetPurchaseRequestByIdResponse:
+  type: object
+  description: |
+    Response shape of `purchaseRequests.getPurchaseRequestById`.
+    Repository signature
+    (purchase-requests-repository.ts:269-276):
+    `Promise<PurchaseRequest | null>` (returns the
+    `purchaseRequestValidator`-shaped row, or `null`).
+
+    Returns `null` if not found — no tRPC throw / 404 envelope.
+  oneOf:
+    - $ref: ./trpc-purchase-requests.yaml#/PurchaseRequest
+    - type: "null"
+
+PurchaseRequest:
+  type: object
+  description: |
+    Canonical purchase-request shape. TS type `PurchaseRequest`
+    from
+    `src/app/(dashboard)/shared/pharmacy/types/purchase-request.types.ts:20-38`
+    (with the `purchaseRequestItems[]` join populated by the
+    repository's `purchaseRequestValidator`).
+
+    The `createdBy` / `updatedBy` shapes are **publisher
+    projections** (id is NOT in the TS type — only
+    `fullName` / `username`). The shared `common.yaml#/Publisher`
+    adds `id` to the shape; the documented wire form is the
+    union (TS says `{fullName, username}`, repository returns
+    the same — id is not selected on the join).
+  required:
+    - id
+    - purchaseRequestId
+    - requestedDate
+    - priorityStatus
+    - status
+    - createdBy
+    - updatedBy
+    - totalRequestedAmt
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    purchaseRequestId:
+      type: string
+      description: |
+        Human-friendly id, e.g. `PR-202601-0001`. Generated
+        server-side via `generateMonthlyResetId("PR", ...)` —
+        resets every month. NOT a UUID.
+    requestedDate:
+      type: string
+      format: date
+    priorityStatus:
+      $ref: ./trpc-purchase-requests.yaml#/PriorityStatus
+    status:
+      $ref: ./trpc-purchase-requests.yaml#/Status
+    totalRequestedAmt:
+      type: number
+      description: |
+        Sum of `totalCost` across all
+        `purchaseRequestItems[].totalCost`. Stored as a
+        number on the wire (the Prisma column is `Decimal?`
+        — `totalRequestedAmt Decimal?` in the schema; the
+        service / repository pass the input value through,
+        no Decimal coercion on the read path).
+    createdBy:
+      type: object
+      description: |
+        `User` row from the join — projection
+        `id` (not selected on the repository, but the join is
+        to the user PK), `fullName`, `username`.
+      required:
+        - fullName
+        - username
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        username:
+          type: string
+    updatedBy:
+      type: object
+      description: Same projection as `createdBy`.
+      required:
+        - fullName
+        - username
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        username:
+          type: string
+    purchaseRequestItems:
+      type: array
+      description: |
+        Joined `PurchaseRequestItem` rows. Each entry has
+        `id`, `purchaseRequestId`, `itemId`, `item` (the
+        joined `Item` projection), `remainingRequestedQty`,
+        `requestedStockQuantity`, `latestPurchasedPrice`,
+        `latestPurchasedDate`, `stockInHand`, `totalCost`.
+      items:
+        $ref: ./trpc-purchase-requests.yaml#/PurchaseRequestItem
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+PurchaseRequestItemInput:
+  type: object
+  description: |
+    Wire input for a `PurchaseRequestItem`. The Zod schema
+    `purchaseRequestItemSchema`
+    (purchase-request-form-schema.ts:8-33) is used on both the
+    create and update paths.
+
+    Note: the field on the wire is `id` (the Item id), not a
+    generated join-row id. The server creates the join rows.
+  required:
+    - id
+    - itemName
+    - itemGeneric
+    - itemId
+    - itemMinQty
+    - itemMaxQty
+    - itemReorderQty
+    - itemUnitAbbreviation
+    - totalCost
+  properties:
+    id:
+      type: string
+      description: |
+        The **Item id** (FK to `Item.id`). NOT a generated
+        `PurchaseRequestItem` id.
+    itemName:
+      type: string
+    itemGeneric:
+      type: string
+    itemId:
+      type: string
+      description: |
+        Human-friendly item id (e.g. `ITEM-00001`). Same as
+        `Item.itemId` — duplicated on the wire shape.
+    itemMinQty:
+      type: number
+    itemMaxQty:
+      type: number
+    itemReorderQty:
+      type: number
+    itemUnitAbbreviation:
+      type: string
+    stockInHand:
+      type: number
+      default: 0
+    latestPurchasedPrice:
+      type: number
+      default: 0
+      description: |
+        `Prisma.Decimal` is also accepted (the Zod union is
+        `z.coerce.number() | z.instanceof(Prisma.Decimal)`).
+        On the read shape the value is returned as `number`
+        (lossy coercion for high-precision prices).
+    latestPurchasedDate:
+      type: string
+      format: date-time
+      nullable: true
+    totalQtySold:
+      type: number
+      description: |
+        Optional. On the wire this is filled in by the
+        advanced-search flow (`trpc-purchase-requests.findPurchaseRequestItemsByAdvancedSearch`
+        uses it as the `sum(psi.qty)` output). On the create
+        path the field is not used.
+    totalSaleAmount:
+      type: number
+      default: 0
+    qtySoldPerDay:
+      type: number
+    requestedStockQty:
+      type: number
+      minimum: 1
+      nullable: true
+      description: |
+        Required to be a positive integer. `null` is allowed
+        on the wire (the `.nullable()` is on the Zod schema)
+        but the server's create path does
+        `requestedStockQuantity: item.requestedStockQty!` —
+        a null becomes `undefined` and Prisma will reject the
+        write. So in practice `null` is a no-go for create.
+    totalCost:
+      type: number
+
+PurchaseRequestItem:
+  type: object
+  description: |
+    Read shape of a `PurchaseRequestItem` row. TS type
+    `PurchaseRequestItem` from
+    `purchase-request.types.ts:40-60`.
+
+    The repository selects this via the
+    `purchaseRequestValidator` `include.purchaseRequestItems`
+    block (lines 34-62). The selected fields are
+    `id`, `purchaseRequestId`, `itemId`, `item` (with the
+    nested `Item` projection below), `remainingRequestedQty`,
+    `requestedStockQuantity`, `latestPurchasedPrice`,
+    `latestPurchasedDate`, `stockInHand`, `totalCost`.
+  required:
+    - id
+    - purchaseRequestId
+    - itemId
+    - item
+    - remainingRequestedQty
+    - requestedStockQuantity
+    - latestPurchasedPrice
+    - stockInHand
+    - totalCost
+  properties:
+    id:
+      type: string
+      format: uuid
+    purchaseRequestId:
+      type: string
+      format: uuid
+    itemId:
+      type: string
+      format: uuid
+    item:
+      type: object
+      description: |
+        Joined `Item` row. Projection — `id`, `name`,
+        `itemId`, `minQty`, `maxQty`, `reorderQty`, `unit`
+        (just the abbreviation), `generic`. The full `Item`
+        is NOT included.
+      required:
+        - id
+        - name
+        - itemId
+        - minQty
+        - maxQty
+        - unit
+        - generic
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        itemId:
+          type: string
+        minQty:
+          type: number
+        maxQty:
+          type: number
+        reorderQty:
+          type: number
+          nullable: true
+        unit:
+          type: object
+          description: |
+            Joined `Unit` row. Projection — just
+            `abbreviation`. The unit name / id are NOT
+            included.
+          required:
+            - abbreviation
+          properties:
+            abbreviation:
+              type: string
+        generic:
+          type: string
+    latestPurchasedPrice:
+      type: number
+      description: |
+        Selected as `Prisma.Decimal` on the read path —
+        serialises to a string over JSON in tRPC by default
+        (not a `number`). The TS type is
+        `number | Prisma.Decimal`.
+    latestPurchasedDate:
+      type: string
+      format: date-time
+      nullable: true
+    stockInHand:
+      type: number
+    requestedStockQuantity:
+      type: number
+    remainingRequestedQty:
+      type: number
+      description: |
+        Initialised to `requestedStockQuantity` on create.
+        Decremented as goods are received (via
+        `deductPRItemRequestedQty`); incremented back if a
+        GRN is rolled back.
+    totalCost:
+      type: number
+
+# =============================================================================
+# Enums (application-level, not Prisma enums)
+# =============================================================================
+
+Status:
+  type: string
+  enum: [PENDING, APPROVED, REJECTED]
+  description: |
+    Application-level `Status` enum. NOT a Prisma `enum` —
+    the column is `String?` in the Prisma schema. The values
+    are uppercase strings (`PENDING` / `APPROVED` / `REJECTED`).
+    Defined in `purchase-request.types.ts:12-18`.
+
+    On the update path the service enforces state-machine
+    transitions:
+      - PENDING → APPROVED: sets `approvedAt` / `approvedById`.
+      - PENDING → REJECTED: sets `rejectedAt` / `rejectedById`.
+      - Any other status change: throws 400 "Purchase request
+        can only be updated on pending status".
+
+    The `create` path defaults to `PENDING`.
+
+PriorityStatus:
+  type: string
+  enum: [HIGH, MEDIUM, LOW]
+  description: |
+    Application-level `PriorityStatus` enum. NOT a Prisma
+    `enum` — the column is `String?` in the Prisma schema.
+    Defined in `purchase-request.types.ts:3-10`.

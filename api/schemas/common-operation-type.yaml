@@ -1,0 +1,139 @@
+# docs/schemas/common-operation-type.yaml
+# Schemas for the common-operation-type sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/operation-type
+# Source: src/app/api/(common)/operation-type/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetOperationTypesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getOperationTypeSchema`
+        (src/app/(dashboard)/shared/opd/schemas/operation-type/get-operation-type.schema.ts:7-13).
+        `.merge({ status: z.string().optional() }).transform(transformPaginationSchema)` —
+        post-transform: `{ page, limit, offset, search?, start?, end?, status? }`.
+      properties:
+        status:
+          type: string
+          description: |
+            Stringly-typed boolean — the repository maps
+            `query.status === "ACTIVE"` to `where.isActive = true`.
+            Any other value (including undefined) means
+            "no filter on isActive". Not a native enum.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetOperationTypesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/operation-type`. Repository
+    signature
+    (operation-type.repository.ts:54): `Promise<{ operationTypes: OperationType[]; totalCount: number }>`.
+
+    Note the field is named `operationTypes`, **not** `data`.
+  required:
+    - operationTypes
+    - totalCount
+  properties:
+    operationTypes:
+      type: array
+      items:
+        $ref: ./common-operation-type.yaml#/OperationType
+    totalCount:
+      type: integer
+      minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+OperationType:
+  type: object
+  description: |
+    Canonical operation-type shape. TS type `OperationType` from
+    `src/app/(dashboard)/shared/opd/types/opeartion-type.types.ts:1-17`.
+
+    Maps to the Prisma `OperationType` model
+    (prisma/schema.prisma, @@map("operation_types")). The
+    list endpoint includes `createdBy` / `updatedBy` as a
+    `Publisher` projection
+    (`select: { id: true, fullName: true, username: true }`),
+    matching the canonical `Publisher` shape from
+    `common.yaml`.
+
+    Notably, the `OperationType` model has FK relations to
+    `EndoRequest[]` and `OTRequest[]` — see the
+    `OperationTypeDeleteConflict` response below.
+
+    Filename note: the types file is named
+    `opeartion-type.types.ts` (transposed `r` and `a`) —
+    a long-standing typo that the service and repository
+    both import from. Preserved here for traceability.
+  required:
+    - id
+    - name
+    - isActive
+    - createdAt
+    - updatedAt
+    - createdBy
+    - updatedBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        Unique among operation types (Prisma `@unique`
+        constraint; case-insensitive equality check enforced
+        by the service via `getOperationTypeByName`).
+    isActive:
+      type: boolean
+      description: |
+        Set by the create/update payloads; filterable via
+        the `status` query param. Default is `false` at the
+        DB level.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+
+# =============================================================================
+# Error schemas
+# =============================================================================
+
+OperationTypeDeleteConflict:
+  type: object
+  description: |
+    Response shape when `DELETE`-equivalent server action is
+    rejected because the operation type is still referenced
+    by an `EndoRequest` or `OTRequest`. The repository
+    catches Prisma FK-violation errors and re-throws as
+    `AppError("Operation Type is in use and cannot be
+    deleted!", 409)` (operation-type.repository.ts:79-93).
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [false]
+    result:
+      type: "null"
+    error:
+      type: string
+      example: Operation Type is in use and cannot be deleted!

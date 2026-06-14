@@ -1,0 +1,349 @@
+# docs/paths/common-auth.yaml
+# REST endpoints:
+#   POST /api/auth/heartbeat
+#   GET  /api/auth/session
+#   POST /api/auth/session/resume
+# Source: src/app/api/(common)/auth/heartbeat/route.ts
+# Source: src/app/api/(common)/auth/session/route.ts
+# Source: src/app/api/(common)/auth/session/resume/route.ts
+#
+# This sub-area covers session lifecycle: the
+# heartbeat ping that keeps a session alive, the
+# current-session lookup, and the "resume" ping
+# that prolongs an inactive session.
+#
+# The corresponding login / logout / password
+# flows are reached via tRPC (`authRouter` in
+# src/lib/trpc/routers/auth.ts) and server
+# actions, NOT via REST routes here.
+
+/api/auth/heartbeat:
+  post:
+    summary: Heartbeat — keep the current session alive
+    description: |
+      Returns `{ success: true }` if the `sid`
+      cookie is present, the session exists, and
+      the session is neither expired nor inactive.
+      On success, **updates** `lastSeenAt` to now
+      and `expiresAt` to
+      `now + SESSION_EXPIRES_DAYS`.
+
+      Returns `{ success: false }` (status 401) if
+      the cookie is missing, the session does not
+      exist, or the session is expired/inactive.
+      In the latter two cases, the session row is
+      deleted and the `sid` cookie is cleared
+      (`maxAge: 0`).
+
+      Response shape on success:
+        ```
+        { success: true }
+        ```
+      No `result`, `message`, or `error` fields
+      on success. On failure: `{ success: false }`
+      (no other fields). The non-standard envelope
+      is unusual among the `common-*` sub-areas;
+      see [[common-hospital-info]] for another
+      endpoint with a similarly minimal envelope.
+
+      The route is **not** wrapped in
+      `enhancedApiHandler` / `apiHandler` — it's
+      a bare `async function POST()`. There is no
+      `auth` decorator, no permissions, no
+      validation. The session is read directly
+      from the `sid` cookie via
+      `cookies().get("sid")`.
+
+      Source:
+      `src/app/api/(common)/auth/heartbeat/route.ts:7-15`.
+    tags:
+      - Common / Auth
+    operationId: rest_common_auth_heartbeat
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          Session is alive; `lastSeenAt` /
+          `expiresAt` were updated.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-auth.yaml#/HeartbeatResponse
+      "401":
+        description: |
+          No `sid` cookie, the session does not
+          exist, or the session is expired /
+          inactive. On expired / inactive, the
+          session row is deleted and the `sid`
+          cookie is cleared.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-auth.yaml#/HeartbeatResponse
+
+/api/auth/session:
+  get:
+    summary: Get the current session
+    description: |
+      Authenticated query. Returns the full
+      session row (with the joined `user` and
+      the user's `role.permissions`) if the
+      `sid` cookie is present, the session
+      exists, and the session is neither
+      expired nor inactive.
+
+      Response shape on success:
+        ```
+        {
+          success: true,
+          result: SessionWithUser,
+          message: "",
+          error: null
+        }
+        ```
+
+      On failure (no cookie / not found /
+      expired / inactive): the route's
+      `enhancedApiHandler` will reject the
+      request with a 401 / similar — the
+      `authService.getSession()` returns `null`
+      on those paths, but the route does not
+      branch on `null` (it returns
+      `result: null`). The `auth: { required: true }`
+      gate in the handler may short-circuit
+      before `getSession` runs if the cookie
+      is missing — depends on
+      `enhancedApiHandler`'s auth resolver.
+
+      Note: the `getSession` service method
+      reads the session directly via
+      `prisma.session.findUnique` (with the
+      joined `user` and `user.role.permissions`)
+      and **omits** the `user.password` field
+      via `omit: { password: true }`. So the
+      response does not leak the Argon2 hash,
+      but it does carry the user's full
+      permission matrix.
+
+      Source:
+      `src/app/api/(common)/auth/session/route.ts:7-22`.
+    tags:
+      - Common / Auth
+    operationId: rest_common_auth_session_get
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: The current session with user.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-auth.yaml#/GetSessionResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/auth/session/resume:
+  post:
+    summary: Resume — prolong the current session
+    description: |
+      Returns `{ success: true }` if the `sid`
+      cookie is present, the session exists, and
+      the session is neither expired nor
+      inactive. On success, **updates**
+      `lastSeenAt` to now and `expiresAt` to
+      `now + SESSION_EXPIRES_DAYS`.
+
+      Returns `{ success: false }` (status 401)
+      on missing cookie / missing session /
+      expired / inactive. The cleanup path
+      deletes the session row and clears the
+      `sid` cookie.
+
+      Functionally near-identical to
+      `/api/auth/heartbeat` — both call
+      `prisma.session.update` with the same
+      payload, both do the same expiry /
+      inactivity checks. The only difference
+      is the `select` shape in the lookup:
+      `heartbeat` selects `sessionId, lastSeenAt,
+      expiresAt`, while `resumeSession` selects
+      `expiresAt, lastSeenAt` (no `sessionId`).
+      The `select` is used only for the expiry
+      check; the `update` returns the full
+      updated row, but neither route returns
+      the row in the response.
+
+      The route is a bare `async function POST()`
+      (no `enhancedApiHandler` wrapper). See
+      security notes for the duplication
+      observation.
+
+      Source:
+      `src/app/api/(common)/auth/session/resume/route.ts:7-15`.
+    tags:
+      - Common / Auth
+    operationId: rest_common_auth_session_resume
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          Session is alive; `lastSeenAt` /
+          `expiresAt` were updated.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-auth.yaml#/HeartbeatResponse
+      "401":
+        description: |
+          No `sid` cookie, the session does not
+          exist, or the session is expired /
+          inactive.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-auth.yaml#/HeartbeatResponse
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **`/api/auth/heartbeat` and
+    `/api/auth/session/resume` are duplicated
+    logic** — both call
+    `prisma.session.update` with the same
+    `{ lastSeenAt, expiresAt }` payload, both
+    do the same expiry / inactivity checks,
+    both delete-and-clear on failure. The only
+    difference is the `select` shape in the
+    lookup. Likely copy-paste. The duplicate
+    is intentional, not buggy, but it's a
+    refactor candidate.
+  - **Heartbeat and resume are NOT wrapped in
+    `enhancedApiHandler`** — both are bare
+    `async function POST()` exports. They do
+    not declare `auth: { required: true }` or
+    any validation. The cookie-based session
+    lookup is the only auth check. Other
+    `common-*` endpoints go through
+    `enhancedApiHandler` / `apiHandler` for
+    uniform auth + error handling.
+  - **Heartbeat / resume response envelope is
+    non-standard** — returns
+    `{ success: true }` or
+    `{ success: false }` (no `result`,
+    `message`, `error`). Inconsistent with the
+    `{ success, result, message, error }`
+    envelope used by most other `common-*`
+    endpoints.
+  - **`SESSION_INACTIVE_TIMEOUT_MINUTES = 2`** —
+    inactivity timeout is 2 minutes. After 2
+    minutes of no heartbeat / page load, the
+    session is deleted. This is very aggressive
+    and likely only suitable for the heartbeat
+    ping pattern (client periodically pings
+    `lastSeenAt` to stay alive).
+  - **`SESSION_EXPIRES_DAYS = 1`** — absolute
+    session lifetime is 1 day from
+    `lastSeenAt`. The session cookie is
+    `httpOnly`, `path: /`, `sameSite: "lax"`,
+    `secure: isHttps`. There is no `maxAge`
+    set on the cookie — the cookie lives in
+    the browser until explicit deletion.
+  - **`getSession` leaks the full permission
+    matrix** — the response includes the
+    joined `user.role.permissions: true`
+    (auth-service.ts:147-151). This is
+    intentional: the front-end needs the
+    permission list to gate UI elements. But
+    it means anyone who can call this
+    endpoint can enumerate the system's full
+    role / permission graph for the calling
+    user. The `user.password` is explicitly
+    omitted via `omit: { password: true }` —
+    see auth-service.ts:143-145.
+  - **`getSession` includes the full `user` row
+    minus `password`** — `role`,
+    `department`, `createdBy`, `updatedBy` are
+    all included. Notable fields exposed:
+    `email`, `phoneNo`, `employeeId`,
+    `status`, `isSuperadmin`, `roleId`,
+    `departmentId`, `joiningDate`, `username`,
+    `fullName`, plus the joined role /
+    department / creator / updater rows.
+  - **Expiry / inactivity handling deletes the
+    session and clears the cookie** — on
+    `isExpiredSession` or `isInactiveSession`,
+    the service does
+    `prisma.session.deleteMany({ where: {
+    sessionId } })` and then
+    `clearSessionCookie()` (which sets
+    `maxAge: 0` on the `sid` cookie). The
+    `clearSessionCookie` uses
+    `sameSite: "lax"`, `path: "/"` — matches
+    the `set` call in `login` (line 116-122).
+  - **Heartbeat / resume do NOT update the
+    cookie's `expires`** — they update the
+    `Session.expiresAt` column on the server,
+    but the browser cookie itself is
+    `httpOnly` with no `maxAge`, so the
+    browser never expires it. This is the
+    intended design (the cookie is just an
+    opaque session id; the server tracks
+    expiry).
+  - **Heartbeat / resume look up the session
+    by `sessionId` (the cookie value) via
+    `prisma.session.findUnique({ where: {
+    sessionId } })`** — there is no
+    `storeId` filter on the lookup. A user
+    who has switched stores (via
+    `storeId` cookie / context) but kept
+    the same `sid` will have their heartbeat
+    attributed to the same session row, but
+    the route does not change `storeId` on
+    the session. So the `Session.storeId`
+    column (nullable, FK to `Store`) is set
+    once at login and never updated by the
+    heartbeat / resume / getSession flows.
+  - **No rate limiting on heartbeat** — the
+    front-end's `SessionHeartbeat` component
+    pings this on an interval. Without rate
+    limiting, a malicious client could ping
+    this at high frequency to keep someone
+    else's session alive (if they have their
+    `sid` cookie). The `Session` model
+    itself is `@unique` on `sessionId`, so
+    `findUnique` is fast.
+  - **`getSession` does NOT refresh
+    `lastSeenAt`** — only `heartbeat` /
+    `resumeSession` do. So calling
+    `/api/auth/session` repeatedly does not
+    extend the inactivity window. The
+    `lastSeenAt` is the timestamp of the last
+    `heartbeat` / `resume` / `login` call.
+  - **The Prisma `Session` model has 7
+    columns** — `id, createdAt, updatedAt,
+    expiresAt, lastSeenAt, userId, sessionId,
+    storeId`. The `userId` is FK to `User`
+    (cascade delete), the `storeId` is FK
+    to `Store` (cascade delete, nullable).
+    `sessionId` is `@unique` and is the
+    opaque token stored in the `sid` cookie.
+  - **`heartbeat` and `resumeSession` do
+    basically the same DB work** — `findUnique`
+    + `update`. A front-end that calls both
+    on the same interval is doing
+    double-write traffic to the `Session`
+    table.
+  - **`/api/auth/session` is the
+    `getSession` REST exposure** — the
+    `getCurrentUser` server-side helper in
+    `auth/features/utils/verify-auth.ts` does
+    the same lookup but is used by RSC /
+    server actions, not REST. The REST
+    endpoint is for client-side polling.

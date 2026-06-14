@@ -1,0 +1,257 @@
+# docs/paths/emr-daycare.yaml
+# Daycare-EMR REST surface under
+# `src/app/api/(emr)/(daycare)/`. 6
+# read-only endpoints — list, detail,
+# service-request list, detail, plus
+# the appointments and patients
+# probes. Same shape as the OPD / ED
+# sub-trees.
+#
+# All 6 routes use `enhancedApiHandler`
+# with `auth: { required: true }` only
+# — no RBAC. All 6 are GET-only and
+# return
+# `{ success: true, result, message:
+# "", error: null }`.
+#
+# Service: `daycareEmrService` (an
+# `OPDEmrService` configured with
+# `moduleType: "DAYCARE"`,
+# `serviceLabel: "DAYCARE"`,
+# `appointmentModule: ModuleEnum.DAYCARE`,
+# `includeEdProxyBillJoints: true`).
+# Reuses the same `OPDEmrService`
+# class as the OPD and ED sub-trees.
+
+# =============================================================================
+# Appointments and patient lists
+# =============================================================================
+
+/api/appointments-for-daycare-emr:
+  get:
+    operationId: getAppointmentsForDaycareEmr
+    summary: Get a patient's appointments (for Daycare-EMR)
+    description: |
+      Returns the appointments for a
+      single patient, used when
+      building a Daycare EMR. Service:
+      `OPDEmrService.getAppointmentForOpdEmr`
+      (on the `daycareEmrService`
+      instance).
+
+      Schema: `getAppointmentForProxySchema`
+      (same as the OPD / ED versions).
+    tags: [Daycare-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetAppointmentsForOpdEmrResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/patients-for-daycare-emr:
+  get:
+    operationId: getPatientsForDaycareEmr
+    summary: Patients eligible for Daycare-EMR
+    description: |
+      Returns the paginated list of
+      patients suitable for a
+      Daycare-EMR (reuses the shared
+      `getPatientsSchema` from the
+      `common` module). Service: `OPDEmrService
+      .getPatientForOPDEmr` (on the
+      `daycareEmrService` instance).
+
+      PII-heavy: name, phone, nrcNo,
+      township, region, etc.
+    tags: [Daycare-EMR]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `auth: { required: true }` only
+      — no RBAC. PII-heavy.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientsForOpdEmrResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Daycare-EMR main sub-tree
+# =============================================================================
+
+/api/daycare-emr:
+  get:
+    operationId: getDaycareEmrList
+    summary: Daycare-EMR list
+    description: |
+      Returns the paginated list of
+      Daycare-EMR rows. Service: `OPDEmrService
+      .getOpdEmrs` (on the
+      `daycareEmrService` instance).
+    tags: [Daycare-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/daycare-emr/{id}:
+  get:
+    operationId: getDaycareEmrById
+    summary: Daycare-EMR detail
+    description: |
+      Returns a single Daycare-EMR row.
+      Service: `OPDEmrService
+      .getOpdEmrById` (on the
+      `daycareEmrService` instance).
+    tags: [Daycare-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/daycare-emr/service-request:
+  get:
+    operationId: getDaycareEmrServiceRequests
+    summary: Daycare-EMR service-request list
+    description: |
+      Returns Daycare-EMR service
+      requests filtered by
+      `patientId` + `appointmentId`.
+      Same empty-on-missing-filter
+      contract as the OPD counterpart.
+      Service: `OPDEmrService
+      .getEmrServiceRequests` (on the
+      `daycareEmrService` instance).
+    tags: [Daycare-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: appointmentId
+        required: false
+        schema: { type: string }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/daycare-emr/service-request/{id}:
+  get:
+    operationId: getDaycareEmrServiceRequestById
+    summary: Daycare-EMR service-request detail
+    description: |
+      Returns a single Daycare-EMR
+      service request. Service: `OPDEmrService
+      .getEmrServiceRequestById` (on
+      the `daycareEmrService` instance).
+    tags: [Daycare-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Service request not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

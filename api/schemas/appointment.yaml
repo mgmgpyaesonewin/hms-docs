@@ -1,0 +1,889 @@
+# docs/schemas/appointment.yaml
+# Schemas for the REST `appointment` module
+# (src/app/api/(appointment)/).
+#
+# This module exposes **read-only** REST endpoints used by various
+# dashboard modules (OPD, IPD, EMR, etc.) for listing, looking up,
+# and viewing booking-eligible timeslots. The actual write operations
+# (book / edit / status update) are server actions / tRPC calls,
+# NOT exposed as REST routes here. The set of REST endpoints:
+#
+#   - GET /api/appointments                       — paginated list
+#   - GET /api/appointments/upcoming              — paginated list (upcoming)
+#   - GET /api/appointments/{id}                  — list by patient id
+#   - GET /api/appointment-type                   — paginated list
+#   - GET /api/doctor-time-slot                   — paginated list
+#   - GET /api/doctor-time-slot/{id}              — schedules by doctor id
+#   - GET /api/doctor-time-slot/booking-slots     — booking-eligible slots
+#
+# All endpoints require authentication (enhancedApiHandler with
+# auth.required: true). None declare RBAC permissions — they're
+# gated by session presence only.
+#
+# The response envelope is the project standard:
+#   { success: boolean; result: <data>; message: string; error?: string | null }
+# Different handlers emit slightly different extra fields ("",
+# null, etc.) — treat them as equivalent.
+
+# =============================================================================
+# Enums
+# =============================================================================
+
+AppointmentStatus:
+  type: string
+  enum: [BOOKED, CONFIRMED, COMPLETED, CANCELLED]
+  description: |
+    `appointmentStatus` from
+    `src/app/(dashboard)/shared/appointment/types/appointment.types.ts:23-28`.
+    State machine enforced by `AppointmentService.validateAppointmentStatus`:
+      BOOKED    → CONFIRMED | CANCELLED
+      CONFIRMED → COMPLETED | CANCELLED
+      COMPLETED → ∅
+      CANCELLED → ∅
+
+PatientClassification:
+  type: string
+  enum: [NEW_PATIENT, OLD_PATIENT]
+  description: |
+    `patientClassification` from
+    `src/app/(dashboard)/shared/appointment/types/appointment.types.ts:15-18`.
+    Computed by the service from
+    `countAppointmentsByPatientId >= 1`.
+
+AppointmentCategory:
+  type: string
+  enum: [CONSULTATION, OTHERS]
+  description: |
+    The `appointmentCategory` query filter (from the inline
+    enum in `getAppointmentsSchema`). The Prisma
+    `AppointmentCategory` enum maps the same values.
+
+WeekDay:
+  type: string
+  enum: [Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday]
+  description: |
+    Imported from `@prisma/client`'s `WeekDay` enum by
+    `getTimeslotsForBookingSchema`. JS `Date.getDay()` is
+    0-indexed (Sunday = 0); confirm against the Prisma model.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetAppointmentsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions layered on `PaginationQuery` by
+        `getAppointmentsSchema`
+        (src/app/(dashboard)/shared/appointment/schemas/appointment/get-appointments-schema.ts:13-38).
+        `.merge(baseQuerySchema).transform(transformPaginationSchema)` —
+        post-transform: `{ page, limit, offset, search?, start?, end?,
+        doctorId?, date?, patientId?, appointmentTypeId?, gender?,
+        status?, isUpcoming?, appointmentCategory?, module?,
+        isFollowUp?, patientClassification?, referralDoctor?,
+        referralClinic?, isConsignment? }`.
+      properties:
+        doctorId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date-time
+          description: Single date — the service filters appointments on that calendar day in the org timezone.
+        patientId:
+          type: string
+          format: uuid
+        appointmentTypeId:
+          type: string
+          format: uuid
+        gender:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+          description: |
+            `patientGenders` from
+            `src/app/(dashboard)/common/patients/features/types`.
+        status:
+          $ref: ./appointment.yaml#/AppointmentStatus
+        isUpcoming:
+          type: boolean
+          default: false
+          description: |
+            When true, the service filters out CANCELLED and
+            COMPLETED statuses (see
+            appointment.repository.ts:499-505). Coerced from query
+            string.
+        appointmentCategory:
+          $ref: ./appointment.yaml#/AppointmentCategory
+        module:
+          type: string
+          description: |
+            `ModuleEnum` from `@/utils/module-util` — matches
+            against `appointmentType.modules` (string-array
+            contains).
+        isFollowUp:
+          type: string
+          enum: [TRUE, FALSE]
+          description: |
+            Stringly-typed (not coerced to boolean) — the service
+            parses it as `=== "TRUE"`. Other values are treated as
+            `false`.
+        patientClassification:
+          $ref: ./appointment.yaml#/PatientClassification
+        referralDoctor:
+          type: string
+          format: uuid
+        referralClinic:
+          type: string
+          format: uuid
+        isConsignment:
+          type: string
+          description: |
+            `z.string().optional().transform` — only the literal
+            `"true"` maps to `true`; anything else (including
+            undefined) maps to either `undefined` or `false`. The
+            service applies the filter only when truthy
+            (appointment.repository.ts:472-474).
+
+GetUpcomingAppointmentsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getUpcomingAppointmentsSchema`
+        (src/app/(dashboard)/shared/appointment/schemas/appointment/get-upcoming-appointments-schema.ts:7-14).
+        Notably, `isUpcoming` defaults to `true` here (vs `false`
+        on the regular `getAppointments`).
+      properties:
+        doctorId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date-time
+        isUpcoming:
+          type: boolean
+          default: true
+
+GetDoctorTimeSlotsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getDoctorTimeSlotsSchema`
+        (src/app/(dashboard)/shared/appointment/schemas/doctor-time-slot/get-doctor-time-slot.schema.ts:7-17).
+      properties:
+        doctorId:
+          type: string
+          format: uuid
+        scheduleId:
+          type: string
+          format: uuid
+        dayOfWeek:
+          type: string
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+
+GetTimeslotsForBookingQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getTimeslotsForBookingSchema`
+        (src/app/(dashboard)/shared/appointment/schemas/doctor-time-slot/get-timeslots-for-booking.schema.ts:8-23).
+
+        The service **requires** both `doctorId` and `date` —
+        `getTimeslotsForBooking` throws
+        `AppError("Doctor ID or Date is missing", 400)` otherwise.
+      required:
+        - doctorId
+        - date
+      properties:
+        doctorId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date-time
+        dayOfWeek:
+          $ref: ./appointment.yaml#/WeekDay
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetAppointmentsResponse:
+  type: object
+  description: |
+    Response of `GET /api/appointments` and
+    `GET /api/appointments/upcoming`. Repository signature
+    (appointment.repository.ts:465-468, returned at line 706):
+    `Promise<{ appointments: Appointment[]; totalCount: number }>`.
+  required:
+    - appointments
+    - totalCount
+  properties:
+    appointments:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/Appointment
+    totalCount:
+      type: integer
+      minimum: 0
+
+GetAppointmentsByPatientIdResponse:
+  type: object
+  description: |
+    Response of `GET /api/appointments/{id}`. The id is a
+    **patient id** (not an appointment id) — the handler calls
+    `appointmentService.getAppointmentsByPatientId(id)`. The
+    service returns whatever the repository's
+    `getAppointmentsByPatientId` returns (no explicit return-type
+    annotation in the repo), which is the list of appointments
+    with the same nested shape as the list endpoint.
+
+    The `id` path param is the patient id, **not** the appointment
+    id. The route path segment is named `id` for compatibility
+    with the dynamic-segment convention but it's the patient
+    id that's used.
+
+    The list MAY be empty (`[]`) when the patient has no
+    appointments — the route does not 404.
+  required:
+    - appointments
+  properties:
+    appointments:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/Appointment
+    totalCount:
+      type: integer
+      minimum: 0
+      description: |
+        When the repository returns the array shape
+        `{ appointments, totalCount }` (which it does for the
+        `getAppointments` method), this field is present. The
+        `getAppointmentsByPatientId` method has no explicit
+        return type, so this is a `best-effort` description
+        based on convention.
+
+GetAppointmentTypesResponse:
+  type: object
+  description: |
+    Response of `GET /api/appointment-type`. Repository signature
+    (appointment-type.repository.ts:53):
+    `Promise<{ appointmentTypes: AppointmentType[]; count: number }>`.
+
+    Note: the field is named **`count`** here, not
+    `totalCount` — inconsistent with the appointment repository
+    (which uses `totalCount`).
+  required:
+    - appointmentTypes
+    - count
+  properties:
+    appointmentTypes:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/AppointmentType
+    count:
+      type: integer
+      minimum: 0
+
+GetDoctorTimeSlotsResponse:
+  type: object
+  description: |
+    Response of `GET /api/doctor-time-slot`. Repository signature
+    (doctor-time-slot.repository.ts:69):
+    `Promise<{ doctorSchedules: DoctorTimeSlot[]; totalCount: number }>`.
+
+    Note: the field is named `doctorSchedules`, not `timeslots`
+    or `data`. The repository also merges duplicate doctor rows
+    via `mergeDuplicate` (line 149) and flattens
+    `doctor.specialization` from a relation to a string (line 144).
+  required:
+    - doctorSchedules
+    - totalCount
+  properties:
+    doctorSchedules:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/DoctorTimeSlot
+    totalCount:
+      type: integer
+      minimum: 0
+      description: |
+        Distinct doctor count, not row count — the repository
+        `groupBy({ by: ["doctorId"] })` then takes `.length`
+        (doctor-time-slot.repository.ts:151-156).
+
+GetDoctorTimeSlotsByDoctorIdResponse:
+  type: object
+  description: |
+    Response of `GET /api/doctor-time-slot/{id}`. The id path
+    param is a **doctor id** (not a schedule id) — the handler
+    calls `findDoctorSchedulesByDoctorId(id)`, and the repo
+    uses `prisma.doctor.findUnique({ where: { id } })` (not a
+    schedule lookup).
+
+    The TS return type is `DoctorSchedule | null` (not a list
+    shape). Returns `null` when the doctor doesn't exist.
+  required:
+    - schedules
+  properties:
+    schedules:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/ScheduleInput
+      description: |
+        The doctor's weekly schedules, each with their
+        per-day timeslots. Source:
+        `prisma.doctor.findUnique({ ..., include: { schedules: { include: { timeslots: true } } } })`.
+    title:
+      type: string
+    doctorId:
+      type: string
+    doctorType:
+      type: string
+    medicalLicenseNumber:
+      type: string
+      nullable: true
+    specialization:
+      type: string
+    consultationInterval:
+      type: integer
+      nullable: true
+    gender:
+      $ref: ./appointment.yaml#/WeekDay
+      nullable: true
+      description: |
+        The `Gender` type (from doctor-time-slot.types.ts:14-22)
+        is a string-keyed enum { MALE | FEMALE | OTHER } — not
+        the same as `WeekDay` (which is a separate enum). The
+        OpenAPI schema reuses `WeekDay` to share the string
+        semantics; clients should treat as a free-form string.
+    user:
+      type: object
+      required:
+        - fullName
+      properties:
+        fullName:
+          type: string
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+GetTimeslotsForBookingResponse:
+  type: object
+  description: |
+    Response of `GET /api/doctor-time-slot/booking-slots`. Built
+    by `DoctorTimeSlotService.getTimeslotsForBooking`
+    (doctor-time-slot.service.ts:66-115).
+
+    The service composes the response by:
+      1. Fetching the doctor's recurring weekly timeslots.
+      2. Fetching the doctor's occupied appointments on `query.date`.
+      3. Mapping each timeslot to a `TimeslotForBooking` with
+         `isOccupied: boolean` and the optional `appointment`
+         + `patient` if occupied.
+
+    `doctor` is the **same** object on every entry
+    (the doctor from step 1) — not per-timeslot.
+  required:
+    - date
+    - timeslots
+    - totalCount
+  properties:
+    date:
+      type: string
+      format: date-time
+      description: Echoes the request `date` parameter.
+    timeslots:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/TimeslotForBooking
+    totalCount:
+      type: integer
+      minimum: 0
+      description: |
+        Total count of weekly timeslots the doctor has for the
+        matching day-of-week, **not** the count of free slots.
+        (From `getDoctorTimeSlotsByDayOfWeek`.)
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Appointment:
+  type: object
+  description: |
+    Canonical appointment shape. TS type `Appointment` from
+    `src/app/(dashboard)/shared/appointment/types/appointment.types.ts:33-98`.
+
+    The repository validates the shape with `appointmentValidator`
+    (a Prisma `include` block at
+    appointment.repository.ts:18-117) that selects many nested
+    relations. Notable field shapes:
+      - `doctor`: `Pick<Doctor, "id"|"doctorId"|"title"|"specialization">` + `{ user: { fullName } }`. The
+        `specialization` field is **flattened** from a relation
+        to a string by `flattenDoctorSpecialization`
+        (repository calls `.map(flattenDoctorSpecialization)` at
+        line 702-704, after the relation is included as the
+        related object — but the TS type declares
+        `specialization: string` so the flattening is the
+        on-the-wire contract).
+      - `patient`: `Pick<Patient, "id"|"patientId"|"name"|"phoneNo"|"dateofBirth"|"gender"|"guardianName"|"referralDoctor">` + optional `referralClinic` and `patientType`.
+      - `endoRequest`: optional `{ id; status: EndoRequestStatus }`.
+      - `appointmentServices`: list of `{ id; serviceId; service: { full Service shape } }`.
+      - `appointmentType`: partial projection (id/name/createdAt/updatedAt) — does NOT include `modules` (the full `AppointmentType` type has it but this projection does not).
+  required:
+    - id
+    - appointmentId
+    - doctorId
+    - patientId
+    - appointmentTypeId
+    - appointmentCategory
+    - appointmentDate
+    - start
+    - end
+    - status
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    appointmentId:
+      type: string
+      description: |
+        Human-readable, month-scoped display id generated by
+        `generateMonthlyResetId("APT", ...)`
+        (appointment.service.ts:117-119). Format is not
+        documented in code (likely a prefix + zero-padded
+        month-scoped number).
+    doctorId:
+      type: string
+      format: uuid
+    patientId:
+      type: string
+      format: uuid
+    referralDoctorId:
+      type: string
+      format: uuid
+      nullable: true
+    referralClinicId:
+      type: string
+      format: uuid
+      nullable: true
+    appointmentTypeId:
+      type: string
+      format: uuid
+    appointmentCategory:
+      $ref: ./appointment.yaml#/AppointmentCategory
+    timeslotId:
+      type: string
+      format: uuid
+      nullable: true
+    appointmentDate:
+      type: string
+      format: date-time
+    start:
+      type: string
+      format: date-time
+    end:
+      type: string
+      format: date-time
+    status:
+      $ref: ./appointment.yaml#/AppointmentStatus
+    cancelledRemark:
+      type: string
+      nullable: true
+    isFollowUp:
+      type: boolean
+    patientClassification:
+      $ref: ./appointment.yaml#/PatientClassification
+    isConsignment:
+      type: boolean
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    doctor:
+      type: object
+      required: [id, doctorId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        doctorId:
+          type: string
+        title:
+          type: string
+        specialization:
+          type: string
+          description: Flattened from a relation — the on-the-wire value is a string.
+        user:
+          type: object
+          required: [fullName]
+          properties:
+            fullName:
+              type: string
+    patient:
+      type: object
+      required: [id, patientId, name, phoneNo, dateofBirth, gender, guardianName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        patientId:
+          type: string
+        name:
+          type: string
+        phoneNo:
+          type: string
+        dateofBirth:
+          type: string
+          format: date-time
+        gender:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+        guardianName:
+          type: string
+        referralDoctor:
+          type: string
+          nullable: true
+        referralClinic:
+          type: string
+          nullable: true
+        patientType:
+          type: string
+          nullable: true
+    endoRequest:
+      type: object
+      nullable: true
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: |
+            Prisma `EndoRequestStatus` enum (referenced in
+            appointment.types.ts:11). Values not documented
+            in the local code — see Prisma schema.
+    appointmentServices:
+      type: array
+      items:
+        type: object
+        required: [id, serviceId, service]
+        properties:
+          id:
+            type: string
+            format: uuid
+          serviceId:
+            type: string
+            format: uuid
+          service:
+            type: object
+            description: |
+              Full Service shape (from
+              `src/app/(dashboard)/common/patients/features/types`).
+              Includes nested `category`, `servicePrice`,
+              `referredPrice`, `reportingPrice`, `urgentPrice`,
+              `memberCardTypeService`, and
+              `memberCardServiceUsage`. Not re-defined here
+              — the full Service type is documented under the
+              OPD module.
+    appointmentType:
+      type: object
+      required: [id, name, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        modules:
+          type: array
+          items:
+            type: string
+          description: |
+            **Note**: the TS type `Appointment` declares the
+            `appointmentType` projection as
+            `Pick<AppointmentType, "id"|"name"|"createdAt"|"updatedAt"|"modules">`
+            (appointment.types.ts:90-93), but the Prisma
+            `include` selects only `id`, `name`, `createdAt`,
+            `updatedAt` (no `modules`). This is a
+            TS type / runtime mismatch — `modules` is typed
+            present but absent on the wire.
+
+AppointmentType:
+  type: object
+  description: |
+    Canonical appointment-type shape. TS type `AppointmentType` from
+    `src/app/(dashboard)/shared/appointment/types/appointment-type.types.ts:14-30`.
+
+    `modules: string[]` is stored on the row (used for module-based
+    filtering in the appointment list). The list endpoint includes
+    `createdBy` / `updatedBy` as `Publisher` projections
+    (appointment-type.repository.ts:25-39).
+  required:
+    - id
+    - name
+    - modules
+    - createdAt
+    - updatedAt
+    - createdBy
+    - updatedBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique among appointment types (enforced in service).
+    modules:
+      type: array
+      items:
+        type: string
+      description: |
+        The set of modules this appointment type applies to
+        (matches against `ModuleEnum` values in
+        `getAppointmentsSchema`).
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+
+DoctorTimeSlot:
+  type: object
+  description: |
+    Canonical doctor-time-slot shape. TS type `DoctorTimeSlot` from
+    `src/app/(dashboard)/shared/appointment/types/doctor-time-slot.types.ts:24-52`.
+
+    This is a **list of recurring weekly schedules for one doctor**,
+    where each schedule row carries a list of per-day timeslots
+    generated from `consultationInterval`. The list endpoint
+    flattens `doctor.specialization` from a relation to a string.
+
+    The TS type's `timeslots[]._count` shape is unusual — it appears
+    to model the `groupBy` / `_count` projection used in some
+    helper queries. The list endpoint does **not** populate
+    `_count`; it populates the `timeslots` array directly.
+  required:
+    - id
+    - startTime
+    - endTime
+    - doctorId
+    - doctor
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    startTime:
+      type: string
+      format: date-time
+    endTime:
+      type: string
+      format: date-time
+    doctorId:
+      type: string
+      format: uuid
+    doctor:
+      type: object
+      required: [id, doctorId, doctorType, user]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        doctorType:
+          type: string
+        doctorId:
+          type: string
+        specialization:
+          type: string
+          description: Flattened from a relation to a string.
+        user:
+          type: object
+          required: [fullName]
+          properties:
+            fullName:
+              type: string
+    timeslots:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uuid
+          start:
+            type: string
+            format: date-time
+          end:
+            type: string
+            format: date-time
+          _count:
+            type: object
+            description: |
+              Per-day aggregated counts. Not populated by the
+              list endpoint; populated by some other helpers
+              (e.g. `groupBy`).
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      type: object
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+    updatedBy:
+      type: object
+      nullable: true
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+
+ScheduleInput:
+  type: object
+  description: |
+    A single weekly schedule with timeslots. TS type
+    `ScheduleInput` from
+    `src/app/(dashboard)/shared/appointment/types/doctor-time-slot.types.ts:60-66`.
+  required:
+    - dayOfWeek
+    - startTime
+    - endTime
+  properties:
+    id:
+      type: string
+      format: uuid
+      nullable: true
+    dayOfWeek:
+      $ref: ./appointment.yaml#/WeekDay
+    startTime:
+      type: string
+      format: date-time
+    endTime:
+      type: string
+      format: date-time
+    timeslots:
+      type: array
+      items:
+        $ref: ./appointment.yaml#/TimeSlot
+
+TimeSlot:
+  type: object
+  description: |
+    A single bookable timeslot. TS type `TimeSlot` from
+    `src/app/(dashboard)/shared/appointment/types/doctor-time-slot.types.ts:54-59`.
+  properties:
+    id:
+      type: string
+      format: uuid
+    start:
+      type: string
+      format: date-time
+    end:
+      type: string
+      format: date-time
+    _count:
+      type: object
+      properties:
+        appointments:
+          type: integer
+          minimum: 0
+
+TimeslotForBooking:
+  type: object
+  description: |
+    A timeslot annotated with booking availability. TS type
+    `TimeslotForBooking` from
+    `src/app/(dashboard)/shared/appointment/types/appointment.types.ts:100-107`.
+
+    Built by `DoctorTimeSlotService.getTimeslotsForBooking`
+    (doctor-time-slot.service.ts:91-109). The `doctor` is the
+    **same** object on every entry (the doctor from the
+    `doctorId` query param). `patient` is populated only when
+    `isOccupied` is true.
+  required:
+    - id
+    - time
+    - isOccupied
+    - doctor
+  properties:
+    id:
+      type: string
+      format: uuid
+    time:
+      type: string
+      format: date-time
+    isOccupied:
+      type: boolean
+    appointment:
+      $ref: ./appointment.yaml#/Appointment
+      nullable: true
+    doctor:
+      type: object
+      required: [id, doctorId, user]
+      properties:
+        id:
+          type: string
+          format: uuid
+        doctorId:
+          type: string
+        title:
+          type: string
+        specialization:
+          type: string
+        user:
+          type: object
+          required: [fullName]
+          properties:
+            fullName:
+              type: string
+    patient:
+      type: object
+      nullable: true
+      description: |
+        The full patient shape from
+        `src/app/(dashboard)/common/patients/features/types`.
+        Not re-defined here — see the OPD module.

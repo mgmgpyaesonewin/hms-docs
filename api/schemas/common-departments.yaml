@@ -1,0 +1,236 @@
+# docs/schemas/common-departments.yaml
+# Schemas for the common-departments sub-area of the
+# `common` REST module. Two endpoints:
+#   GET  /api/departments
+#   POST /api/departments
+# Source: src/app/api/(common)/departments/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetDepartmentsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        defaultQuerySchema }` — no extra filters. The
+        repository's `buildWhereQuery` interprets
+        `query.search` (case-insensitive substring match
+        on `name`) and `query.start` / `query.end`
+        (`createdAt` range). See
+        `src/app/(dashboard)/common/user-management/departments/features/departments-repository.ts:133-151`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetDepartmentsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/departments`. The
+    repository returns
+    `Promise<{ data: Department[]; count: number }>`
+    (departments-repository.ts:9-47). The route wraps it
+    in `{ success: true, result, message: "", error: null }`
+    via `enhancedApiHandler`
+    (route.ts:13-27).
+
+    The repository field is named `data` (not
+    `departments`).
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [data, count]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: ./common-departments.yaml#/Department
+        count:
+          type: integer
+          minimum: 0
+          description: |
+            **Bug**: the repository's `countPromise` is
+            `this.prisma.department.count()` with no
+            `where` argument
+            (departments-repository.ts:36,47). So `count`
+            is the unfiltered total across the entire
+            `Department` table, not the count of rows
+            matching the current `where` (which already
+            accounts for `search` / `start` / `end`). The
+            paginated `data` length is correct, but the
+            `count` reported for pagination is the
+            global total. UI pagination math is therefore
+            off by however many rows are filtered out.
+    message:
+      type: string
+      example: ""
+    error:
+      type: "null"
+
+CreateDepartmentRequest:
+  type: object
+  description: |
+    Request body for `POST /api/departments`. From
+    `createDepartmentsSchema`
+    (create-departments-schema.ts:3-6): `name` (min 1) and
+    optional `description`. The handler also injects
+    `createdById` and `updatedById` from the session's
+    `user.id` (route.ts:35-39), and the service
+    auto-generates a `departmentCode` of the form
+    `DID-NNN` (departments-service.ts:103-116) — the
+    first department gets `DID-001`; subsequent
+    departments increment the trailing 3-digit zero-pad
+    of the most-recent row by 1.
+  required:
+    - name
+  properties:
+    name:
+      type: string
+      minLength: 1
+    description:
+      type: string
+      nullable: true
+      description: |
+        Optional in the request body. The Prisma column
+        is `String?` and the TS type declares
+        `description: string | null`.
+
+CreateDepartmentResponse:
+  type: object
+  description: |
+    Response shape of `POST /api/departments`. The
+    service's `createDepartment` returns the bare row
+    from `prisma.department.create(...)` — which
+    includes `id`, `name`, `description`, `departmentCode`,
+    `createdById`, `updatedById`, `createdAt`, `updatedAt`,
+    but **no** `createdBy` / `updatedBy` user joins
+    (departments-repository.ts:101-114). The handler
+    wraps the bare row in
+    `{ success: true, result, message: "", error: null }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      $ref: ./common-departments.yaml#/DepartmentBare
+    message:
+      type: string
+      example: ""
+    error:
+      type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Department:
+  type: object
+  description: |
+    Canonical department shape. TS type `Department` from
+    `src/app/(dashboard)/common/user-management/departments/features/type/index.ts:7-16`.
+
+    Maps to the Prisma `Department` model
+    (prisma/schema.prisma, @@map("departments")). The
+    list endpoint includes `createdBy` / `updatedBy` as
+    the canonical `Publisher` projection
+    (`select: { id, fullName, username }`). Note that
+    the Prisma `Department` has FK relations to
+    `Item[]`, `Procedure[]`, `Service[]`, and `User[]`
+    (so a delete is FK-constrained — see
+    `common-departments` security notes).
+  required:
+    - id
+    - name
+    - departmentCode
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model; duplicate-name
+        check enforced by the service
+        (`findExistingDepartment`, case-insensitive
+        equality, departments-service.ts:24-29).
+    description:
+      type: string
+      nullable: true
+    departmentCode:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Auto-generated by
+        the service as `DID-NNN` where `NNN` is a
+        3-digit zero-padded increment over the most
+        recent row (departments-service.ts:103-116).
+        First department is `DID-001`.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      oneOf:
+        - $ref: ./common.yaml#/Publisher
+        - type: "null"
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+DepartmentBare:
+  type: object
+  description: |
+    The bare row returned by `prisma.department.create(...)`
+    — no `createdBy` / `updatedBy` user joins. The
+    `createdById` and `updatedById` columns are present
+    (both equal to the actor's `user.id` at create time).
+  required:
+    - id
+    - name
+    - departmentCode
+    - createdById
+    - updatedById
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    description:
+      type: string
+      nullable: true
+    departmentCode:
+      type: string
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

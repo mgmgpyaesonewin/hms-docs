@@ -1,0 +1,192 @@
+# docs/schemas/common-selling-price-groups.yaml
+# Schemas for the common-selling-price-groups sub-area
+# of the `common` REST module. Single endpoint:
+#   GET /api/selling-price-groups
+# Source: src/app/api/(common)/selling-price-groups/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetSellingPriceGroupsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getSellingPriceGroupsSchema }`. The schema is
+        `baseQuerySchema.transform(transformPaginationSchema)`,
+        so the post-transform shape is
+        `{ page, limit, offset, search?, start?, end? }`.
+        The repository interprets `query.search`
+        (matches `name` OR `groupId`, both
+        case-insensitive substring,
+        selling-price-group.repository.ts:43-58) and
+        `query.start` / `query.end` (`createdAt`
+        range, `gte` / `lte`). Ordering is
+        `createdAt: desc`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetSellingPriceGroupsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/selling-price-groups`.
+    The repository returns
+    `Promise<{ groups: SellingPriceGroup[]; totalCount: number }>`
+    (selling-price-group.repository.ts:37-116) and the
+    route wraps it in
+    `{ success: true, result, error: null }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [groups, totalCount]
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: ./common-selling-price-groups.yaml#/SellingPriceGroup
+        totalCount:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+SellingPriceGroup:
+  type: object
+  description: |
+    Canonical selling-price-group shape. TS type
+    `SellingPriceGroup` from
+    `src/app/(dashboard)/common/selling-price/features/types/index.ts:3-17`.
+
+    Maps to the Prisma `SellingPriceGroup` model
+    (prisma/schema.prisma).
+
+    The list endpoint uses `prisma.sellingPriceGroup.
+    findMany({ select: { ... }})` with explicit
+    projections:
+      - `createdBy` / `updatedBy` — 3-field
+        `Publisher` projection (id, fullName,
+        username).
+      - `_count.items` — flattened into the response
+        as `totalItems`.
+
+    Profit-percentage columns:
+      - `localProfitPercentage` — non-nullable
+        `Int` in Prisma, required in the create
+        schema (positive integer).
+      - `foreignerProfitPercentage` — non-nullable
+        `Int` in Prisma, required in the create
+        schema (positive integer).
+      - `insuranceProfitPercentage` — nullable
+        `Int?` in Prisma, optional in the create
+        schema.
+      - `governmentProfitPercentage` — nullable
+        `Int?` in Prisma, optional in the create
+        schema.
+
+    `name` is `@unique` in the Prisma model; the
+    `updateSellingPriceGroup` repository path
+    normalizes `insuranceProfitPercentage` /
+    `governmentProfitPercentage` to `null` when
+    empty (`data.insuranceProfitPercentage || null`).
+  required:
+    - id
+    - name
+    - groupId
+    - localProfitPercentage
+    - foreignerProfitPercentage
+    - totalItems
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-name
+        check enforced by the service via
+        `findSellingPriceGroupByName`
+        (selling-price-group.service.ts:15-20).
+    groupId:
+      type: string
+      description: |
+        Business identifier, `@unique`. Auto-generated
+        by the service as `SPG-NNN` (3-digit
+        zero-pad) via `generateId3Digits("SPG-",
+        lastGroup?.groupId)`
+        (selling-price-group.service.ts:22-23). First
+        group is `SPG-001`. The repository's search
+        filter matches against both `name` and
+        `groupId`.
+    localProfitPercentage:
+      type: integer
+      minimum: 1
+      description: |
+        Required. Positive integer. The create schema
+        enforces `.int().positive()`. The Prisma
+        column is non-nullable `Int` (no DB-side
+        constraint that the value is positive — that's
+        a Zod-layer guard only).
+    foreignerProfitPercentage:
+      type: integer
+      minimum: 1
+      description: |
+        Required. Positive integer. The create schema
+        enforces `.int().positive()`. Same DB-layer
+        caveat as `localProfitPercentage`.
+    insuranceProfitPercentage:
+      type: integer
+      minimum: 1
+      nullable: true
+      description: |
+        Optional. Positive integer (when present). The
+        create schema enforces
+        `.int().positive().optional()`. The Prisma
+        column is `Int?` (nullable).
+    governmentProfitPercentage:
+      type: integer
+      minimum: 1
+      nullable: true
+      description: |
+        Optional. Positive integer (when present). The
+        create schema enforces
+        `.int().positive().optional()`. The Prisma
+        column is `Int?` (nullable).
+    remark:
+      type: string
+      nullable: true
+    totalItems:
+      type: integer
+      minimum: 0
+      description: |
+        Count of `Item` rows associated with this
+        group. Flattened from `_count.items`
+        (selling-price-group.repository.ts:98-103).
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      oneOf:
+        - $ref: ./common.yaml#/Publisher
+        - type: "null"

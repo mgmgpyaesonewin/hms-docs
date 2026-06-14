@@ -1,0 +1,422 @@
+# docs/paths/common-reports-misc.yaml
+# Inventory, patient, and supplier-item report
+# endpoints of the `common` REST module. 12
+# endpoints covering item summary, patient
+# summary, supplier items. All are GET-only, all
+# require an authenticated session, none declare
+# explicit RBAC permissions. Source files under
+# src/app/api/(common)/reports/{item-summary,
+# patient-summary, supplier-items, top-products}.
+
+# =============================================================================
+# Item summary
+# =============================================================================
+
+/api/reports/item-summary:
+  get:
+    operationId: getItemSummary
+    summary: Per-item stock summary
+    description: |
+      Returns one row per item with
+      `id`, `item` (name), `itemId` (code),
+      `generic`, `minQty`, `maxQty`,
+      `reOrderQty`, `category`, `allStocksQty`,
+      `unit`, `unitAbbreviation`. Row shape per
+      `itemSummarySchema`.
+
+      **The route declares
+      `params: { id: number }` but the
+      `id` path parameter is never read** —
+      `getItemSummary` is called with the
+      validated query, not the id. The
+      declaration is a TypeScript-level
+      misnomer; the route does NOT actually
+      look up a single item by id. (Use
+      `/api/reports/item-summary/{id}` for the
+      single-item lookups.) This is a route
+      bug — the params are silently ignored,
+      so any caller that thinks they're
+      fetching a single item will instead get
+      the full paginated list.
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` with manual
+      `verifyApiAuth()`. The unused
+      `params: { id: number }` declaration is a
+      latent bug.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: min
+        schema: { type: boolean, description: "Preprocess `=== 'true'`; only the literal string \"true\" yields true." }
+      - in: query
+        name: max
+        schema: { type: boolean, description: "Preprocess `=== 'true'`; only the literal string \"true\" yields true." }
+      - in: query
+        name: emptyStock
+        schema: { type: boolean, description: "Preprocess `=== 'true'`" }
+      - in: query
+        name: reOrder
+        schema: { type: boolean, description: "Preprocess `=== 'true'`" }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetItemSummaryResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/item-summary/{id}:
+  get:
+    operationId: getItemSummaryById
+    summary: Single-item summary info
+    description: |
+      Returns the info row for a single item
+      (`itemName`, `itemId`, `generic`,
+      `allStocksQty`, `unitName`). Row shape
+      per `itemSummaryInfoSchema`. The service
+      method is `getItemSummaryById(id)`.
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetItemSummaryByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/item-summary/{id}/batches:
+  get:
+    operationId: getItemSummaryByIdWithBatches
+    summary: Per-batch breakdown for an item
+    description: |
+      Returns per-batch totals for the item
+      (batchNo, totalQty, stores: [{ storeName,
+      qty }]). Row shape per
+      `itemSummaryByIdWithBatchSchema`.
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetItemSummaryByIdWithBatchesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/item-summary/{id}/item-batches:
+  get:
+    operationId: getItemSummaryByIdWithItemBatches
+    summary: Per-item-batch breakdown for an item
+    description: |
+      Almost identical to `/batches` but the
+      row key is `item_batch_no` (the
+      `ItemBatch.no` column) instead of
+      `batch_no` (the `Batch.no` column). The
+      service
+      (`getItemSummaryByIdWithItemBatches`) is
+      distinct. The two sibling endpoints are
+      only meaningfully different if an item
+      has both `Batch` and `ItemBatch` rows —
+      worth confirming the upstream model.
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`. Row shape per
+          `itemSummaryByIdWithItemBatchSchema`
+          (itemBatchNo, totalQty, stores).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetItemSummaryByIdWithItemBatchesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/item-summary/stock-per-store:
+  get:
+    operationId: getItemSummaryStockPerStoreExport
+    summary: Per-item stock breakdown across stores
+    description: |
+      Returns the stock-per-store export rows
+      (itemId, itemName, generic, minQty, maxQty,
+      reOrderQty, category, unit, totalQty,
+      stores: [{ name, qty }]). Schema:
+      `itemSummaryStockPerStoreExportSchema`.
+      Used by the export flow; despite the path
+      name there's no file download — the
+      response is JSON.
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: min
+        schema: { type: boolean, description: "Preprocess `=== 'true'`" }
+      - in: query
+        name: max
+        schema: { type: boolean, description: "Preprocess `=== 'true'`" }
+      - in: query
+        name: emptyStock
+        schema: { type: boolean, description: "Preprocess `=== 'true'`" }
+      - in: query
+        name: reOrder
+        schema: { type: boolean, description: "Preprocess `=== 'true'`" }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetItemSummaryStockPerStoreResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Patient summary
+# =============================================================================
+
+/api/reports/patient-summary:
+  get:
+    operationId: getPatientSummaryByTownship
+    summary: Patient count by township
+    description: |
+      Returns one row per township with
+      `township`, `region`, `patient_count`.
+      Row shape per `patientSummarySchema`
+      (note: the **transform does not
+      camelCase** the `patient_count` field —
+      it stays as `patient_count` in the
+      response, even though all the other
+      field names are already lowercase).
+      Filter: `region` (optional).
+    tags: [Reports - Patient]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Schema-typo: the `transform` for
+      `patientSummarySchema` does not rename
+      `patient_count` to `patientCount`. The
+      wire shape is
+      `{ township, region, patient_count }`
+      while the other schemas in the same
+      file camelCase every field. Worth
+      flagging.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: region
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetPatientSummaryByTownshipResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/patient-summary/by-region:
+  get:
+    operationId: getPatientSummaryByRegion
+    summary: Patient count by region
+    description: |
+      Returns one row per region. The service
+      is `PatientSummaryService.getPatientSummaryByRegion(query)`.
+    tags: [Reports - Patient]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+      The route declares
+      `params: { id: number }` (mirroring the
+      same bug as `/api/reports/item-summary`)
+      but **the `id` is awaited and discarded
+      — `await params;` then never used**. The
+      route does not actually look up a
+      specific region. The path
+      `/by-region` is purely cosmetic.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Supplier items
+# =============================================================================
+
+/api/reports/supplier-items:
+  get:
+    operationId: getSupplierItemsReport
+    summary: Per-supplier item totals
+    description: |
+      Returns one row per supplier with
+      `supplier`, `totalAmount`, `supplierId`.
+      Row shape per `supplierItemsSchema`.
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetSupplierItemsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/supplier-items/{id}:
+  get:
+    operationId: getSupplierItemsReportById
+    summary: Items from a single supplier
+    description: |
+      Returns the line-item rows for a single
+      supplier: `supplierName`, `totalAmount`,
+      `items: [{ companyBatchNo, expiryDate,
+      grossAmount, itemId, itemName,
+      pricePerUnit, purchaseOrderId,
+      purchasedDate, qty, unitName,
+      unitAbbreviation }]`. Row shape per
+      `supplierItemsByIdSchema`.
+
+      The schema's transform **throws an
+      Error("No items found for supplier.")**
+      if the array is empty. `apiHandler`
+      catches that and returns a 500 with
+      `error: "No items found for supplier."`
+      — meaning a missing supplier id
+      surfaces as a 500, not a 404. The 500
+      error message is also unhelpful
+      (clients cannot distinguish
+      "supplier not found" from "supplier has
+      no items").
+    tags: [Reports - Inventory]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      **500 on empty result** — the schema's
+      transform throws if the SQL returns no
+      rows, which is the "not found" case.
+      apiHandler catches the throw and returns
+      500. A 404 would be more accurate. The
+      error message "No items found for
+      supplier." is also generic — clients
+      cannot tell apart "supplier not found"
+      and "supplier exists but no purchases
+      yet".
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null }`
+          (the route has no `message` field).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetSupplierItemsByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "500":
+        description: |
+          Returned when the supplier has no
+          items. Error message: "No items found
+          for supplier." Schema-thrown Error
+          (not AppError), so the status code
+          is 500.
+        content:
+          application/json:
+            schema:
+              $ref: ./common.yaml#/ErrorEnvelope

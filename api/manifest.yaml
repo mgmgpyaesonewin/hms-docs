@@ -1,0 +1,3952 @@
+# docs/manifest.yaml
+# Project inventory for OpenAPI generation.
+# Source of truth for which modules have been documented.
+
+project:
+  name: ycare-hms
+  framework: nextjs
+  api_style: mixed
+  version: 1.1.12.dev
+  description: YCare HMS — multi-tenant Hospital Management System (Next.js 15, Prisma/Postgres, Mantine, tRPC + REST)
+  trpc_mount: /api/trpc
+  url_mapping: |
+    Next.js App Router strips route groups (parenthesised dirs) from URLs.
+    A file at src/app/api/(group)/foo/route.ts serves at /api/foo.
+    Route groups are an organisational concern only — the OpenAPI paths in
+    docs/paths/<module>.yaml MUST NOT include the (group) segment.
+    Confirmed against src/scripts/route-mapping.ts and next.config.ts
+    (the legacy rewrites there apply to page.tsx only, not to route.ts).
+
+modules:
+  # =========================================================================
+  # REST modules — one per route group under src/app/api/
+  # =========================================================================
+
+  - id: system
+    kind: rest
+    status: documented
+    routes_count: 2
+    files:
+      - src/app/api/health/route.ts
+      - src/app/api/sentry-example-api/route.ts
+    shared_schemas: [HealthSnapshot, HealthError]
+
+  - id: submodule-appointment
+    kind: rest
+    status: documented
+    routes_count: 1
+    note: Private git submodule (per project memory). Documentation optional depending on access.
+    files:
+      - src/app/api/submodules/appointment/module-check/route.ts
+      # Supporting file discovered while documenting this module:
+      - src/lib/dir-utils.ts
+    shared_schemas: [ModuleCheckResponse]
+    procedures:
+      - GET /api/submodules/appointment/module-check
+    notes: |
+      Single public endpoint — a "module provisioned" probe used
+      by the dashboard to detect whether the private appointment
+      submodule has been cloned and is enabled. No auth required.
+
+      Two checks must pass for a 200:
+        1. `NEXT_PUBLIC_APPOINTMENT_MODULE_ENABLED !== "false"`.
+        2. The filesystem directory
+           `<cwd>/src/app/(dashboard)/appointment` is non-empty
+           (recursively walked via `readDirRecursive` from
+           `src/lib/dir-utils.ts:17-35` and checked with
+           `hasEmptyDir` at `src/lib/dir-utils.ts:37-50`).
+
+      On any failure returns HTTP 404 with a
+      `{ success: false, result: null, message }` envelope. The
+      status code is **404 for every failure mode** (env disabled,
+      dir missing, fallback) — not just resource-not-found
+      semantics. Clients must branch on `success` / `message`, not
+      on the status code alone.
+
+      Notable security/operational findings:
+        1. **No auth** — endpoint is publicly reachable. Leaks
+           whether the submodule is initialised (via the env flag
+           and dir-walk) and the filesystem path. Minor info
+           disclosure, consistent with other health probes.
+        2. **Sync filesystem I/O on the request thread** —
+           `fs.readdirSync` / `fs.statSync` walk the appointment
+           tree synchronously. Acceptable for a rare probe; not
+           for hot paths.
+        3. **Loose env flag check** —
+           `NEXT_PUBLIC_APPOINTMENT_MODULE_ENABLED === "false"`
+           treats unset, empty, "0", "no", and any non-`"false"`
+           value as "enabled". The flag is also exposed to the
+           client (`NEXT_PUBLIC_*`), so it ships in the browser
+           bundle.
+        4. **`message` is human-readable English**, not a
+           machine-readable code. Clients should still branch on
+           `success` first.
+
+  - id: submodule-opd
+    kind: rest
+    status: documented
+    routes_count: 1
+    note: Private git submodule (per project memory). Documentation optional depending on access.
+    files:
+      - src/app/api/submodules/opd/module-check/route.ts
+      # Supporting file shared with submodule-appointment:
+      - src/lib/dir-utils.ts
+    shared_schemas: [ModuleCheckResponse]
+    procedures:
+      - GET /api/submodules/opd/module-check
+    notes: |
+      Sibling of `submodule-appointment` — same handler shape,
+      directory and env flag swapped. Single public probe for the
+      private OPD submodule.
+
+      Two checks must pass for a 200:
+        1. `NEXT_PUBLIC_OPD_MODULE_ENABLED !== "false"`.
+        2. The filesystem directory
+           `<cwd>/src/app/(dashboard)/opd` is non-empty
+           (recursively walked via `readDirRecursive` and checked
+           with `hasEmptyDir` from `src/lib/dir-utils.ts`).
+
+      On any failure returns HTTP 404 with a
+      `{ success: false, result: null, message }` envelope. Same
+      status-code semantics as the appointment probe — 404 is
+      used for every failure mode (not just resource-not-found).
+
+      All security/operational findings mirror `submodule-appointment`:
+      no auth, sync filesystem I/O on the request thread, loose
+      env flag check, human-readable English `message` field.
+
+  - id: appointment
+    kind: rest
+    status: documented
+    routes_count: 7
+    files:
+      - src/app/api/(appointment)/appointments/route.ts
+      - src/app/api/(appointment)/appointments/[id]/route.ts
+      - src/app/api/(appointment)/appointments/upcoming/route.ts
+      - src/app/api/(appointment)/appointment-type/route.ts
+      - src/app/api/(appointment)/doctor-time-slot/route.ts
+      - src/app/api/(appointment)/doctor-time-slot/[id]/route.ts
+      - src/app/api/(appointment)/doctor-time-slot/booking-slots/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/appointment/schemas/appointment/get-appointments-schema.ts
+      - src/app/(dashboard)/shared/appointment/schemas/appointment/get-upcoming-appointments-schema.ts
+      - src/app/(dashboard)/shared/appointment/schemas/doctor-time-slot/get-doctor-time-slot.schema.ts
+      - src/app/(dashboard)/shared/appointment/schemas/doctor-time-slot/get-timeslots-for-booking.schema.ts
+      - src/app/(dashboard)/shared/appointment/services/appointment.service.ts
+      - src/app/(dashboard)/shared/appointment/services/appointment-type.service.ts
+      - src/app/(dashboard)/shared/appointment/services/doctor-time-slot.service.ts
+      - src/app/(dashboard)/shared/appointment/repositories/appointment.repository.ts
+      - src/app/(dashboard)/shared/appointment/repositories/appointment-type.repository.ts
+      - src/app/(dashboard)/shared/appointment/repositories/doctor-time-slot.repository.ts
+      - src/app/(dashboard)/shared/appointment/types/appointment.types.ts
+      - src/app/(dashboard)/shared/appointment/types/appointment-type.types.ts
+      - src/app/(dashboard)/shared/appointment/types/doctor-time-slot.types.ts
+      - src/utils/api-handler.ts
+    shared_schemas: [Appointment, AppointmentType, DoctorTimeSlot, TimeslotForBooking, ScheduleInput, TimeSlot]
+    procedures:
+      - GET /api/appointments
+      - GET /api/appointments/upcoming
+      - GET /api/appointments/{id}
+      - GET /api/appointment-type
+      - GET /api/doctor-time-slot
+      - GET /api/doctor-time-slot/{id}
+      - GET /api/doctor-time-slot/booking-slots
+    notes: |
+      Read-only REST surface. Write operations (book / edit /
+      status) live on the service but are reached via server
+      actions / tRPC — they are NOT part of this documentation
+      set.
+
+      Key findings:
+        1. **No RBAC permissions declared** on any of the seven
+           endpoints. All use `auth: { required: true }` with no
+           `permissions` array. Appointment data includes
+           patient PII and doctor info, so RBAC gating may be
+           appropriate. Worth confirming with the team.
+        2. **Two path segments are misnamed**:
+             - `/api/appointments/{id}` takes a **patient id**,
+               not an appointment id. Handler calls
+               `getAppointmentsByPatientId(id)`.
+             - `/api/doctor-time-slot/{id}` takes a **doctor
+               id**, not a schedule id. The repo uses
+               `prisma.doctor.findUnique`, not a schedule
+               lookup.
+        3. **Inconsistent field naming across repositories**:
+             - `appointment-types` returns `count` (not
+               `totalCount`).
+             - `appointments` and `doctor-time-slot` return
+               `totalCount`.
+             - `doctor-time-slot` `totalCount` is a
+               **distinct** doctor count (from
+               `groupBy({ by: ["doctorId"] })`), not a row
+               count.
+        4. **TS type / runtime mismatch on
+           `Appointment.appointmentType.modules`**: the TS type
+           declares the projection as
+           `Pick<AppointmentType, "id"|"name"|"createdAt"|"updatedAt"|"modules">`
+           but the Prisma `include` selects only
+           `id`, `name`, `createdAt`, `updatedAt` (no
+           `modules`).
+        5. **`getAppointmentsByPatientId` repo method has no
+           explicit return-type annotation** — clients cannot
+           rely on the response shape from TypeScript alone.
+        6. **`flattenDoctorSpecialization` runs after the
+           Prisma include** selects the `doctor.specialization`
+           relation. The TS type's
+           `Appointment.doctor.specialization: string` is the
+           post-flattening contract; the raw Prisma row is a
+           relation object.
+        7. **Three different "extra" envelope field shapes**
+           are used across the seven endpoints — `{ success,
+           result, message }`, `{ success, result, message,
+           error: null }`, and `{ success, result, message,
+           error: "" }`. The error field is empty/null on
+           success; only `apiHandler` populates it on failure.
+        8. **`getTimeslotsForBooking`** requires both
+           `doctorId` and `date` as query params — the service
+           throws 400 if either is missing, but the Zod schema
+           has them as `.optional()`, so the 400 is from the
+           service, not from Zod. `getTimeslotsForBooking` also
+           throws 404 if the doctor doesn't exist.
+
+  - id: cathlab
+    kind: rest
+    status: documented
+    routes_count: 8
+    files:
+      - src/app/api/(cathlab)/cathlab/route.ts
+      - src/app/api/(cathlab)/cathlab/[id]/route.ts
+      - src/app/api/(cathlab)/cathlab/[id]/audits/route.ts
+      - src/app/api/(cathlab)/cathlab/patients-for-cathlab/route.ts
+      - src/app/api/(cathlab)/cath-lab-requests-for-billing/route.ts
+      - src/app/api/(cathlab)/cathlab-requests/route.ts
+      - src/app/api/(cathlab)/cathlab-requests/[id]/route.ts
+      - src/app/api/(cathlab)/cathlab-infection-screening/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/cathlab/schemas/get-cathlab.schema.ts
+      - src/app/(dashboard)/shared/cathlab/schemas/get-patients-for-cathlab.schema.ts
+      - src/app/(dashboard)/shared/cathlab/schemas/cathlab-request/get-cathlab-request.schema.ts
+      - src/app/(dashboard)/shared/cathlab/services/cathlab.service.ts
+      - src/app/(dashboard)/shared/cathlab/services/cathlab-request.service.ts
+      - src/app/(dashboard)/shared/cathlab/repositories/cathlab.repository.ts
+      - src/app/(dashboard)/shared/cathlab/repositories/cathlab-request.repository.ts
+      - src/utils/infection-screening.ts
+    shared_schemas: [CathLabWithPaymentStatus, CathLabRequest]
+    procedures:
+      - GET /api/cathlab
+      - GET /api/cathlab/{id}
+      - GET /api/cathlab/{id}/audits
+      - GET /api/cathlab/patients-for-cathlab
+      - GET /api/cath-lab-requests-for-billing
+      - GET /api/cathlab-requests
+      - GET /api/cathlab-requests/{id}
+      - GET /api/cathlab-infection-screening
+    notes: |
+      Read-only REST surface. Write operations (create / update
+      / delete CathLab, create / update / delete
+      CathLabRequest, update company-direct items, update
+      service items) live on the services but are reached via
+      server actions / tRPC — they are NOT part of this
+      documentation set.
+
+      Key findings:
+        1. **No RBAC permissions declared** on any of the
+           eight endpoints. All use
+           `auth: { required: true }` with no `permissions`
+           array. Cathlab data is clinically sensitive — RBAC
+           gating may be appropriate.
+        2. **`paymentStatus` is derived**, not stored — the
+           list endpoint walks
+           `admission.ipddailyBills.ipdfinalBillWithDailyBills.ipdFinalBill.paymentStatus`
+           on every call and stamps `PAID` if any linked
+           daily bill is in a paid IPD final bill, else
+           `UNPAID`.
+        3. **`cathLabRequestStatus` is `.optional()` in the
+           Zod schema but the repo treats it as required** —
+           the `where` clause is built unconditionally with
+           `cathLabRequestStatus: query.cathLabRequestStatus`,
+           so omitting it would match only patients with
+           `cathLabRequestStatus: undefined`.
+        4. **Some `getById` endpoints return `null` instead
+           of 404**: `GET /api/cathlab/{id}`,
+           `GET /api/cathlab/{id}/audits`, and
+           `GET /api/cathlab-requests/{id}`.
+        5. **`CathLabAudit.createdBy.role.name` is included
+           in the audits response** — distinctive from the
+           rest of the application, which only projects
+           `id`/`fullName`/`username` for the publisher
+           projection.
+        6. **`patientGroup` and `patientType` filter inputs
+           are accepted as raw strings** (not nativeEnum),
+           with the repo casting to Prisma enum types.
+           Malformed values throw at the Prisma layer,
+           surfaced as generic 500.
+        7. **Dead code in the service file** — commented-out
+           earlier `deleteCathLab` (lines 398-511) and
+           `updateCathLabCompanyDirectItems`
+           (lines 627-652), superseded by the active
+           versions.
+        8. **The `CathLab` Prisma model has deeply-nested
+           includes** (admission → ipddailyBills →
+           ipdfinalBillWithDailyBills → ipdFinalBill) that
+           can produce a large response payload for a
+           single list row. Worth confirming the perf
+           characteristics of `findCathLabs`.
+        9. **Two parallel REST sub-areas** are exposed
+           under `cathlab` and `cathlab-requests` (and the
+           `cath-lab-requests-for-billing` summary). The
+           two are conceptually distinct entities (CathLab
+           is the billable record, CathLabRequest is the
+           upstream request that gates the billable one).
+
+  - id: common
+    kind: rest
+    status: documented
+    routes_count: 99
+    sub_areas_documented: 25 of 25
+    note: |
+      Cross-cutting REST surface — patients, doctors, services, items, users,
+      roles, departments, specializations, suppliers, bill-types, payment methods,
+      inventory, uploads, and a large `reports/*` tree. Schemas owned here are
+      referenced by virtually every other module.
+
+      Per user direction (2026-06-09), this module is being
+      documented **sub-area at a time** because of its size.
+      The sub-areas under src/app/api/(common)/ are:
+        - common-activity-logs (2: GET + POST) **[DONE 2026-06-10 — list + create; Click/Hover no-op]**
+        - common-anesthesia-type (1) **[DONE 2026-06-09]**
+        - common-auth (3) **[DONE 2026-06-10 — heartbeat + session + session/resume]**
+        - common-bill-types (1) **[DONE 2026-06-09]**
+        - common-clinic (2) **[DONE 2026-06-10 — list + [id]]**
+        - common-operation-type (1) **[DONE 2026-06-09]**
+        - common-default-setting (1) **[DONE 2026-06-09]**
+        - common-departments (1) **[DONE 2026-06-09 — 2 endpoints, GET+POST]**
+        - common-doctors (3) **[DONE 2026-06-10 — list + schedules + [id]]**
+        - common-hospital-info (1) **[DONE 2026-06-09]**
+        - common-inventory (13) **[DONE 2026-06-10 — 13 endpoints: stock + batch + movement + request aggregates; assertStoreId on 6]**
+        - common-items (2) **[DONE 2026-06-10 — list + [id]; asymmetric RBAC; Items/View only on detail]**
+        - common-patients (3) **[DONE 2026-06-10 — list + [id] + info; raw SQL aggregate; PII-heavy]**
+        - common-payment-methods (1) **[DONE 2026-06-10]**
+        - common-reports (47) **[DONE 2026-06-10 — 47 endpoints split into 3 path files (clinical/financial/misc); 0 RBAC, batch-of-misc params: { id } bug, supplier-items/[id] 500-on-empty, daily-profit-reports TZ side-effect]**
+        - common-roles (1) **[DONE 2026-06-09]**
+        - common-selling-price-groups (1) **[DONE 2026-06-10]**
+        - common-service-category (1) **[DONE 2026-06-10]**
+        - common-service-sub-category (1) **[DONE 2026-06-10]**
+        - common-services (7) **[DONE 2026-06-10 — services + doctor-service + consultation-service + module-mapping; doctorId/serviceId path inversion; nested result.result]**
+        - common-set-up (1: categories) **[DONE 2026-06-10]**
+        - common-specialization (1) **[DONE 2026-06-10]**
+        - common-suppliers (1) **[DONE 2026-06-10]**
+        - common-uploads (3) **[DONE 2026-06-10 — image-proxy + pdf-proxy + signed-urls; SSRF surface; no RBAC]**
+        - common-users (1) **[DONE 2026-06-10 — list; PASSWORD LEAK via findAndCountUsers; role.permissions leak]**
+
+      Drive each sub-area with `next: common-<sub-area>`.
+      This entry stays `pending` until all 25 sub-areas are
+      documented.
+    files:
+      - src/app/api/(common)/activity-logs/route.ts
+      - src/app/api/(common)/anesthesia-type/route.ts
+      - src/app/api/(common)/auth/heartbeat/route.ts
+      - src/app/api/(common)/auth/session/route.ts
+      - src/app/api/(common)/auth/session/resume/route.ts
+      - src/app/api/(common)/bill-types/route.ts
+      - src/app/api/(common)/clinic/route.ts
+      - src/app/api/(common)/clinic/[id]/route.ts
+      - src/app/api/(common)/default-setting/route.ts
+      - src/app/api/(common)/departments/route.ts
+      - src/app/api/(common)/doctors/route.ts
+      - src/app/api/(common)/doctors/[id]/route.ts
+      - src/app/api/(common)/doctors/schedules/route.ts
+      - src/app/api/(common)/hospital-info/route.ts
+      - src/app/api/(common)/inventory/all-stocks-count/route.ts
+      - src/app/api/(common)/inventory/batch-stock-qty/route.ts
+      - src/app/api/(common)/inventory/stock-adjustment/route.ts
+      - src/app/api/(common)/inventory/stock-highest-purchased-price/route.ts
+      - src/app/api/(common)/inventory/stock-info/route.ts
+      - src/app/api/(common)/inventory/stock-movements/route.ts
+      - src/app/api/(common)/inventory/stock-movements/summary/[itemId]/route.ts
+      - src/app/api/(common)/inventory/stock-requests/route.ts
+      - src/app/api/(common)/inventory/stock-requests/target-store-stock/route.ts
+      - src/app/api/(common)/inventory/stocks/route.ts
+      - src/app/api/(common)/inventory/store-stocks/route.ts
+      - src/app/api/(common)/inventory/total-stock-qty/route.ts
+      - src/app/api/(common)/inventory/unique-batches/route.ts
+      - src/app/api/(common)/items/route.ts
+      - src/app/api/(common)/items/[id]/route.ts
+      - src/app/api/(common)/operation-type/route.ts
+      - src/app/api/(common)/patients/route.ts
+      - src/app/api/(common)/patients/[id]/route.ts
+      - src/app/api/(common)/patients/info/route.ts
+      - src/app/api/(common)/payment-methods/route.ts
+      - src/app/api/(common)/reports/appointments-by-doctor/route.ts
+      - src/app/api/(common)/reports/appointments-by-doctor/[id]/route.ts
+      - src/app/api/(common)/reports/appointments-by-doctor/[id]/patient/route.ts
+      - src/app/api/(common)/reports/appointments-by-doctor/export/route.ts
+      - src/app/api/(common)/reports/appointments-by-specialization/route.ts
+      - src/app/api/(common)/reports/batch-item-reports/route.ts
+      - src/app/api/(common)/reports/daily-profit-reports/route.ts
+      - src/app/api/(common)/reports/daily-profit-reports/[date]/route.ts
+      - src/app/api/(common)/reports/expiry-update-activity-logs/route.ts
+      - src/app/api/(common)/reports/foc-items-activity-logs/route.ts
+      - src/app/api/(common)/reports/follow-up-patients/route.ts
+      - src/app/api/(common)/reports/grn-item-reports/route.ts
+      - src/app/api/(common)/reports/grn-return-item-reports/route.ts
+      - src/app/api/(common)/reports/item-summary/route.ts
+      - src/app/api/(common)/reports/item-summary/[id]/route.ts
+      - src/app/api/(common)/reports/item-summary/[id]/batches/route.ts
+      - src/app/api/(common)/reports/item-summary/[id]/item-batches/route.ts
+      - src/app/api/(common)/reports/item-summary/stock-per-store/route.ts
+      - src/app/api/(common)/reports/patient-summary/route.ts
+      - src/app/api/(common)/reports/patient-summary/by-region/route.ts
+      - src/app/api/(common)/reports/payment-method-report/route.ts
+      - src/app/api/(common)/reports/payment-method-report/[id]/route.ts
+      - src/app/api/(common)/reports/pharmacy-sale-reports/route.ts
+      - src/app/api/(common)/reports/pharmacy-sale-return-items/route.ts
+      - src/app/api/(common)/reports/purchase-request-items/route.ts
+      - src/app/api/(common)/reports/purchasing-items/route.ts
+      - src/app/api/(common)/reports/referral-report/clinic/route.ts
+      - src/app/api/(common)/reports/referral-report/clinic/[id]/route.ts
+      - src/app/api/(common)/reports/referral-report/clinic/[id]/clinic-info/route.ts
+      - src/app/api/(common)/reports/referral-report/clinic/[id]/patient/route.ts
+      - src/app/api/(common)/reports/referral-report/doctor/route.ts
+      - src/app/api/(common)/reports/referral-report/doctor/[id]/route.ts
+      - src/app/api/(common)/reports/referral-report/doctor/[id]/doctor-info/route.ts
+      - src/app/api/(common)/reports/referral-report/doctor/[id]/patient/route.ts
+      - src/app/api/(common)/reports/sale-reports/route.ts
+      - src/app/api/(common)/reports/stock-damage-item/route.ts
+      - src/app/api/(common)/reports/stock-request-item/route.ts
+      - src/app/api/(common)/reports/stock-summary/export/route.ts
+      - src/app/api/(common)/reports/stock-transfer-report/route.ts
+      - src/app/api/(common)/reports/supplier-items/route.ts
+      - src/app/api/(common)/reports/supplier-items/[id]/route.ts
+      - src/app/api/(common)/reports/supplier-payment/route.ts
+      - src/app/api/(common)/reports/top-products/route.ts
+      - src/app/api/(common)/reports/under-care-doctor/route.ts
+      - src/app/api/(common)/reports/under-care-doctor/[id]/route.ts
+      - src/app/api/(common)/reports/under-care-doctor/[id]/admissions/route.ts
+      - src/app/api/(common)/reports/used-items-report/route.ts
+      - src/app/api/(common)/roles/route.ts
+      - src/app/api/(common)/selling-price-groups/route.ts
+      - src/app/api/(common)/service-category/route.ts
+      - src/app/api/(common)/service-sub-category/route.ts
+      - src/app/api/(common)/services/route.ts
+      - src/app/api/(common)/services/[id]/route.ts
+      - src/app/api/(common)/services/consultation-service/route.ts
+      - src/app/api/(common)/services/doctor-service/route.ts
+      - src/app/api/(common)/services/doctor-service/[id]/route.ts
+      - src/app/api/(common)/services/doctor-service/by-service-id/[id]/route.ts
+      - src/app/api/(common)/services/service-category-module-mapping/route.ts
+      - src/app/api/(common)/set-up/categories/route.ts
+      - src/app/api/(common)/specialization/route.ts
+      - src/app/api/(common)/suppliers/route.ts
+      - src/app/api/(common)/uploads/image-proxy/route.ts
+      - src/app/api/(common)/uploads/pdf-proxy/route.ts
+      - src/app/api/(common)/uploads/signed-urls/route.ts
+      - src/app/api/(common)/users/route.ts
+    shared_schemas: [Patient, User, Doctor, Service, Item, Supplier, Department, Role, Specialization, HospitalInfo, BillType, PaymentMethod, OperationType, AnesthesiaType, Clinic, Report]
+
+  - id: daycare
+    kind: rest
+    status: documented
+    routes_count: 7
+    files:
+      - src/app/api/(daycare)/appointments-for-daycare/route.ts
+      - src/app/api/(daycare)/daycare-appointments/route.ts
+      - src/app/api/(daycare)/daycare-confirmed-patients/route.ts
+      - src/app/api/(daycare)/daycare/[id]/route.ts
+      - src/app/api/(daycare)/daycare/[id]/activities/route.ts
+      - src/app/api/(daycare)/daycare/list/route.ts
+      - src/app/api/(daycare)/patients-for-daycare/route.ts
+    shared_schemas: [ProxyBill, ProxyBillServiceBill, ProxyBillProcedureBill, ProxyBillServicePackageBill, ProxyBillPharmacyBill, ServiceBillItem, ProcedureBillItem, ServicePackageBillItem, PharmacySaleItem]
+    procedures:
+      - GET /api/appointments-for-daycare
+      - GET /api/daycare-appointments
+      - GET /api/daycare-confirmed-patients
+      - GET /api/daycare/list
+      - GET /api/daycare/{id}
+      - GET /api/daycare/{id}/activities
+      - GET /api/patients-for-daycare
+    notes: |
+      Read-only REST surface. All 7 endpoints
+      are GET-only, all use
+      `enhancedApiHandler` with
+      `auth: { required: true }` only — **no
+      RBAC permissions declared** on any
+      endpoint. All 7 return
+      `{ success: true, result, message: "",
+      error: null }`.
+
+      Architectural note: the daycare bill is
+      **not** a separate `DaycareBill` model.
+      It's a `ProxyBill` row with
+      `department = DepartmentEnum.DAYCARE`.
+      The `DayCareService` extends
+      `ProxyBillTemplateService` and inherits
+      `getProxyBillList` / `getProxyBillById`
+      / `getProxyBillActivites` from the
+      proxy-bill parent. The 4 daycare-specific
+      overrides are `getDayCareAppointment`,
+      `getDayCareConfirmedPatients`,
+      `getPatientForDaycare`,
+      `getAppointmentForDaycare`. The
+      `DaycareContainerService` wires up the
+      daycare repository, the proxy-bill
+      repository, the stock service, the
+      pharmacy-sale service, the patient
+      repository, and the IPD-daily-bill
+      service — a heavy DI graph shared
+      across daycare / ED / cathlab / ot /
+      endo / hd / opd "proxy bill" use cases.
+
+      Key findings:
+        1. **No RBAC permissions declared**
+           on any of the 7 endpoints. PII
+           (patient names, phone numbers,
+           nrcNo) is exposed freely.
+        2. **Schema-typo in
+           `getDayCareConfirmedPatientSchema`**
+           — the schema is just
+           `z.object({}).merge(baseQuerySchema)`,
+           so there's **no status filter**
+           exposed despite the endpoint name
+           suggesting one. The "confirmed"
+           filter is hard-coded in the
+           repository.
+        3. **`getProxyBillList` schema
+           defaults `departmentType = ED`** —
+           a copy-paste from the ED
+           proxy-bill list. The
+           `DayCareService.department =
+           DAYCARE` field overrides at the
+           repository level, but the Zod
+           default is misleading.
+        4. **Repository method name typo**:
+           `ProxyBillRepository.getProxyBillActivites`
+           (missing 'y' — should be
+           "Activities"). The route path uses
+           the correct spelling
+           (`/api/daycare/{id}/activities`).
+        5. **`patientGroup` filter on
+           `/daycare/list` is bare
+           `z.string()`** — inconsistent
+           with the OPD list which uses
+           `nativeEnum(patientGroup)`.
+        6. **Daycare bills share the
+           `createProxyBillSchema` rules** —
+           at least one of
+           `serviceBill.services`,
+           `teamFees`, `servicePackageBill`,
+           `pharmacyBill`, `procedureBill`
+           must be present. If
+           `departmentType = OT`,
+           `mainProcedureId` is required.
+        7. **Heavy PII exposure** on
+           `/api/patients-for-daycare` —
+           reuses the OPD patient list
+           schema (name, phone, nrcNo,
+           township, region, etc.).
+        8. **PII exposure on the appointment
+           list** — full appointment rows
+           with patient identifiers,
+           doctor names, and timestamps.
+
+  - id: ed
+    kind: rest
+    status: documented
+    routes_count: 5
+    files:
+      - src/app/api/(ed)/appointments-for-ed/route.ts
+      - src/app/api/(ed)/ed-bills/route.ts
+      - src/app/api/(ed)/ed-bills/[id]/route.ts
+      - src/app/api/(ed)/ed-bills/[id]/activities/route.ts
+      - src/app/api/(ed)/patients-for-ed/route.ts
+    shared_schemas: [EDBill, EDBillServiceBill, EDBillProcedureBill, EDBillServicePackageBill, EDBillPharmacyBill, EDBillServiceItem, EDBillProcedureItem, EDBillServicePackageItem, EDBillPharmacyItem]
+    procedures:
+      - GET /api/appointments-for-ed
+      - GET /api/ed-bills
+      - GET /api/ed-bills/{id}
+      - GET /api/ed-bills/{id}/activities
+      - GET /api/patients-for-ed
+    notes: |
+      Read-only REST surface. All 5 endpoints
+      are GET-only. All 5 return
+      `{ success: true, result, message: "",
+      error: null }`.
+
+      Architectural note: an "ED bill" is
+      **not** a separate `EDBill` Prisma
+      model — it's a `ProxyBill` row with
+      `departmentType = DepartmentEnum.ED`.
+      `EdBillRepository` writes to
+      `prisma.proxyBill` (e.g.,
+      `trx.proxyBill.create({ data: {
+      ..., departmentType: DepartmentEnum.ED
+      }})`). The ED module differs from the
+      daycare module in two ways:
+        1. `appointmentId` is **required**
+           in `createEdBillSchema` (vs
+           optional in `createProxyBillSchema`).
+        2. Team-fees are not a separate case
+           in the ED refine — only the four
+           sub-bills (`serviceBill`,
+           `servicePackageBill`,
+           `procedureBill`, `pharmacyBill`)
+           are checked.
+
+      ## CRITICAL SECURITY FINDING
+
+      **Three of the five ED endpoints
+      declare `auth: { required: false }`**
+      (the two list endpoints +
+      `appointments-for-ed`). Patient PII
+      (name, phone, nrcNo, township,
+      region) and ED-bill data (totals,
+      payment status, bill ids) are exposed
+      to any anonymous caller.
+
+      - `GET /api/ed-bills` — ED bill list,
+        publicly reachable.
+      - `GET /api/appointments-for-ed` —
+        patient appointments, publicly
+        reachable.
+      - `GET /api/patients-for-ed` —
+        patient PII list, publicly
+        reachable.
+
+      Only the two detail routes require
+      auth:
+        - `GET /api/ed-bills/{id}` — auth
+          required.
+        - `GET /api/ed-bills/{id}/activities`
+          — auth required.
+
+      This is the most serious
+      unauthenticated PII exposure found in
+      the documentation so far. Should be
+      fixed immediately by changing
+      `auth: { required: false }` to
+      `auth: { required: true }` on the
+      three list endpoints, ideally with
+      RBAC permissions on top.
+
+      Other findings:
+        1. **No `permissions` array on any
+           of the 5 endpoints**.
+        2. **`getEdBillList` input schema
+           has no `departmentType` filter**
+           — the filter is hard-coded in
+           the repo. Unlike
+           `getProxyBillList` (the daycare
+           counterpart), the ED list schema
+           does not even declare a Zod
+           default.
+        3. **`patientGroup` filter on
+           `/ed-bills` is bare
+           `z.string()`** — inconsistent
+           with the OPD list which uses
+           `nativeEnum(patientGroup)`.
+        4. **Heavy PII exposure** on
+           `/api/patients-for-ed` (name,
+           phone, nrcNo, township, region,
+           email).
+        5. **No PII scoping by store or
+           tenant** on the unauthenticated
+           list endpoints — any anonymous
+           caller sees all rows.
+
+  - id: emr
+    kind: rest
+    status: documented
+    routes_count: 60
+    note: |
+      Electronic Medical Records. Heavily nested: organised by care setting
+      (opd, ipd, ed, daycare) then by specialty (cathlab, ot, hd, endo).
+      All 60 routes are GET-only, all
+      use `enhancedApiHandler` with
+      `auth: { required: true }` only
+      (no RBAC), all return
+      `{ success: true, result, message:
+      "", error: null }`. Split into
+      5 path files
+      (emr-top-level, emr-opd,
+      emr-ed, emr-daycare, emr-ipd)
+      plus 1 schemas file
+      (emr.yaml).
+    files:
+      - src/app/api/(emr)/(daycare)/appointments-for-daycare-emr/route.ts
+      - src/app/api/(emr)/(daycare)/daycare-emr/route.ts
+      - src/app/api/(emr)/(daycare)/daycare-emr/[id]/route.ts
+      - src/app/api/(emr)/(daycare)/daycare-emr/service-request/route.ts
+      - src/app/api/(emr)/(daycare)/daycare-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(daycare)/patients-for-daycare-emr/route.ts
+      - src/app/api/(emr)/(ed)/appointments-for-ed-emr/route.ts
+      - src/app/api/(emr)/(ed)/ed-emr/route.ts
+      - src/app/api/(emr)/(ed)/ed-emr/[id]/route.ts
+      - src/app/api/(emr)/(ed)/ed-emr/service-request/route.ts
+      - src/app/api/(emr)/(ed)/ed-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(ed)/endo-ed-emr/route.ts
+      - src/app/api/(emr)/(ed)/endo-ed-emr/[id]/route.ts
+      - src/app/api/(emr)/(ed)/endo-ed-emr/service-request/route.ts
+      - src/app/api/(emr)/(ed)/endo-ed-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(ed)/hd-ed-emr/route.ts
+      - src/app/api/(emr)/(ed)/hd-ed-emr/[id]/route.ts
+      - src/app/api/(emr)/(ed)/hd-ed-emr/service-request/route.ts
+      - src/app/api/(emr)/(ed)/hd-ed-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(ed)/ot-ed-emr/route.ts
+      - src/app/api/(emr)/(ed)/ot-ed-emr/[id]/route.ts
+      - src/app/api/(emr)/(ed)/ot-ed-emr/service-request/route.ts
+      - src/app/api/(emr)/(ed)/ot-ed-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(ed)/patients-for-ed-emr/route.ts
+      - src/app/api/(emr)/(ipd)/cathlab-ipd-emr/route.ts
+      - src/app/api/(emr)/(ipd)/cathlab-ipd-emr/[id]/route.ts
+      - src/app/api/(emr)/(ipd)/endo-ipd-emr/route.ts
+      - src/app/api/(emr)/(ipd)/endo-ipd-emr/[id]/route.ts
+      - src/app/api/(emr)/(ipd)/ipd-emr/route.ts
+      - src/app/api/(emr)/(ipd)/ipd-emr/[id]/route.ts
+      - src/app/api/(emr)/(ipd)/ipd-emr/clinical-documents/[id]/activities/route.ts
+      - src/app/api/(emr)/(opd)/appointments-for-opd-emr/route.ts
+      - src/app/api/(emr)/(opd)/endo-opd-emr/route.ts
+      - src/app/api/(emr)/(opd)/endo-opd-emr/[id]/route.ts
+      - src/app/api/(emr)/(opd)/endo-opd-emr/service-request/route.ts
+      - src/app/api/(emr)/(opd)/endo-opd-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(opd)/hd-opd-emr/route.ts
+      - src/app/api/(emr)/(opd)/hd-opd-emr/[id]/route.ts
+      - src/app/api/(emr)/(opd)/hd-opd-emr/service-request/route.ts
+      - src/app/api/(emr)/(opd)/hd-opd-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(opd)/opd-emr/route.ts
+      - src/app/api/(emr)/(opd)/opd-emr/[id]/route.ts
+      - src/app/api/(emr)/(opd)/opd-emr/pharmacy-request/route.ts
+      - src/app/api/(emr)/(opd)/opd-emr/pharmacy-request/[id]/route.ts
+      - src/app/api/(emr)/(opd)/opd-emr/service-request/route.ts
+      - src/app/api/(emr)/(opd)/opd-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(opd)/ot-opd-emr/route.ts
+      - src/app/api/(emr)/(opd)/ot-opd-emr/[id]/route.ts
+      - src/app/api/(emr)/(opd)/ot-opd-emr/service-request/route.ts
+      - src/app/api/(emr)/(opd)/ot-opd-emr/service-request/[id]/route.ts
+      - src/app/api/(emr)/(opd)/patients-for-opd-emr/route.ts
+      - src/app/api/(emr)/emr/clinical-documents/[id]/activities/route.ts
+      - src/app/api/(emr)/emr/patient-discharge-summary/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-doctor-notes/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-investigation/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-nurse-notes/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-profile/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-treatment-prescriptions/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-treatment-procedures/[id]/route.ts
+      - src/app/api/(emr)/emr/patient-vital-signs/[id]/route.ts
+    shared_schemas: [EmrResponse, GetPatientProfileTabResponse, PatientProfileTabData, PatientProfileTabAppointment, PatientProfileTabVitalSign, GetPatientVitalSignsTabResponse, PatientVitalSignsTabData, GetPatientDoctorNotesTabResponse, PatientDoctorNotesTabData, PatientDoctorNoteRecord, GetPatientNurseNotesTabResponse, PatientNurseNotesTabData, PatientNurseNoteRecord, GetPatientTreatmentPrescriptionsTabResponse, PatientTreatmentPrescriptionTabData, PatientTreatmentPrescriptionRecord, PatientTreatmentPrescriptionItemRecord, GetPatientTreatmentProceduresTabResponse, PatientTreatmentProcedureTabData, PatientTreatmentProcedureRecord, GetPatientInvestigationTabResponse, PatientInvestigationTabData, PatientInvestigationRecord, PatientInvestigationServiceRowRecord, GetPatientDischargeSummaryTabResponse, PatientDischargeSummaryTabData, PatientDischargeSummaryRecord, GetEmrClinicalDocumentActivitiesResponse, GetAppointmentsForOpdEmrResponse, GetPatientsForOpdEmrResponse, GetOpdEmrListResponse, GetOpdEmrByIdResponse, OpdEmr, GetOpdEmrServiceRequestsResponse, EmrServiceRequestList, EmrServiceRequest, GetOpdEmrServiceRequestByIdResponse, EmrServiceRequestFlattened, EmrServiceRequestFlattenedItem, GetOpdEmrPharmacyRequestsResponse, GetOpdEmrPharmacyRequestByIdResponse, GetIpdEmrListResponse, GetIpdEmrByIdResponse, IpdEmr]
+    procedures:
+      # Top-level (emr)/emr/...
+      - GET /api/emr/patient-profile/{id}
+      - GET /api/emr/patient-doctor-notes/{id}
+      - GET /api/emr/patient-nurse-notes/{id}
+      - GET /api/emr/patient-vital-signs/{id}
+      - GET /api/emr/patient-treatment-prescriptions/{id}
+      - GET /api/emr/patient-treatment-procedures/{id}
+      - GET /api/emr/patient-investigation/{id}
+      - GET /api/emr/patient-discharge-summary/{id}
+      - GET /api/emr/clinical-documents/{id}/activities
+      # OPD sub-tree
+      - GET /api/appointments-for-opd-emr
+      - GET /api/patients-for-opd-emr
+      - GET /api/opd-emr
+      - GET /api/opd-emr/{id}
+      - GET /api/opd-emr/service-request
+      - GET /api/opd-emr/service-request/{id}
+      - GET /api/opd-emr/pharmacy-request
+      - GET /api/opd-emr/pharmacy-request/{id}
+      - GET /api/endo-opd-emr
+      - GET /api/endo-opd-emr/{id}
+      - GET /api/endo-opd-emr/service-request
+      - GET /api/endo-opd-emr/service-request/{id}
+      - GET /api/hd-opd-emr
+      - GET /api/hd-opd-emr/{id}
+      - GET /api/hd-opd-emr/service-request
+      - GET /api/hd-opd-emr/service-request/{id}
+      - GET /api/ot-opd-emr
+      - GET /api/ot-opd-emr/{id}
+      - GET /api/ot-opd-emr/service-request
+      - GET /api/ot-opd-emr/service-request/{id}
+      # ED sub-tree
+      - GET /api/appointments-for-ed-emr
+      - GET /api/patients-for-ed-emr
+      - GET /api/ed-emr
+      - GET /api/ed-emr/{id}
+      - GET /api/ed-emr/service-request
+      - GET /api/ed-emr/service-request/{id}
+      - GET /api/endo-ed-emr
+      - GET /api/endo-ed-emr/{id}
+      - GET /api/endo-ed-emr/service-request
+      - GET /api/endo-ed-emr/service-request/{id}
+      - GET /api/hd-ed-emr
+      - GET /api/hd-ed-emr/{id}
+      - GET /api/hd-ed-emr/service-request
+      - GET /api/hd-ed-emr/service-request/{id}
+      - GET /api/ot-ed-emr
+      - GET /api/ot-ed-emr/{id}
+      - GET /api/ot-ed-emr/service-request
+      - GET /api/ot-ed-emr/service-request/{id}
+      # Daycare sub-tree
+      - GET /api/appointments-for-daycare-emr
+      - GET /api/patients-for-daycare-emr
+      - GET /api/daycare-emr
+      - GET /api/daycare-emr/{id}
+      - GET /api/daycare-emr/service-request
+      - GET /api/daycare-emr/service-request/{id}
+      # IPD sub-tree
+      - GET /api/ipd-emr
+      - GET /api/ipd-emr/{id}
+      - GET /api/ipd-emr/clinical-documents/{id}/activities
+      - GET /api/cathlab-ipd-emr
+      - GET /api/cathlab-ipd-emr/{id}
+      - GET /api/endo-ipd-emr
+      - GET /api/endo-ipd-emr/{id}
+    notes: |
+      Read-only REST surface. All 60
+      endpoints are GET-only, all use
+      `enhancedApiHandler` with
+      `auth: { required: true }` only
+      (no `permissions` array), all
+      return
+      `{ success: true, result, message:
+      "", error: null }`. Write
+      operations (create / update /
+      delete for vital signs, doctor
+      notes, nurse notes,
+      prescriptions, pharmacy
+      requests, service requests,
+      clinical documents) live on
+      `OPDEmrService` / `IPDEmrService`
+      but are reached via
+      `next-safe-action` server
+      actions invoked from RSC — they
+      are NOT part of this
+      documentation set.
+
+      ## Architectural notes
+
+      1. **Service reuse via
+         constructor config.** The
+         entire OPD / ED / Daycare
+         sub-tree (54 of the 60
+         routes) is powered by a
+         single class `OPDEmrService`
+         (in
+         `src/app/(dashboard)/shared/emr/opd/service/opd-emr.service.ts`),
+         constructed 9 different ways
+         with different `moduleType`
+         configs:
+           - `opdEmrService` —
+             `moduleType: "OPD"`.
+           - `edEmrService` —
+             `moduleType: "ED"`,
+             `appointmentModule:
+             ModuleEnum.EMERGENCY`,
+             `includeEdProxyBillJoints:
+             true`.
+           - `daycareEmrService` —
+             `moduleType: "DAYCARE"`.
+           - `hdOpdEmrService` —
+             `moduleType: "HD_OPD"`.
+           - `hdEdEmrService` —
+             `moduleType: "HD_ED"`.
+           - `endoOpdEmrService` —
+             `moduleType: "ENDO_OPD"`.
+           - `endoEdEmrService` —
+             `moduleType: "ENDO_ED"`.
+           - `otOpdEmrService` —
+             `moduleType: "OT_OPD"`.
+           - `otEdEmrService` —
+             `moduleType: "OT_ED"`.
+
+         The IPD sub-tree (5 routes
+         plus the clinical-document
+         activity log) uses a
+         separate class
+         `IPDEmrService` (in
+         `src/app/(dashboard)/shared/emr/ipd/service/ipd-emr.service.ts`),
+         constructed 3 ways:
+           - `ipdEmrService` —
+             `moduleType: "HD"`.
+           - `cathLabIpdEmrService` —
+             `moduleType: "CATH_LAB"`.
+           - `endoIpdEmrService` —
+             `moduleType: "ENDO"`.
+
+         The top-level
+         `(emr)/emr/...` patient
+         tabs (9 routes) use a third
+         service, `PatientEmrService`
+         (in
+         `src/app/(dashboard)/shared/emr/services/patient-emr.service.ts`),
+         which fans out to a single
+         repository
+         `PatientEmrRepository
+         .getPatientEmrRawRecords`
+         (etc.) to fetch raw records
+         from each care setting, then
+         merges + sorts + paginates
+         them in JS.
+
+      2. **No RBAC permissions
+         declared** on any of the
+         60 endpoints. All 60 use
+         `auth: { required: true }`
+         with no `permissions: []`
+         array. EMR data is
+         clinically sensitive (vital
+         signs, doctor notes,
+         prescriptions,
+         investigations) so RBAC
+         gating is worth confirming
+         with the team.
+
+      3. **Empty-on-missing-filter
+         contract.** The 9
+         `*/service-request` list
+         endpoints (across opd / ed /
+         daycare sub-trees) return
+         `{ emrServiceRequests: [],
+         totalCount: 0 }` when
+         either `patientId` or
+         `appointmentId` is missing
+         from the query — **no
+         400 / 404** is raised. This
+         is a silent contract:
+         clients must treat the
+         empty result as "missing
+         filter" rather than "no
+         data". Worth surfacing in
+         the OpenAPI description as
+         an `x-runtime-note`.
+
+      4. **Module-level
+         moduleType enum on the
+         OPD-EMR list** —
+         `getOpdEmrSchema` does NOT
+         expose a `moduleType` filter
+         (the schema is just
+         `baseQuerySchema.transform
+         (transformPaginationSchema)`).
+         The `moduleType` is encoded
+         at the service level (each
+         of the 9 services filters
+         internally to a single
+         `moduleType`). So clients
+         cannot query "all OPD EMRs
+         across all modules" — they
+         must hit each of the 9
+         sub-tree paths separately.
+
+      5. **IPD-EMR `moduleType`
+         filter is partial.** The
+         IPD list schema
+         (`getIpdEmrSchema`) accepts
+         `moduleType: HD | ENDO | OT`
+         as an optional query param,
+         but NOT `CATH_LAB` (cathlab
+         is exposed via the
+         separate
+         `/cathlab-ipd-emr` path).
+         The `/ipd-emr/{id}` detail
+         route also accepts
+         `moduleType` as a query
+         param (read via
+         `_req.nextUrl.searchParams
+         .get("moduleType")` and
+         cast to the union type —
+         a malformed value is passed
+         through unchecked).
+
+      6. **IPD detail `[id]` has an
+         extra `moduleType` query
+         param** that the OPD /
+         ED / Daycare sub-trees do
+         not expose. The cathlab and
+         endo IPD sub-trees do NOT
+         accept a `moduleType` query
+         param on detail.
+
+      7. **"empty on missing
+         filter" is silent.** The
+         9
+         `*/service-request` lists
+         never 4xx. The detail
+         endpoints
+         (`*/service-request/{id}`)
+         DO throw a 404 with
+         `AppError "Service request
+         not found"` via
+         `OPDEmrService
+         .getEmrServiceRequestById`
+         when the id is unknown.
+
+      8. **The top-level
+         `(emr)/emr/clinical-documents/{id}/activities`
+         route imports
+         `edEmrService`** — a
+         misnomer. The
+         `edEmrService` export is
+         an `OPDEmrService` instance
+         configured with
+         `moduleType: "ED"`. The
+         `getEmrClinicalDocumentActivities`
+         method is module-agnostic,
+         so the import name is
+         effectively cosmetic. The
+         actual data is the activity
+         log of any
+         `EmrClinicalDocument` row
+         regardless of `moduleType`.
+
+      9. **Decimal coercion in
+         vital signs.** The
+         `PatientEmrService
+         .getPatientVitalSignsTabData`
+         method maps the
+         `Decimal` DB columns
+         (`systolicBloodPressure`,
+         `weight`, etc.) to JS
+         `number` via `Number(item.
+         systolicBloodPressure)`
+         (a `Decimal.toNumber()`
+         equivalent). This is fine
+         for display but lossy for
+         very precise values. The
+         prescription tab takes the
+         opposite approach —
+         `decimalToString` keeps
+         the dosage columns as
+         `string | null`.
+
+      10. **Service-request
+          `moduleType` enum on the
+          flattened response** is
+          the full
+          `ServiceCategoryModule`
+          enum (LAB, XRAY, CT, MRI,
+          ULTRASOUND, ECG, ECHO) —
+          an OPD-EMR service request
+          can be any of these.
+
+      11. **Schema-side empty
+          list on missing filter
+          for service-request
+          lists**: the 9
+          `*/service-request`
+          endpoints all use
+          `defaultQuerySchema.and(
+          z.object({
+          appointmentId:
+          z.string().optional(),
+          patientId:
+          z.string().optional() }))`
+          — both extra fields are
+          `.optional()`. The service
+          method
+          `OPDEmrService
+          .getEmrServiceRequests`
+          then guards with `if
+          (!patientId ||
+          !appointmentId) return {
+          emrServiceRequests: [],
+          totalCount: 0 }`.
+
+      12. **The
+          `defaultRepositoryContext
+          .moduleType` on the IPD
+          side is `"HD"`** — the
+          `ipdEmrService` default
+          config filters to HD. The
+          `moduleType` query param
+          on the list endpoint lets
+          callers switch to ENDO or
+          OT. There's no way to
+          query "all IPD EMRs
+          across modules" via a
+          single call.
+
+      13. **Pharmacy requests are
+          OPD-only.** The
+          `opd-emr/pharmacy-request*`
+          paths have no siblings
+          under ed-emr, daycare-emr,
+          endo-opd-emr, hd-opd-emr,
+          ot-opd-emr, etc. IPD uses
+          a separate pharmacy-request
+          surface
+          (`/ipd-list/pharmacy-request*`).
+
+  - id: endo
+    kind: rest
+    status: documented
+    routes_count: 12
+    files:
+      - src/app/api/(endo)/appointments-for-endo/route.ts
+      - src/app/api/(endo)/endo-infection-screening/route.ts
+      - src/app/api/(endo)/endo-requests/route.ts
+      - src/app/api/(endo)/endo-requests/[id]/route.ts
+      - src/app/api/(endo)/endo-requests/[id]/report/route.ts
+      - src/app/api/(endo)/endo-requests-for-proxy/route.ts
+      - src/app/api/(endo)/endo/[id]/route.ts
+      - src/app/api/(endo)/endo/[id]/activities/route.ts
+      - src/app/api/(endo)/endo/list/route.ts
+      - src/app/api/(endo)/endo/report/route.ts
+      - src/app/api/(endo)/endo/report/[id]/route.ts
+      - src/app/api/(endo)/patients-for-endo/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/endo/services/endo-container.service.ts
+      - src/app/(dashboard)/shared/endo/services/endo.service.ts
+      - src/app/(dashboard)/shared/endo/services/endo-request.service.ts
+      - src/app/(dashboard)/shared/endo/services/endo-report.service.ts
+      - src/app/(dashboard)/shared/endo/repositories/endo.repository.ts
+      - src/app/(dashboard)/shared/endo/repositories/endo-request.repository.ts
+      - src/app/(dashboard)/shared/endo/repositories/endo-report.repository.ts
+      - src/app/(dashboard)/shared/endo/schemas/endo.schema.ts
+      - src/app/(dashboard)/shared/endo/schemas/endo-report.schema.ts
+      - src/app/(dashboard)/shared/endo/schemas/endo-request/get-endo-requests.schema.ts
+      - src/app/(dashboard)/shared/endo/schemas/endo-request/create-endo-request.schema.ts
+      - src/app/(dashboard)/shared/endo/types/endo-request.type.ts
+      - src/app/(dashboard)/shared/endo/types/endo-report.type.ts
+      - src/app/(dashboard)/shared/proxy-bill/schemas/proxy-bill.schema.ts
+      - src/app/(dashboard)/shared/proxy-bill/types/proxy-bill.type.ts
+      - src/utils/infection-screening.ts
+    shared_schemas:
+      - EndoRequest
+      - EndoReport
+      - EndoProxyBill
+      - EndoProxyBillActivityLog
+      - EndoRequestForProxy
+      - EndoInfectionScreening
+      - EndoAppointment
+      - EndoPatient
+      - GetEndoListResponse
+      - GetEndoByIdResponse
+      - GetEndoActivitiesResponse
+      - GetEndoReportByIdResponse
+      - GetEndoReportByEndoRequestIdResponse
+      - CreateEndoReportRequest
+      - CreateEndoReportResponse
+      - GetEndoRequestListResponse
+      - GetEndoRequestByIdResponse
+      - GetEndoRequestsForProxyResponse
+      - GetEndoInfectionScreeningResponse
+      - GetAppointmentsForEndoResponse
+      - GetPatientsForEndoResponse
+    procedures:
+      - GET /api/endo/list
+      - GET /api/endo/{id}
+      - GET /api/endo/{id}/activities
+      - GET /api/endo/report/{id}
+      - POST /api/endo/report
+      - GET /api/endo-requests
+      - GET /api/endo-requests/{id}
+      - GET /api/endo-requests/{id}/report
+      - GET /api/endo-requests-for-proxy
+      - GET /api/endo-infection-screening
+      - GET /api/appointments-for-endo
+      - GET /api/patients-for-endo
+    notes: |
+      12 read endpoints + 1 mutation (`POST
+      /api/endo/report`). The mutation creates the
+      `EndoReport` linked to a `ProxyBillRequestLink`.
+
+      Key findings:
+
+        1. **No RBAC on any of the 12 endpoints**. All
+           use `auth: { required: true }` with no
+           `permissions` array. Endo data is clinically
+           sensitive (vital signs, serology, surgical
+           team, infection screening) — RBAC gating
+           may be appropriate.
+
+        2. **`EndoContainerService` is a 7-dependency
+           composition root.** It wires `EndoService` +
+           `EndoRequestService` + 5 phlebotomy /
+           proxy-bill / pharmacy sale services. The
+           container also re-exports the endo-specific
+           EMR service singletons (`opdEmrService`,
+           `edEmrService`, `ipdEmrService` — all
+           `endoOpdEmrService` / `endoEdEmrService` /
+           `endoIpdEmrService` aliases). Routes only
+           touch `service.endoService.*`; the EMR
+           exports are unused at the route layer.
+
+        3. **`EndoService` extends
+           `ProxyBillTemplateService`** with
+           `department = DepartmentEnum.ENDO` and
+           `pharmacyBillInvoicePrefix = "ENDO"`. So
+           IPD daily bills generated from endo bills
+           get the `ENDO/...` prefix. The
+           `createEndoProxyBill` flow chains:
+             - resolve endo request (by appointmentId
+               for OPD or by endoRequestId +
+               admissionId for IPD),
+             - call `super.createProxyBill(...)`,
+             - create `ProxyBillRequestLink`,
+             - mark the request as billed
+               (`hasServicesAdded: true` for OPD/ED;
+               `status: COMPLETED` for IPD).
+
+        4. **`guardIpdEndoListEditDeleteLocked`
+           prevents editing/deleting an IPD endo
+           proxy bill after final-bill paid + report
+           delivered.** Throws `AppError` 400 with a
+           specific message. This is a service-level
+           guard, not visible in the REST contract
+           (the create-update-delete endpoints are
+           server-action only — not in scope here).
+
+        5. **`EndoRequest` and `EndoReport` are linked
+           via `ProxyBillRequestLink.requestType: "ENDO"`.
+           One report per active link (soft-deleted links
+           ignored). Report create is gated on the link
+           being non-deleted and of type `ENDO` — the
+           repository throws a plain `Error` (NOT a
+           typed `AppError`) on mismatch, which
+           surfaces as a 500 unless the request handler
+           translates it.
+
+        6. **Infection-screening display is derived
+           from serology fields.** The
+           `getInfectionScreeningDisplay` util in
+           `src/utils/infection-screening.ts` maps
+           `hbAg | hcv | hiv | vdrl | otherScreening`
+           to `"Positive" | "Negative" | "Pending"`.
+           The `isPositiveAlert` field is a convenience
+           (`displayLabel === "Positive"`).
+
+        7. **Module auto-rewrites from OPD → ED** for
+           emergency patients:
+           `EndoRequestService.createEndoRequest` sets
+           `payload.module = EndoRequestModule.ED`
+           when `patient.patientType ===
+           PatientType.EMERGENCY`.
+
+        8. **`EndoReport` status state machine is
+           partial.** The only documented status
+           transition is `ENTERED → DELIVERED`,
+           gated on the linked proxy bill being
+           paid (`paymentStatus !== UNPAID`). The
+           reverse transition is not supported and
+           there is no separate "REVIEWED" / "SIGNED"
+           step in this module.
+
+        9. **`EndoRequestValidator` includes the
+           surgical team via four separate
+           `*Junction` arrays**
+           (`endoRequestSurgeons[]`,
+           `endoRequestAnesthetists[]`,
+           `endoRequestAssistantDoctors[]`,
+           `endoRequestAssistantNurses[]`). Each is
+           a many-to-many join with a per-row payload
+           (e.g. `surgeonId`, `assistantNurseId`).
+           Update flow does a `deleteMany` on all four
+           junctions before re-creating them (full
+           replacement).
+
+        10. **`EndoRequest.status` state machine is
+            enforced server-side.** From
+            `EndoRequestService.updateEndoRequestStatus`:
+              - `REQUESTED` → `APPROVED | CANCELLED`
+                only.
+              - `APPROVED` cannot go back to `REQUESTED`.
+              - `APPROVED → CANCELLED` is blocked
+                when `hasServicesAdded: true`.
+              - `CANCELLED` and `COMPLETED` are
+                terminal — no transitions out.
+            The matching side-effect on the
+            `Appointment` (when present) is to
+            sync status via the
+            `endoRequestStatusMap` (`APPROVED ↔
+            CONFIRMED`, etc.).
+
+        11. **OpdRequestId field in create schema
+            supports "transfer OPD → IPD" flow.**
+            When `opdRequestId` is provided, the
+            create transaction `deleteMany`s the four
+            junction tables for that prior request
+            and then `delete`s the prior `EndoRequest`
+            row — i.e. the prior OPD request is
+            *hard-deleted* (not soft-deleted) as part
+            of the transfer. Activity log entry:
+            "Transferred OPD Endo Request to IPD".
+
+        12. **Create-report exclusive entry
+            validation** throws 400 for any of:
+              - > 1 attachment URL,
+              - no result AND no template AND no
+                attachment (must set one),
+              - both text/template AND attachment
+                (must pick one side).
+
+        13. **`/endo-requests/{id}/report` looks up
+            the report via the active
+            `ProxyBillRequestLink` chain** (not via a
+            direct `endoReport.endoRequestId` foreign
+            key). The route is for IPD, where the
+            lookup is by `endoRequestId` because the
+            proxy bill was created from the request.
+            The OPD counterpart is implicit — OPD
+            reports are looked up by proxy bill id
+            (`/endo/report/{id}`).
+
+  - id: hd
+    kind: rest
+    status: documented
+    routes_count: 13
+    files:
+      - src/app/api/(hd)/appointments-for-hd/route.ts
+      - src/app/api/(hd)/hd-appointments/route.ts
+      - src/app/api/(hd)/hd-confirmed-patients/route.ts
+      - src/app/api/(hd)/hd-infection-screening/route.ts
+      - src/app/api/(hd)/hd-requests/route.ts
+      - src/app/api/(hd)/hd-requests/[id]/route.ts
+      - src/app/api/(hd)/hd-requests-for-proxy/route.ts
+      - src/app/api/(hd)/hd/[id]/route.ts
+      - src/app/api/(hd)/hd/[id]/activities/route.ts
+      - src/app/api/(hd)/hd/list/route.ts
+      - src/app/api/(hd)/patients-for-hd/route.ts
+      - src/app/api/(hd)/services-for-hd/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/hd/services/hd-container.service.ts
+      - src/app/(dashboard)/shared/hd/services/hd.service.ts
+      - src/app/(dashboard)/shared/hd/services/hd-request.service.ts
+      - src/app/(dashboard)/shared/hd/repositories/hd.repository.ts
+      - src/app/(dashboard)/shared/hd/repositories/hd-request.repository.ts
+      - src/app/(dashboard)/shared/hd/schemas/hd.schema.ts
+      - src/app/(dashboard)/shared/hd/schemas/hd-request/get-hd-requests.schema.ts
+      - src/app/(dashboard)/shared/hd/schemas/hd-request/create-hd-request.schema.ts
+      - src/app/(dashboard)/shared/daycare/schemas/daycare.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/service/get-services-schema.ts
+      - src/utils/infection-screening.ts
+    shared_schemas:
+      - HDRequest
+      - HDRequestForProxy
+      - HDInfectionScreening
+      - HdProxyBill
+      - HdProxyBillActivityLog
+      - HdAppointment
+      - HdConfirmedPatient
+      - HdAppointmentForProxy
+      - HdPatient
+      - AppointmentType
+      - GetHdListResponse
+      - GetHdByIdResponse
+      - GetHdActivitiesResponse
+      - GetHdAppointmentsResponse
+      - GetHdConfirmedPatientsResponse
+      - GetHdRequestListResponse
+      - GetHdRequestByIdResponse
+      - GetHdRequestsForProxyResponse
+      - GetHdInfectionScreeningResponse
+      - GetAppointmentsForHdResponse
+      - GetPatientsForHdResponse
+      - GetServicesForHdResponse
+    procedures:
+      - GET /api/hd/list
+      - GET /api/hd/{id}
+      - GET /api/hd/{id}/activities
+      - GET /api/hd-appointments
+      - GET /api/hd-confirmed-patients
+      - GET /api/hd-requests
+      - GET /api/hd-requests/{id}
+      - GET /api/hd-requests-for-proxy
+      - GET /api/hd-infection-screening
+      - GET /api/appointments-for-hd
+      - GET /api/patients-for-hd
+      - GET /api/services-for-hd
+    notes: |
+      13 read endpoints, no mutations on the REST
+      surface (write operations are server-action only
+      — not in scope here).
+
+      Key findings:
+
+        1. **Manifest had 12 routes but the file tree
+           has 13.** The file tree includes one
+           `services-for-hd` route that was not
+           previously listed. Documented and updated
+           `routes_count` to 13.
+
+        2. **No RBAC on any of the 13 endpoints.** All
+           use `auth: { required: true }` with no
+           `permissions` array. HD data is clinically
+           sensitive (vital signs, dialysis access
+           sides, serology) — RBAC gating may be
+           appropriate.
+
+        3. **`HdContainerService` is an 8-dependency
+           composition root.** It wires `HdService` +
+           `HDRequestService` + 3 phlebotomy /
+           proxy-bill / pharmacy sale services. The
+           container re-exports 3 EMR service
+           singletons (`opdEmrService`, `edEmrService`,
+           `ipdEmrService` — all aliases for the
+           HD-specific OPD-EMR / ED-EMR / IPD-EMR
+           instances) but those are not consumed at
+           the route layer.
+
+        4. **`HdService` extends
+           `ProxyBillTemplateService`** with
+           `department = DepartmentEnum.HD` and
+           `pharmacyBillInvoicePrefix = "HD"`. So IPD
+           daily bills generated from HD bills get
+           the `HD/...` prefix.
+
+        5. **`createHdProxyBill` is more permissive
+           than the endo equivalent.** The OPD branch
+           (in `resolveHDRequestForOPDProxyBill`)
+           **does NOT throw when no `APPROVED` HD
+           request is found for the appointment** —
+           the corresponding throw is commented out
+           (see `hd.service.ts:141-147`). This means
+           HD-OPD bills can be created without an
+           underlying HD request, whereas
+           Endo/CathLab/OT-OPD enforce one.
+
+        6. **`deleteHdProxyBill` throws 400 when the
+           linked bill is `PAID`** ("Cannot delete HD
+           billing lines because payment is already
+           completed"). The `updateHdProxyBill`
+           counterpart has the same guard commented
+           out (see `hd.service.ts:198-203`).
+
+        7. **Bug carried over from the Endo
+           template.** The repository method
+           `HdRepository.deleteProxyBillRequestLink`
+           hard-codes `requestType: "ENDO"` in its
+           `where` clause (see
+           `hd.repository.ts:619`). For HD bills this
+           will fail to find the link at delete time
+           (the HD link has `requestType: "HD"`) —
+           the `super.deleteProxyBill` call will
+           succeed, but the unlinking will not.
+
+        8. **`/hd-infection-screening` is the only
+           infection-screening endpoint in the
+           project that accepts EITHER `patientId` or
+           `hdRequestId`** (enforced by `.refine` —
+           "Provide patientId or hdRequestId"). The
+           other modules' infection-screening
+           endpoints only accept a request id. The
+           route branches:
+             - `hdRequestId` →
+               `HdService.getInfectionScreening` →
+               `HDRequestService.getInfectionScreening`
+               (finds by id, no status filter).
+             - `patientId` →
+               `HdService.getInfectionScreeningForBillingPatient`
+               → finds latest `APPROVED` for patient.
+
+        9. **No `OPDEMR` exclusion on
+           `getAppointmentForHd`.** The repo filter
+           is `opdEmr: { none: {} }` (i.e. "no OPD
+           EMR for this appointment"), but there is
+           no equivalent `hdEmr` / `ipdEmr` filter.
+           The result may include appointments that
+           already have an HD EMR.
+
+        10. **`appointmentType.modules has HD` filter
+            is commented out** in
+            `getAppointmentForHd` (see
+            `hd.repository.ts:467-471` — "TODO:
+            confirm with product team"). So the
+            result today can include non-HD
+            appointment types. The `module` filter is
+            still active in `getHdAppointments` and
+            `getHdConfirmedPatients`, but not in
+            `getAppointmentForHd`.
+
+        11. **`getHdAppointments` runs a separate
+            `referral.findMany`** to attach a
+            `referral` row to each appointment. The
+            `referral` is a top-level field on the
+            appointment (not inside a `Referral[]`
+            array), attached by id-matching.
+
+        12. **`getHdConfirmedPatients` returns
+            `Appointment` rows, not `Patient` rows.**
+            Each "patient" item is an appointment with
+            the related `patient`, `ProxyBill[]`, and
+            `appointmentType`. Counter to the
+            `getPatientForHd` response which returns
+            actual `Patient` rows.
+
+        13. **Strict `HDRequest.status` state machine
+            is enforced server-side.** From
+            `HDRequestService.updateHDRequestStatus`:
+              - `REQUESTED → APPROVED | CANCELLED` only.
+              - `APPROVED → CANCELLED` only (NOT
+                `REQUESTED`).
+              - `CANCELLED` and `COMPLETED` are
+                terminal — no transitions out.
+            The matching `Appointment.status` is
+            auto-synced via `hdRequestStatusMap`
+            (`APPROVED ↔ CONFIRMED`, etc.) when the
+            source department is `OPD`/`ED`.
+
+        14. **Module auto-rewrite OPD → ED for
+            emergency patients** (same as Endo):
+            `HDRequestService.createHDRequest` sets
+            `payload.sourceDepartment =
+            HDRequestSourceDepartment.ED` when
+            `patient.patientType ===
+            PatientType.EMERGENCY`.
+
+        15. **`HDRequest.deleteHDRequest` is a
+            server-action only path** (not exposed
+            via REST). It enforces:
+              - `status: REQUESTED` only,
+              - `hasServicesAdded: false`,
+              - only requester (or HD MO) can delete
+                (else 403).
+            Throws `AppError` 400/403/404 as
+            appropriate.
+
+        16. **`HDRequest.opdRequestId` enables an
+            OPD→IPD transfer flow** like Endo, but
+            with a simpler hard-delete: the create
+            transaction just `tx.hDRequest.delete(...)`s
+            the prior request (no junction
+            `deleteMany` chain, because HD doesn't
+            have junction tables). Activity log:
+            "Transferred OPD HD Request to IPD".
+
+  - id: imaging
+    kind: rest
+    status: documented
+    routes_count: 28
+    files:
+      - src/app/api/(imaging)/ct-list/route.ts
+      - src/app/api/(imaging)/ct-list/[id]/route.ts
+      - src/app/api/(imaging)/ct-list/[id]/activities/route.ts
+      - src/app/api/(imaging)/ct-service/[id]/activities/route.ts
+      - src/app/api/(imaging)/ct-service/[id]/add-on/route.ts
+      - src/app/api/(imaging)/ecg-list/route.ts
+      - src/app/api/(imaging)/ecg-list/[id]/route.ts
+      - src/app/api/(imaging)/ecg-list/[id]/activities/route.ts
+      - src/app/api/(imaging)/ecg-service/[id]/activities/route.ts
+      - src/app/api/(imaging)/echo-list/route.ts
+      - src/app/api/(imaging)/echo-list/[id]/route.ts
+      - src/app/api/(imaging)/echo-list/[id]/activities/route.ts
+      - src/app/api/(imaging)/echo-service/[id]/activities/route.ts
+      - src/app/api/(imaging)/imaging/route.ts
+      - src/app/api/(imaging)/imaging-templates/route.ts
+      - src/app/api/(imaging)/imaging-templates/[id]/route.ts
+      - src/app/api/(imaging)/mri-list/route.ts
+      - src/app/api/(imaging)/mri-list/[id]/route.ts
+      - src/app/api/(imaging)/mri-list/[id]/activities/route.ts
+      - src/app/api/(imaging)/mri-service/[id]/activities/route.ts
+      - src/app/api/(imaging)/ultrasound-list/route.ts
+      - src/app/api/(imaging)/ultrasound-list/[id]/route.ts
+      - src/app/api/(imaging)/ultrasound-list/[id]/activities/route.ts
+      - src/app/api/(imaging)/ultrasound-service/[id]/activities/route.ts
+      - src/app/api/(imaging)/x-ray-list/route.ts
+      - src/app/api/(imaging)/x-ray-list/[id]/route.ts
+      - src/app/api/(imaging)/x-ray-list/[id]/activities/route.ts
+      - src/app/api/(imaging)/x-ray-service/[id]/activities/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/imaging/services/imaging.service.ts
+      - src/app/(dashboard)/shared/imaging/services/imaging-template.service.ts
+      - src/app/(dashboard)/shared/imaging/services/ct.service.ts
+      - src/app/(dashboard)/shared/imaging/services/ecg.service.ts
+      - src/app/(dashboard)/shared/imaging/services/echo.service.ts
+      - src/app/(dashboard)/shared/imaging/services/mri.service.ts
+      - src/app/(dashboard)/shared/imaging/services/ultrasound.service.ts
+      - src/app/(dashboard)/shared/imaging/services/x-ray.service.ts
+      - src/app/(dashboard)/shared/imaging/repositories/imaging.repository.ts
+      - src/app/(dashboard)/shared/imaging/repositories/imaging-template.repository.ts
+      - src/app/(dashboard)/shared/imaging/repositories/ct.repository.ts
+      - src/app/(dashboard)/shared/imaging/schemas/ct/get-ct-list.schema.ts
+      - src/app/(dashboard)/shared/imaging/schemas/ecg/get-ecg-list.schema.ts
+      - src/app/(dashboard)/shared/imaging/schemas/echo/get-echo-list.schema.ts
+      - src/app/(dashboard)/shared/imaging/schemas/mri/get-mri-list.schema.ts
+      - src/app/(dashboard)/shared/imaging/schemas/ultrasound/get-ultrasound-list.schema.ts
+      - src/app/(dashboard)/shared/imaging/schemas/x-ray/get-x-ray-list.schema.ts
+      - src/app/(dashboard)/shared/imaging/schemas/imaging-template/get-imaging-templates.schema.ts
+      - src/app/(dashboard)/shared/imaging/types/imaging-service.types.ts
+      - src/app/(dashboard)/shared/imaging/types/imaging-list.types.ts
+      - src/app/(dashboard)/shared/imaging/types/imaging-template.types.ts
+      - src/app/(dashboard)/shared/imaging/types/ct.types.ts
+    shared_schemas:
+      - ImagingList
+      - ImagingService
+      - ImagingTemplate
+      - CTAddOn
+      - ImagingListActivityLog
+      - ImagingServiceActivityLog
+      - GetImagingServiceResponse
+      - GetImagingTemplatesResponse
+      - GetImagingTemplateByIdResponse
+      - DeleteImagingTemplateResponse
+      - GetCTListResponse
+      - GetCTDetailsResponse
+      - GetCTListActivitiesResponse
+      - GetCTServiceActivitiesResponse
+      - GetCTAddOnResponse
+      - GetECGListResponse
+      - GetECGDetailsResponse
+      - GetECGListActivitiesResponse
+      - GetECGServiceActivitiesResponse
+      - GetECHOListResponse
+      - GetECHODetailsResponse
+      - GetECHOListActivitiesResponse
+      - GetECHOServiceActivitiesResponse
+      - GetMRIListResponse
+      - GetMRIDetailsResponse
+      - GetMRIListActivitiesResponse
+      - GetMRIServiceActivitiesResponse
+      - GetUltrasoundListResponse
+      - GetUltrasoundDetailsResponse
+      - GetUltrasoundListActivitiesResponse
+      - GetUltrasoundServiceActivitiesResponse
+      - GetXRayListResponse
+      - GetXRayDetailsResponse
+      - GetXRayListActivitiesResponse
+      - GetXRayServiceActivitiesResponse
+    procedures:
+      - GET /api/imaging
+      - GET /api/imaging-templates
+      - GET /api/imaging-templates/{id}
+      - DELETE /api/imaging-templates/{id}
+      - GET /api/ct-list
+      - GET /api/ct-list/{id}
+      - GET /api/ct-list/{id}/activities
+      - GET /api/ct-service/{id}/activities
+      - GET /api/ct-service/{id}/add-on
+      - GET /api/ecg-list
+      - GET /api/ecg-list/{id}
+      - GET /api/ecg-list/{id}/activities
+      - GET /api/ecg-service/{id}/activities
+      - GET /api/echo-list
+      - GET /api/echo-list/{id}
+      - GET /api/echo-list/{id}/activities
+      - GET /api/echo-service/{id}/activities
+      - GET /api/mri-list
+      - GET /api/mri-list/{id}
+      - GET /api/mri-list/{id}/activities
+      - GET /api/mri-service/{id}/activities
+      - GET /api/ultrasound-list
+      - GET /api/ultrasound-list/{id}
+      - GET /api/ultrasound-list/{id}/activities
+      - GET /api/ultrasound-service/{id}/activities
+      - GET /api/x-ray-list
+      - GET /api/x-ray-list/{id}
+      - GET /api/x-ray-list/{id}/activities
+      - GET /api/x-ray-service/{id}/activities
+    notes: |
+      28 read endpoints + 1 mutation
+      (`DELETE /api/imaging-templates/{id}`). The
+      mutation is a **hard delete** (NOT soft delete).
+
+      Key findings:
+
+        1. **6 imaging types, 1 shared data model.**
+          CT, ECG, ECHO, MRI, Ultrasound, X-Ray all
+          share a single `ImagingList` table with a
+          `type` discriminator. The per-type
+          `*ListValidator` exports in each
+          repository file (e.g. `ctListValidator`,
+          `ecgListValidator`) are aliases of the
+          shared `imagingListValidator` from
+          `repositories/imaging.repository.ts`.
+
+        2. **Each per-type service has the same 4
+           endpoints** (`*-list`, `*-list/{id}`,
+           `*-list/{id}/activities`,
+           `*-service/{id}/activities`). CT is the
+           only type with a 5th endpoint
+           (`*-service/{id}/add-on`).
+
+        3. **The 6 per-type list schemas are
+           identical** at the API surface:
+             - `getCTListSchema` ≡ `getECGListSchema`
+               ≡ `getECHOListSchema` ≡
+               `getMRIListSchema` ≡
+               `getUltrasoundListSchema` ≡
+               `getXRayListSchema`.
+           All take `patientGroup?`,
+           `patientType?: OPD | IPD | EMERGENCY`
+           (defaulting to `OPD`),
+           `status?: ImagingServiceStatus`, plus
+           standard pagination.
+
+        4. **`ImagingService` (the master) uses a
+           strategy registry pattern** to dispatch
+           creation logic per `ServiceCategoryModule`.
+           See
+           `strategies/imaging-strategy-registry.ts`:
+           each module (CT, MRI, etc.) registers an
+           `IImagingCreationStrategy` and the master
+           `ImagingService.createImagingRecords`
+           groups `OPDBillingService` rows by module
+           and dispatches them in parallel.
+
+        5. **`ImagingListWithRequiredOpdBilling` type
+           wrapper makes `opdBilling` and
+           `services[].opdBillingService` non-nullable**
+           for detail endpoints. The repository
+           filters to `opdBilling: { not: null }` for
+           detail queries. List endpoints keep the
+           fields nullable.
+
+        6. **`/imaging-templates/{id}` throws 404 via
+           `AppError`** ("Imaging template not
+           found") when the id is unknown. The
+           `/imaging-templates` list endpoint does
+           not.
+
+        7. **`DELETE /imaging-templates/{id}` is a
+           hard delete** (`dbPrisma.imagingTemplate.delete`,
+           not soft-delete). There is no batched
+           delete — one id at a time. Response
+           carries `success: true, message: "...",
+           error: null` but no `result` field.
+
+        8. **No RBAC on any of the 28 endpoints.**
+           All use `auth: { required: true }` with
+           no `permissions` array. Imaging data is
+           clinically sensitive (results, patient
+           demographics, attachments) — RBAC
+           gating may be appropriate.
+
+        9. **`ImagingIPDService` handles the IPD
+           side of status transitions** —
+           acknowledged / de-acknowledged /
+           cancelled — invoked from each per-type
+           service's `update*ServiceStatus` method.
+           The shared pattern is the same across
+           all 5 types (CT, ECG, ECHO, MRI, US,
+           X-Ray).
+
+        10. **`ImagingService` master has only a
+            single endpoint** (`/api/imaging`) that
+            takes `defaultQuerySchema`. It is
+            used by RSC hydration paths and not
+            directly by the per-type list routes.
+
+        11. **CT add-on billing is CT-specific.**
+            No sibling under ECG/ECHO/MRI/US/X-Ray.
+            The shape is `CTAddOnWithRelations` with
+            `serviceItems` and `pharmacyItems`
+            add-on lines.
+
+        12. **Imaging service status state machine
+            (4 values):** `PENDING → ACKNOWLEDGED`,
+            `ACKNOWLEDGED → DE_ACKNOWLEDGED`,
+            `PENDING → CANCELLED`. The
+            `isValidImageServiceTransition` helper
+            (in `imaging.helper.ts`) enforces valid
+            transitions.
+
+        13. **All 6 per-type routes instantiate
+            their service inside the route
+            handler** (e.g. `const ctService = new
+            CTService()` per request). The
+            activity-log routes pre-instantiate as
+            a module-level constant. Both patterns
+            coexist; no DI framework is in use.
+
+        14. **Manifest listed shared schemas as
+            `[ImagingStudy, ImagingTemplate]`** —
+            the actual model is `ImagingList` (no
+            `ImagingStudy` model exists). Updated
+            the list to the actual exposed shapes.
+
+  - id: ipd
+    kind: rest
+    status: pending
+    routes_count: 69
+    note: |
+      In-Patient Department. Largest single REST module. Covers admissions,
+      discharge, deposit, ward/room/bed management, room transfers, IPD final
+      bill, daily bill, doctor notes, nurse notes, prescriptions, pharmacy
+      returns, vital signs, ward service.
+    files:
+      - src/app/api/(ipd)/admissions/route.ts
+      - src/app/api/(ipd)/admissions/[id]/route.ts
+      - src/app/api/(ipd)/admissions/[id]/latest-admission/route.ts
+      - src/app/api/(ipd)/admissions/with-doctor-notes/route.ts
+      - src/app/api/(ipd)/booking-list/route.ts
+      - src/app/api/(ipd)/buildings/route.ts
+      - src/app/api/(ipd)/buildings/[id]/route.ts
+      - src/app/api/(ipd)/custom-room-charges/route.ts
+      - src/app/api/(ipd)/custom-room-charges/[id]/route.ts
+      - src/app/api/(ipd)/daily-bill-list/route.ts
+      - src/app/api/(ipd)/daily-bill-list/[id]/route.ts
+      - src/app/api/(ipd)/default-room-charges/route.ts
+      - src/app/api/(ipd)/deposit/route.ts
+      - src/app/api/(ipd)/deposit/[id]/audits/route.ts
+      - src/app/api/(ipd)/deposit/by-admission/[admissionId]/route.ts
+      - src/app/api/(ipd)/deposit/deposit-transaction/[admissionId]/route.ts
+      - src/app/api/(ipd)/deposit/history-by-patient/route.ts
+      - src/app/api/(ipd)/deposit/latest-deposit/[admissionId]/route.ts
+      - src/app/api/(ipd)/deposit-type/route.ts
+      - src/app/api/(ipd)/discharge/route.ts
+      - src/app/api/(ipd)/discharge/[id]/route.ts
+      - src/app/api/(ipd)/discharge/by-admission/[id]/route.ts
+      - src/app/api/(ipd)/discharge/with-daily-bills/[id]/route.ts
+      - src/app/api/(ipd)/discharge-summary/route.ts
+      - src/app/api/(ipd)/discharge-summary/[id]/route.ts
+      - src/app/api/(ipd)/discharge-summary/by-patient-admission/route.ts
+      - src/app/api/(ipd)/floor/route.ts
+      - src/app/api/(ipd)/incomplete-requests-for-discharge/[admissionId]/route.ts
+      - src/app/api/(ipd)/ipd-final-bill/route.ts
+      - src/app/api/(ipd)/ipd-final-bill/[id]/route.ts
+      - src/app/api/(ipd)/ipd-final-bill/[id]/activities/route.ts
+      - src/app/api/(ipd)/ipd-list/route.ts
+      - src/app/api/(ipd)/ipd-list/doctor-notes/route.ts
+      - src/app/api/(ipd)/ipd-list/doctor-notes/[id]/route.ts
+      - src/app/api/(ipd)/ipd-list/nurse-note/route.ts
+      - src/app/api/(ipd)/ipd-list/nurse-note/[id]/route.ts
+      - src/app/api/(ipd)/ipd-list/pharmacy-request/route.ts
+      - src/app/api/(ipd)/ipd-list/pharmacy-request/by-admission/route.ts
+      - src/app/api/(ipd)/ipd-list/pharmacy-request/[id]/route.ts
+      - src/app/api/(ipd)/ipd-list/prescriptions/route.ts
+      - src/app/api/(ipd)/ipd-list/prescriptions/[id]/route.ts
+      - src/app/api/(ipd)/ipd-list/prescriptions/[id]/activities/route.ts
+      - src/app/api/(ipd)/ipd-list/service-request/[id]/route.ts
+      - src/app/api/(ipd)/occupied-admission-patients/route.ts
+      - src/app/api/(ipd)/pending-opd-requests/route.ts
+      - src/app/api/(ipd)/pharmacy-returns/route.ts
+      - src/app/api/(ipd)/pharmacy-returns/[id]/route.ts
+      - src/app/api/(ipd)/room-history/[admissionId]/route.ts
+      - src/app/api/(ipd)/room-list/route.ts
+      - src/app/api/(ipd)/room-list/[id]/route.ts
+      - src/app/api/(ipd)/room-log/route.ts
+      - src/app/api/(ipd)/room-log/[id]/route.ts
+      - src/app/api/(ipd)/room-transfer/route.ts
+      - src/app/api/(ipd)/room-transfer-by-patient-id/[id]/route.ts
+      - src/app/api/(ipd)/room-transfer-by-room-id/[id]/route.ts
+      - src/app/api/(ipd)/room-type/route.ts
+      - src/app/api/(ipd)/room-type-by-ward-id/[id]/route.ts
+      - src/app/api/(ipd)/room-with-building-id/[id]/route.ts
+      - src/app/api/(ipd)/service-request/route.ts
+      - src/app/api/(ipd)/service-request/[id]/activities/route.ts
+      - src/app/api/(ipd)/vital-signs/route.ts
+      - src/app/api/(ipd)/vital-signs/[id]/route.ts
+      - src/app/api/(ipd)/ward/route.ts
+      - src/app/api/(ipd)/ward/[id]/route.ts
+      - src/app/api/(ipd)/ward-by-floor-id/[id]/route.ts
+      - src/app/api/(ipd)/ward-room-type/route.ts
+      - src/app/api/(ipd)/ward-room-type/[id]/route.ts
+      - src/app/api/(ipd)/ward-service/route.ts
+      - src/app/api/(ipd)/ward-service/[id]/route.ts
+      - src/app/api/(ipd)/ward-service/[id]/activities/route.ts
+      - src/app/api/(ipd)/wards/[id]/route.ts
+    shared_schemas: [Admission, Discharge, Deposit, Ward, Room, Bed, RoomType, IPDBill, DailyBill, IPDPrescription, RoomTransfer, VitalSigns]
+
+  - id: lab
+    kind: rest
+    status: pending
+    routes_count: 43
+    files:
+      - src/app/api/(lab)/lab/route.ts
+      - src/app/api/(lab)/lab-acknowledge/route.ts
+      - src/app/api/(lab)/lab-acknowledge/[id]/route.ts
+      - src/app/api/(lab)/lab-collection-method/route.ts
+      - src/app/api/(lab)/lab-group/route.ts
+      - src/app/api/(lab)/lab-group/[id]/route.ts
+      - src/app/api/(lab)/lab-group/[id]/activities/route.ts
+      - src/app/api/(lab)/lab-report/route.ts
+      - src/app/api/(lab)/lab-report/[id]/route.ts
+      - src/app/api/(lab)/lab-report/[id]/audits/route.ts
+      - src/app/api/(lab)/lab-report/[id]/microbiology-with-services/route.ts
+      - src/app/api/(lab)/lab-report/[id]/template-with-lab-services/route.ts
+      - src/app/api/(lab)/lab-result-entry/route.ts
+      - src/app/api/(lab)/lab-result-entry/[id]/route.ts
+      - src/app/api/(lab)/lab-result-verification/route.ts
+      - src/app/api/(lab)/lab-result-verification/[id]/route.ts
+      - src/app/api/(lab)/lab-sample/route.ts
+      - src/app/api/(lab)/lab-sample-collection/route.ts
+      - src/app/api/(lab)/lab-sample-collection/[id]/route.ts
+      - src/app/api/(lab)/lab-service-activities/[id]/route.ts
+      - src/app/api/(lab)/lab-service-items/[id]/activities/route.ts
+      - src/app/api/(lab)/lab-status/route.ts
+      - src/app/api/(lab)/lab-template/route.ts
+      - src/app/api/(lab)/lab-template/[id]/audit/route.ts
+      - src/app/api/(lab)/lab-template/[id]/category/route.ts
+      - src/app/api/(lab)/lab-template/[id]/microbiology/route.ts
+      - src/app/api/(lab)/lab-template-items/route.ts
+      - src/app/api/(lab)/lab-template-items/microbiology/route.ts
+      - src/app/api/(lab)/lab-template-with-service/[ids]/route.ts
+      - src/app/api/(lab)/lab-template-with-service/[ids]/microbiology/route.ts
+      - src/app/api/(lab)/lab-template-with-verification-service/[ids]/route.ts
+      - src/app/api/(lab)/lab-template-with-verification-service/[ids]/microbiology/route.ts
+      - src/app/api/(lab)/lab-test/route.ts
+      - src/app/api/(lab)/lab-test/[id]/route.ts
+      - src/app/api/(lab)/lab-test-done/route.ts
+      - src/app/api/(lab)/lab-test-done/[id]/route.ts
+      - src/app/api/(lab)/lab-testing/route.ts
+      - src/app/api/(lab)/lab-testing/[id]/route.ts
+      - src/app/api/(lab)/lab-unit/route.ts
+      - src/app/api/(lab)/special-lab-test/route.ts
+      - src/app/api/(lab)/special-lab-test/[id]/route.ts
+      - src/app/api/(lab)/special-lab-test/[id]/activities/route.ts
+      - src/app/api/(lab)/test-script/route.ts
+    shared_schemas: [LabTest, LabReport, LabTemplate, LabSample, LabGroup, LabResult, LabUnit]
+
+  - id: membership
+    kind: rest
+    status: documented
+    routes_count: 8
+    files:
+      - src/app/api/(membership)/member-card-by-patient/route.ts
+      - src/app/api/(membership)/member-card-list/route.ts
+      - src/app/api/(membership)/member-card-list/[id]/route.ts
+      - src/app/api/(membership)/member-card-type/route.ts
+      - src/app/api/(membership)/member-card-type/[id]/route.ts
+      - src/app/api/(membership)/member-card/room-usage-count/route.ts
+      - src/app/api/(membership)/member-card/usage-count/route.ts
+      - src/app/api/(membership)/member-list/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/membership/services/member-card.service.ts
+      - src/app/(dashboard)/shared/membership/services/member-card-type.service.ts
+      - src/app/(dashboard)/shared/membership/services/member-list.service.ts
+      - src/app/(dashboard)/shared/membership/repositories/member-card.repository.ts
+      - src/app/(dashboard)/shared/membership/repositories/member-card-type.repository.ts
+      - src/app/(dashboard)/shared/membership/repositories/member-list.repository.ts
+      - src/app/(dashboard)/shared/membership/schemas/member-card.schema.ts
+      - src/app/(dashboard)/shared/membership/schemas/get-member-card-type.schema.ts
+      - src/app/(dashboard)/shared/membership/schemas/member-list.schema.ts
+      - src/app/(dashboard)/shared/membership/schemas/create-member-card-type.schema.ts
+      - src/app/(dashboard)/shared/membership/schemas/edit-member-card-type.schema.ts
+      - src/app/(dashboard)/shared/membership/types/member-card.types.ts
+      - src/app/(dashboard)/shared/membership/types/member-list.types.ts
+      - src/app/(dashboard)/shared/membership/types/membership.types.ts
+    shared_schemas:
+      - MemberCard
+      - MemberCardByPatientId
+      - MemberCardType
+      - MemberCardTypeService
+      - MemberCardTypeServicePackage
+      - SubPriceSchema
+      - MemberList
+      - GetMemberCardTypeListResponse
+      - GetMemberCardTypeByIdResponse
+      - GetMemberCardListResponse
+      - GetMemberCardByIdResponse
+      - GetMemberCardWithPatientIdResponse
+      - GetMemberListResponse
+      - GetMemberCardServiceUsageCountResponse
+      - GetMemberCardRoomUsageCountResponse
+    procedures:
+      - GET /api/member-card-type
+      - GET /api/member-card-type/{id}
+      - GET /api/member-card-list
+      - GET /api/member-card-list/{id}
+      - GET /api/member-card-by-patient
+      - GET /api/member-card/usage-count
+      - GET /api/member-card/room-usage-count
+      - GET /api/member-list
+    notes: |
+      8 GET-only endpoints. The module has no
+      mutations on the REST surface — create /
+      edit / delete of `MemberCard` and
+      `MemberCardType` happen via server actions
+      under `member-card-list/features/*.actions.ts`
+      (not in scope for the OpenAPI REST
+      surface).
+
+      The original manifest listed a
+      `src/app/api/(membership)/member-card/route.ts`
+      file that does not exist — only the two
+      sub-routes (`usage-count`, `room-usage-count`)
+      are real.
+
+      Key findings:
+
+        1. **No RBAC on any of the 8 endpoints.**
+           All routes use either
+           `apiHandler` + `verifyApiAuth()`,
+           `enhancedApiHandler` with
+           `auth: { required: true }`, or a raw
+           `GET` function with no auth check
+           beyond the `enhancedApiHandler`
+           wrapper. The membership module is
+           clinically sensitive (patient
+           identifiers, member-card pricing,
+           service usage) — RBAC gating may be
+           appropriate.
+
+        2. **3 different response-envelope
+           patterns** are used across the 8
+           routes:
+             a. `apiHandler` + `verifyApiAuth()`
+                (5 routes) — returns
+                `{ success: true, result, error: "", message: "" }`.
+            b. `apiHandler` (no explicit
+                `verifyApiAuth()`, 2 routes) —
+                same envelope, but auth relies on
+                the handler internals (not the
+                explicit `verifyApiAuth` call).
+             c. `enhancedApiHandler` (1 route,
+                `/member-card-by-patient`) —
+                same envelope, declared via the
+                handler config
+                (`auth: { required: true }`).
+             d. **Raw `GET` + `new PrismaClient()`**
+                (2 routes,
+                `/member-card/usage-count`,
+                `/member-card/room-usage-count`)
+                — returns
+                `{ usageCount, lastUsedAt, previousUsedAt }`
+                directly (no `success` / `result` /
+                `error` / `message` wrapper) and a
+                400 with
+                `{ message: "Invalid query", issues }`
+                on validation failure.
+           The membership module is the only
+           place in the codebase that uses the
+           `error: ""` (string) variant instead of
+           `error: null` — this is an
+           inconsistency the team may want to
+           normalise.
+
+        3. **2 routes instantiate a fresh
+           `PrismaClient()` per request.**
+           `/member-card/usage-count` and
+           `/member-card/room-usage-count` both
+           do `import { PrismaClient } from
+           "@prisma/client"; const prisma = new
+           PrismaClient();` inside the route
+           file — bypassing the shared
+           `src/lib/db.ts` singleton. The shared
+           singleton attaches itself to
+           `globalThis` in dev to survive HMR
+           and has a 20s transaction timeout;
+           this anti-pattern loses both. The
+           team should refactor these two routes
+           to `import { prisma } from "@/lib/db"`.
+
+        4. **The list / detail endpoints
+           redundantly declare filters that the
+           repository never applies.** Each of
+           `getMemberCardTypeSchema`,
+           `getMemberCardSchema`,
+           `getMemberListSchema` accepts `id?`
+           and `status?` but the corresponding
+           repository methods only honour
+           `memberCardTypeId`, `search`,
+           `start` / `end`, and pagination.
+           Captured as `x-implementation-note` on
+           the affected operations.
+
+        5. **`MemberCardType` list / detail
+           differ on `hasValidActiveMemberCard`.**
+           The list endpoint projects
+           `hasValidActiveMemberCard` per row
+           (via the `_count` member-card join
+           with the
+           `validFrom ≤ now ≤ validTo` filter).
+           The detail endpoint does NOT — the
+           field is omitted. Use the list
+           endpoint when you need the
+           "can-this-be-edited" check; the
+           detail endpoint omits it.
+
+        6. **`MemberCard` / `MemberCardType`
+           detail responses do not throw 404.**
+           Both `getMemberCardById` and
+           `getMemberCardTypeById` return
+           `result: null` on miss with HTTP 200.
+           The `error: ""` (string) is also
+           returned instead of `error: null`.
+           Callers must check `result != null`.
+
+        7. **`MemberCard.memberCardId` is
+           unique across the table**
+           (`@unique` on the Prisma model). The
+           service enforces this case-insensitively
+           via
+           `memberCardRepository.existsByNameExceptId`
+           (used on update) and
+           `getMemberCardByName` (used on create).
+           Update returns 409 "Member Card name
+           already exists" on collision; create
+           returns 409 "This Member Card ID
+           already exists.".
+
+        8. **`/member-card/usage-count` and
+           `/member-card/room-usage-count` are
+           2 distinct usage-counter
+           tables.** The first reads
+           `PatientMemberCardServiceUsage` (per
+           service, keyed by
+           `memberCardTypeServiceId`); the second
+           reads
+           `PatientMemberCardTypeRoomChargeUsage`
+           (per card-type, keyed by
+           `memberCardTypeId`). They are NOT
+           interchangeable — the first is for
+           service-discount counts, the second
+           for room-charge discount counts.
+
+        9. **Member-card-type edit / delete is
+           blocked when ≥ 1 active valid card
+           exists.** `MemberCardTypeService`
+           checks
+           `hasValidActiveMemberCard(typeId)`
+           before allowing edit or delete. The
+           "active valid" filter is the same as
+           the list endpoint's
+           `hasValidActiveMemberCard` check
+           (`isActive: true` AND
+           `validFrom ≤ now ≤ validTo`). The
+           block message is shared via
+           `usedMemberCardTypeBlockMessage`.
+
+        10. **Typo in repository method name.**
+            `MemberCardRepository.getMemeberCardWithPatiendId`
+            (sic — both "Memeber" and "Patiend"
+            are misspelled). Called from
+            `MemberCardService.getMemberCardWithPatientId`.
+
+        11. **Manifest drift.** The original
+            `shared_schemas: [MemberCard, MemberCardType, Member]`
+            was a placeholder. `Member` is
+            actually `MemberList` in the
+            codebase — `Member` is the
+            colloquial name; the Prisma model
+            is `MemberList`. The new
+            `shared_schemas` list reflects the
+            actual exposed shapes.
+
+  - id: opd
+    kind: rest
+    status: documented
+    routes_count: 27
+    files:
+      - src/app/api/(opd)/main-procedures/route.ts
+      - src/app/api/(opd)/opd-billing-log/[id]/route.ts
+      - src/app/api/(opd)/opd-billing-pharmacy-sale/route.ts
+      - src/app/api/(opd)/opd-billings/route.ts
+      - src/app/api/(opd)/opd-billings/[id]/route.ts
+      - src/app/api/(opd)/opd-billings/[id]/details/route.ts
+      - src/app/api/(opd)/opd-billings/appointments/route.ts
+      - src/app/api/(opd)/opd-billings/doctor-consultation-service/route.ts
+      - src/app/api/(opd)/opd-billings/pharmacy-sale-invoices/route.ts
+      - src/app/api/(opd)/opd-billings/post-paid-bill/route.ts
+      - src/app/api/(opd)/opd-billings/pre-paid-bill/route.ts
+      - src/app/api/(opd)/opd-billings/services-for-opd/route.ts
+      - src/app/api/(opd)/opd-emr-services-by-appointment/route.ts
+      - src/app/api/(opd)/opd-ot-request/route.ts
+      - src/app/api/(opd)/opd-ot-request/[id]/route.ts
+      - src/app/api/(opd)/opd-refund-bills/route.ts
+      - src/app/api/(opd)/opd-refund-bills/[id]/route.ts
+      - src/app/api/(opd)/opd-refund-bills/find-opd-billings/route.ts
+      - src/app/api/(opd)/opd-refund-bills/find-opd-billings/[id]/route.ts
+      - src/app/api/(opd)/package-bills/route.ts
+      - src/app/api/(opd)/package-bills/[id]/route.ts
+      - src/app/api/(opd)/package-bills/room-types/route.ts
+      - src/app/api/(opd)/package-bills/service-packages/route.ts
+      - src/app/api/(opd)/procedures/route.ts
+      - src/app/api/(opd)/proxybill-by-patientId/[id]/route.ts
+      - src/app/api/(opd)/service-package/route.ts
+      - src/app/api/(opd)/service-package/[id]/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/opd/services/opd-billing.service.ts
+      - src/app/(dashboard)/shared/opd/services/refund/opd-refund.service.ts
+      - src/app/(dashboard)/shared/opd/services/refund/opd-refund-service.container.ts
+      - src/app/(dashboard)/shared/opd/services/package-bill/opd-package-bill.service.ts
+      - src/app/(dashboard)/shared/opd/services/package-bill/opd-package-bill-service.container.ts
+      - src/app/(dashboard)/shared/opd/services/opd-ot-request.service.ts
+      - src/app/(dashboard)/shared/opd/services/opd-proxy.service.ts
+      - src/app/(dashboard)/shared/opd/repositories/opd-billing.repository.ts
+      - src/app/(dashboard)/shared/opd/repositories/opd-ot-request.repository.ts
+      - src/app/(dashboard)/shared/opd/repositories/opd-refund.repository.ts
+      - src/app/(dashboard)/shared/opd/repositories/opd-package-bill.repository.ts
+      - src/app/(dashboard)/shared/opd/queries/get-opd-emr-services-by-appointment.query.ts
+      - src/app/(dashboard)/shared/opd/schemas/procedure/procedure-schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/main-procedure/main-procedure-schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/service-package/service-package-schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-billing/get-opd-billings.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-billing/get-bill-by-appointment.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-billing/get-appointments-for-opd.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-billing/get-pharmacy-sales-for-opd.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-billing/get-doctor-consultation-service.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-billing/get-opd-emr-services-by-appointment.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-ot-request/get-opd-ot-request.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/opd-refund/get-opd-refunded-list.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/package-bill/get-package-bill.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/package-bill/get-service-package.schema.ts
+      - src/app/(dashboard)/shared/opd/schemas/service/get-services-schema.ts
+      - src/app/(dashboard)/shared/opd/types/opb-billing.types.ts
+      - src/app/(dashboard)/shared/opd/types/opd-emr.types.ts
+      - src/app/(dashboard)/shared/opd/types/opd-package-bill.types.ts
+      - src/app/(dashboard)/shared/opd/types/opd-refund-bill.types.ts
+      - src/app/(dashboard)/shared/opd/types/opd-ot-request.types.ts
+    shared_schemas:
+      - GetProceduresResponse
+      - Procedure
+      - GetMainProceduresResponse
+      - MainProcedure
+      - MainProcedureMutationResponse
+      - GetServicePackagesResponse
+      - GetServicePackageByIdResponse
+      - ServicePackage
+      - SubPriceSchema
+      - GetOPDBillingsResponse
+      - GetOPDBillingByIdResponse
+      - OPDBilling
+      - OPDBillingServiceItem
+      - OPDBillingProcedureItem
+      - OPDBillingServicePackage
+      - OPDBillingPaymentMethod
+      - OPDBillingPharmacySale
+      - OpdBillingPharmacySaleItem
+      - SaleItem
+      - SaleReturn
+      - GetOPDBillingPharmacySaleResponse
+      - GetOPDBillingLogResponse
+      - OPDBillingLog
+      - GetAppointmentsForOpdResponse
+      - OpdAppointment
+      - GetPrePaidBillByAppointmentResponse
+      - GetPostPaidBillByAppointmentResponse
+      - GetPharmacySalesForOpdResponse
+      - GetDoctorConsultationServiceResponse
+      - DoctorServiceWithService
+      - GetServicesForOpdResponse
+      - GetPackageBillsResponse
+      - GetPackageBillByIdResponse
+      - OpdPackageBill
+      - GetPackageBillRoomTypesResponse
+      - GetPackageBillServicePackagesResponse
+      - GetOPDOTRequestsResponse
+      - GetOPDOTRequestByIdResponse
+      - OPDOTRequest
+      - OtRequest
+      - GetOPDRefundBillsResponse
+      - GetOPDRefundBillByIdResponse
+      - OpdRefundBill
+      - OpdRefundPharmacyItem
+      - OpdRefundServiceItem
+      - OpdRefundProcedureItem
+      - GetOPDFindOpdBillingsResponse
+      - GetOPDFindOpdBillingByIdResponse
+      - GetOpdEmrServicesByAppointmentResponse
+      - OpdEmrImagingService
+      - OpdEmrLabService
+      - OpdEmrPharmacyRequest
+      - GetProxyBillByPatientIdResponse
+      - ProxyBill
+    procedures:
+      - GET /api/procedures
+      - GET /api/main-procedures
+      - POST /api/main-procedures
+      - PUT /api/main-procedures
+      - DELETE /api/main-procedures
+      - GET /api/service-package
+      - GET /api/service-package/{id}
+      - GET /api/opd-billings
+      - GET /api/opd-billings/{id}
+      - GET /api/opd-billings/{id}/details
+      - GET /api/opd-billing-log/{id}
+      - GET /api/opd-billing-pharmacy-sale
+      - GET /api/opd-billings/appointments
+      - GET /api/opd-billings/pre-paid-bill
+      - GET /api/opd-billings/post-paid-bill
+      - GET /api/opd-billings/pharmacy-sale-invoices
+      - GET /api/opd-billings/doctor-consultation-service
+      - GET /api/opd-billings/services-for-opd
+      - GET /api/opd-emr-services-by-appointment
+      - GET /api/opd-ot-request
+      - GET /api/opd-ot-request/{id}
+      - GET /api/opd-refund-bills
+      - GET /api/opd-refund-bills/{id}
+      - GET /api/opd-refund-bills/find-opd-billings
+      - GET /api/opd-refund-bills/find-opd-billings/{id}
+      - GET /api/package-bills
+      - GET /api/package-bills/{id}
+      - GET /api/package-bills/room-types
+      - GET /api/package-bills/service-packages
+      - GET /api/proxybill-by-patientId/{id}
+    notes: |
+      30 procedures (24 GET paths + 4 main-procedure
+      mutations on `/api/main-procedures`: GET /
+      POST / PUT / DELETE — all declared on the
+      same `route.ts` file and all wired through
+      `enhancedApiHandler`).
+
+      Key findings:
+
+        1. **No RBAC on any of the 30 endpoints.**
+           All use either `auth: { required: true }`
+           (most) or legacy `apiHandler` /
+           `apiHandler` + `verifyApiAuth()` /
+           raw `GET` with manual session check.
+           No `permissions` array declared
+           anywhere. OPD billing data is
+           clinically sensitive (full patient
+           data, all bill line-items, member-card
+           discounts, refund eligibility,
+           pharmacy backfill) — RBAC gating may
+           be appropriate.
+
+        2. **4 different handler patterns** are
+           used across the 27 route files:
+             a. `enhancedApiHandler` with
+                `auth: { required: true }` (most
+                list / by-id endpoints).
+             b. `apiHandler` + explicit
+                `verifyApiAuth()` (1 route:
+                `/opd-billings`).
+             c. `apiHandler` without explicit
+                `verifyApiAuth()` (5 routes:
+                `/opd-billings/{id}`,
+                `/opd-billings/{id}/details`,
+                `/opd-billing-log/{id}`,
+                `/opd-billing-pharmacy-sale`,
+                `/proxybill-by-patientId/{id}`).
+             d. **Raw `GET` + manual
+                `AuthService.getSession()` check
+                + `prisma.opdPackageBill.findMany`**
+                (1 route:
+                `/package-bills/room-types`).
+
+        3. **The OPD module has 5 distinct
+           response-envelope shapes**:
+             a. Standard envelope
+                `{ success, result, error: "",
+                message: "" }` (most).
+             b. Envelope with
+                `error: null` / `error: nullable`
+                instead of `error: ""` (the
+                `opd-ot-request*` and
+                `opd-refund-bills*` family).
+             c. **Typo'd envelope** with
+                `messag: ""` (no `e`)
+                —
+                `find-opd-billings` route.
+             d. Envelope with `result: null` and
+                no `totalCount` wrapper
+                (log + raw
+                `getOPDBillingPharmacySale`
+                + by-id fallthroughs).
+             e. **Non-standard raw envelope**
+                `{ roomTypes: [...] }` for
+                `/package-bills/room-types`.
+
+        4. **`OpdBillingService.getById` is the
+           most heavily decorated object in the
+           entire OpenAPI surface.** The 6-stage
+           decoration chain is:
+             1. `getById` (raw `findById`).
+             2. `applyCancellableServices`
+                (sets
+                `OPDBillingService[].cancellable`
+                based on lab / imaging / proxy
+                state — different rules for
+                lab/imaging vs other services).
+             3. `attachCancellableProcedures`
+                (sets
+                `opdBillingProcedures[].cancellable`
+                based on proxy procedure-bill).
+             4. `attachMemberData` (decorates
+                services with
+                `memberCardTypeService` /
+                `memberCardServiceUsage`).
+             5. `backFillPharmacyItemsSaleReturn`
+                (recomputes `remainingQty`).
+             6. `backFillProxyPharmacyItems`
+                (attaches `cancelRecord` from
+                the proxy-bill pharmacy sale).
+           The un-decorated raw variant is
+           exposed at
+           `/api/opd-billings/{id}/details`.
+
+        5. **`OpdBillingService` is wired
+           manually in the constructor** with
+           7 private fields
+           (`opdBillingRepository`,
+           `paymentMethodsRepository`,
+           `imagingService`,
+           `opdMemberCardService`,
+           `servicesService`,
+           `pharmacySaleService`,
+           `opdProxyService`,
+           `opdAppointmentService`) — no
+           container / no DI.
+
+        6. **`OpdRefundService` and
+           `OpdPackageBillService` are the only
+           OPD services that go through a
+           `ServiceContainer`** —
+           `OpdRefundServiceContainer` and
+           `opdPackageBillServiceContainer`
+           respectively. The other services
+           (`OpdOTRequestService`, the
+           `*Procedure` and `*ServicePackage`
+           services) are constructed inline in
+           the route file.
+
+        7. **`OpdOTRequestService` is a
+           singleton** (`export const
+           opdOTRequestService = new
+           OPDOTRequestService()`) — it has 3
+           private fields: the OPD-OT repo, the
+           appointment service, and the IPD-OT
+           repo (used to share
+           `generateMonthlyResetId` with the IPD
+           path).
+
+        8. **OT-request-id generation
+           (`OTRID-YYYY-MM-NNNNNN`)** is
+           delegated to the IPD-OT repository
+           via `generateMonthlyResetId("OTRID",
+           (date) =>
+           ipdOTRequestRepository.findLastOTRequestIdForMonth(date, tx))`
+           — the OPD service **reuses the IPD
+           repo for id-generation** so the two
+           share a single monthly counter.
+
+        9. **`/api/opd-ot-request/{id}` returns
+           `result: null` on miss** (no HTTP
+           404). The by-id endpoint does NOT
+           throw — callers must check `result
+           != null`.
+
+        10. **`/api/opd-ot-request/{id}` is
+            decorated with the deep include
+            tree** (patient with full demo,
+            operationType, anesthesiaType,
+            building, room with ward/floor/wardRoomType.roomType,
+            referralDoctor with
+            user+specialization, referralClinic,
+            createdBy / updatedBy). The
+            `OPDOTRequest` schema in the
+            schemas file documents the
+            top-level wrapper; the embedded
+            `otrequest` field is the full
+            `OtRequest` shape (cross-module
+            stub — the OT module documents the
+            full shape).
+
+        11. **`/api/opd-emr-services-by-appointment`
+            is the only OPD endpoint that uses
+            the `Query<>` interface pattern**
+            (the DDD contracts layer at
+            `src/app/contracts/`). All other
+            OPD endpoints go through a
+            `*Service` class.
+
+        12. **`/api/opd-emr-services-by-appointment`
+            throws 400 with `"OPD EMR
+            not found!"` when the
+            (appointment, patient) pair has no
+            `OPDEMR` row** — note this is
+            `AppError(..., 400)`, not 404, which
+            is inconsistent with the rest of the
+            project (most by-id endpoints return
+            200 + `result: null`).
+
+        13. **`/api/opd-refund-bills/find-opd-billings`
+            short-circuits when no
+            `query.search`** — returns
+            `{ opdBillings: [], totalCount: 0 }`
+            without hitting the database. The
+            intent is to require the user to
+            type a search term before any work
+            happens.
+
+        14. **`/api/opd-refund-bills/find-opd-billings/{id}`
+            filters the OPD bill to only
+            still-refundable items.** The
+            filter is `!isCancel &&
+            cancellable && !alreadyInRefundBill`
+            applied to services, procedures,
+            and pharmacy items. Items that have
+            already been refunded (in any
+            `OpdRefundBill` linked to this
+            `OPDBilling`) are excluded.
+
+        15. **`/api/package-bills/room-types` is
+            the most divergent route in the
+            OPD module.** Manual session
+            check, raw `prisma` call, no
+            `*Handler` wrapper, no service
+            layer, returns a non-standard
+            envelope `{ roomTypes: [...] }`, and
+            a 400 on missing `patientId` with a
+            custom error shape `{ error: "..." }`.
+            Should be refactored to use the
+            `apiHandler` / `enhancedApiHandler`
+            + service pattern.
+
+        16. **`/api/package-bills/service-packages`
+            force-overrides `status` to
+            `ACTIVE`** when missing
+            (`status: query.status ?? "ACTIVE"`)
+            — different from the
+            `/api/service-package` route which
+            respects the `status` filter.
+
+        17. **`/api/proxybill-by-patientId/{id}`
+            has a leftover
+            `console.log("Patient Id route", id)`
+            in the handler.** Should be removed
+            in a separate cleanup.
+
+        18. **`OpdBillingRepository.getOPDBillingPharmacySale`
+            is a stub** — the `include` block
+            is commented out, so the
+            `OPDBillingPharmacySale` rows
+            returned have **no nested data**
+            (no `OPDBilling`, no `pharmacySale`,
+            no `opdBillingPharmacySaleItems`).
+            The route is used for the
+            link-table admin screen and the
+            slim shape is intentional, but the
+            call-site cast (`return logs as
+            unknown as OPDBillingPharmacySale[]`)
+            hides the fact that the rows are
+            empty.
+
+        19. **`OpdBillingService.updateOPDBillingPaymentStatus`
+            has a payment-status-handler
+            pattern** — `PAID` /
+            `UNPAID` / `CANCEL` are each
+            handled by a separate state handler
+            (`OpdPaidHandler`,
+            `OpdUnpaidStateHandler`,
+            `OpdCancelStateHandler`). The
+            cancel handler rolls back member-card
+            usage counters via
+            `opdMemberCardService.updateUsageWhenPaymentStatusCancel`
+            inside the same `prisma.$transaction`
+            as the billing update. This is
+            exposed only via server actions,
+            not the REST surface.
+
+        20. **The `OPDBilling` schema is the
+            largest single entity documented
+            in the project so far** (~60
+            top-level fields when decorated).
+            The 6-stage decoration chain means
+            a single response can be several
+            KB. The by-id routes
+            (`/opd-billings/{id}`,
+            `/opd-billings/{id}/details`) both
+            return this shape.
+
+  - id: ot
+    kind: rest
+    status: documented
+    routes_count: 13
+    files:
+      - src/app/api/(ot)/appointments-for-ot/route.ts
+      - src/app/api/(ot)/doctors-for-ot/[ids]/route.ts
+      - src/app/api/(ot)/ipd-ot-requests/route.ts
+      - src/app/api/(ot)/ipd-ot-requests/[id]/route.ts
+      - src/app/api/(ot)/ot-infection-screening/route.ts
+      - src/app/api/(ot)/ot-request-by-patient/route.ts
+      - src/app/api/(ot)/ot-request-list/route.ts
+      - src/app/api/(ot)/ot-requests/[id]/route.ts
+      - src/app/api/(ot)/ot-requests-for-proxy/route.ts
+      - src/app/api/(ot)/ot/[id]/route.ts
+      - src/app/api/(ot)/ot/[id]/activities/route.ts
+      - src/app/api/(ot)/ot/list/route.ts
+      - src/app/api/(ot)/patients-for-ot/route.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/ot/services/ot-container.service.ts
+      - src/app/(dashboard)/shared/ot/services/ot.service.ts
+      - src/app/(dashboard)/shared/ot/services/ipd-ot-request.service.ts
+      - src/app/(dashboard)/shared/ot/repositories/ot.repository.ts
+      - src/app/(dashboard)/shared/ot/repositories/ipd-ot-request.repository.ts
+      - src/app/(dashboard)/shared/ot/schemas/ot.schema.ts
+      - src/app/(dashboard)/shared/ot/schemas/create-ipd-ot-request.schema.ts
+      - src/app/(dashboard)/shared/ot/types/ot-request.type.ts
+      - src/app/(dashboard)/shared/ot/utils/ot-staff.utils.ts
+      - src/app/(dashboard)/shared/proxy-bill/schemas/proxy-bill.schema.ts
+      - src/app/(dashboard)/shared/proxy-bill/repositories/proxy-bill.repository.ts
+      - src/app/(dashboard)/shared/proxy-bill/services/proxy-bill-template.service.ts
+      - src/app/(dashboard)/common/patients/features/schemas/get-patients-schema.ts
+      - src/utils/infection-screening.ts
+    shared_schemas:
+      - OtProxyBill
+      - OtActivityLog
+      - OtRequest
+      - IpdOtRequest
+      - OtRequestWithStaff
+      - SurgeonDetails
+      - NurseDetails
+      - DoctorForOtRequest
+      - CreateProxyBillRequest
+      - ProxyBillServiceBillInput
+      - ProxyBillProcedureBillInput
+      - ProxyBillServicePackageBillInput
+      - ProxyBillPharmacyBillInput
+      - ProxyPharmacySaleItemInput
+      - ServiceBillItemInput
+      - ProcedureBillItemInput
+      - ServicePackageBillItemInput
+      - StockInput
+      - SubPriceSchema
+      - GetOtListResponse
+      - GetOtByIdResponse
+      - GetOtActivitiesResponse
+      - CreateOtProxyBillResponse
+      - GetOtRequestListResponse
+      - GetOtRequestByIdResponse
+      - GetIpdOtRequestListResponse
+      - GetOtRequestsForProxyResponse
+      - GetOtRequestByPatientResponse
+      - GetOtInfectionScreeningResponse
+      - GetAppointmentsForOtResponse
+      - GetPatientsForOtResponse
+      - GetDoctorsForOtResponse
+      - GetOtRequestForProxyLabelResponse
+    procedures:
+      - GET /api/ot/list
+      - POST /api/ot/list
+      - GET /api/ot/{id}
+      - GET /api/ot/{id}/activities
+      - GET /api/ot-request-list
+      - GET /api/ot-request-by-patient
+      - GET /api/ot-requests/{id}
+      - GET /api/ot-requests-for-proxy
+      - GET /api/ot-infection-screening
+      - GET /api/ipd-ot-requests
+      - GET /api/ipd-ot-requests/{id}
+      - GET /api/appointments-for-ot
+      - GET /api/patients-for-ot
+      - GET /api/doctors-for-ot/{ids}
+    notes: |
+      14 procedures (13 GET routes + 1 POST). The
+      `OTContainerService` is a 16-dep composition
+      root (12 private + 3 public EMR service
+      singletons + 1 `otService` getter) wiring
+      `OTService` ← `OTRepository` +
+      `ProxyBillRepository` + `ProxyBillStockService`
+      + `IPDDailyBillService` +
+      `ProxyBillIPDMembershipService` +
+      `IPDOTRequestRepository` + `IPDOTRequestService`
+      + 9 more (stock, pharmacy sale, patient repo,
+      EMR service singletons).
+
+      Key findings:
+
+        1. **No RBAC on any of the 14 endpoints.**
+           All use `auth: { required: true }` with
+           no `permissions` array. OT data is
+           clinically sensitive (vital signs,
+           serology, surgical team, infection
+           screening, IPD room) — RBAC gating may
+           be appropriate.
+
+        2. **`OTService` extends
+           `ProxyBillTemplateService`** with
+           `department = DepartmentEnum.OT` and
+           `pharmacyBillInvoicePrefix = "OT"`. So
+           IPD daily bills generated from OT bills
+           get the `OT-MM-YY-NNNNNN` prefix. The
+           `createOTProxyBill` flow chains:
+             - resolve OT request
+               (`resolveOTRequestForOPDProxyBill`
+               if OPD/ED, requires `appointmentId`;
+               `resolveOTRequestForIPDProxyBill` if
+               IPD, requires `otRequestId` +
+               `admissionId`),
+             - call `super.createProxyBill(...)`,
+             - create `ProxyBillRequestLink`
+               (`requestType: "OT"`),
+             - `markOTRequestAsBilled` (sets
+               `hasServicesAdded: true`; for IPD
+               also sets `status: COMPLETED`).
+
+        3. **`mainProcedureId` is required at OT
+           proxy-bill create time.** Enforced by
+           `createProxyBillSchema.superRefine` when
+           `departmentType === DepartmentEnum.OT`
+           (the `endoRequestId` / `hdRequestId`
+           cross-department fields are NOT
+           validated for presence — they may be
+           present but unused for OT). The
+           `proxyMainProcedure` sidecar table
+           stores the link.
+
+        4. **Two on-miss semantics for OT request
+           by-id routes.** `/api/ipd-ot-requests/{id}`
+           returns
+           `success: false, result: null, message: "OT request not found"`
+           with HTTP 200 (the route does NOT throw
+           404). `/api/ot-requests/{id}` is the slim
+           label projection and returns
+           `result: null` on miss (also HTTP 200,
+           `success: true`).
+
+        5. **`OTRequest` has 6 `String[]` columns
+           for staff** — `surgeonId`, `anesthetistId`,
+           `assistantDoctorId`, `assistantNurseId`
+           (arrays of doctor/user ids). The flat
+           `OTRequestList` validator does NOT
+           materialise these. The by-id route
+           (`/ipd-ot-requests/{id}`) materialises
+           them via `findByIdWithStaff` →
+           `fetchAllOTStaff` (4 parallel queries
+           against `prisma.doctor` / `prisma.user`).
+           Note: assistant-nurse ids point to
+           `User.id`, not `Doctor.id`.
+
+        6. **OT request list is `OTRequestList`
+           (flat), NOT the IPD wrapper.** Backed
+           by
+           `IPDOTRequestRepository.getOTRequestList`
+           using the `otRequestListValidator`. The
+           IPD-side list (`/ipd-ot-requests`) uses
+           the `ipdOTRequestValidator` and returns
+           `{ ipdOTRequests, count }`. Both share
+           the same `getOTRequestSchema` filter
+           set.
+
+        7. **`OTRequest` status state machine is
+           server-side enforced.** From
+           `IPDOTRequestService.updateOTRequestStatus`:
+             - `CANCELLED` and `COMPLETED` are
+               terminal (no transitions out).
+             - `APPROVED → BOOKED` blocked.
+             - `BOOKED` → `APPROVED` or `CANCELLED`
+               only.
+             - `APPROVED` → `CANCELLED` only, and
+               blocked when `hasServicesAdded: true`.
+             - OPD / EMERGENCY: status syncs to
+               the linked appointment
+               (`REQUESTED → BOOKED`,
+               `APPROVED → CONFIRMED`,
+               `CANCELLED → CANCELLED`).
+
+        8. **`otRequest-by-patient` reshapes the
+           response** for the patient-context view:
+             - `otRequestId` ← `requestId`
+             - `procedure`   ← `operationType`
+             - `remarks`     ← `remark`
+           The route accepts `patientId` (min 1
+           char) and optional `appointmentId` /
+           `admissionId`. The `patientId` schema
+           uses `z.string().min(1)` — NOT a UUID,
+           unlike most other routes.
+
+        9. **The OT infection-screening endpoint
+           uses `getInfectionScreeningDisplay`**
+           (`src/utils/infection-screening.ts`)
+           to map the serology fields
+           (`hbAg | hcv | hiv | vdrl | otherScreening`)
+           to `"Positive" | "Negative" | "Pending"`.
+           The `isPositiveAlert` field is
+           `displayLabel === "Positive"`. The
+           endpoint derives from the **latest
+           APPROVED OT request** for the patient
+           (or returns the empty state if none).
+
+        10. **The `tab` filter on OT request list
+            is mapped to a `patientType` filter.**
+            The schema enum is `[OPD, IPD, EMERGENCY]`
+            but the repository's `typeMap` also
+            recognises `LOCAL` and `FOREIGNER` as
+            `PatientType` values — the schema does
+            not expose them, but the repository
+            would honour them if passed. Defaults
+            to `OPD`.
+
+        11. **OT module is split across two
+            service instances.** Routes
+            `ot/list` / `ot/{id}` /
+            `ot/{id}/activities` /
+            `ot-requests-for-proxy` /
+            `appointments-for-ot` /
+            `patients-for-ot` /
+            `ot-infection-screening` go through
+            `OTContainerService.otService.*`.
+            Routes `ot-request-list` /
+            `ot-request-by-patient` /
+            `ot-requests/{id}` /
+            `ipd-ot-requests` /
+            `ipd-ot-requests/{id}` /
+            `doctors-for-ot/{ids}` go through
+            the standalone `ipdOTRequestService`
+            singleton. There is no DI / IoC
+            framework — every route file
+            `new`s its own service or imports
+            the singleton.
+
+        12. **Manifest drift** — the existing
+            manifest listed two stale files
+            that don't exist:
+            `src/app/api/(ot)/ot-requests/route.ts`
+            (no GET on the bare `ot-requests`
+            path; only the `[id]` child route
+            exists) and
+            `src/app/api/(ot)/ot/route.ts`
+            (the list endpoint lives at
+            `ot/list/route.ts` and exports BOTH
+            `GET` and `POST`). The actual file
+            count is **13** (not the manifest's
+            15, even though the manifest
+            `routes_count: 13` accidentally
+            matched the file count). The new
+            `routes_count: 13` reflects the
+            real route-file count and the
+            `procedures` list reflects the 14
+            operations (since `ot/list` serves
+            both GET and POST on one file).
+
+        13. **`/doctors-for-ot/{ids}` takes a
+            comma-separated ids path param.**
+            The route splits on `,` and trims
+            whitespace per id. Empty ids are
+            filtered out before the
+            `prisma.doctor.findMany` call.
+
+        14. **`/ot-requests-for-proxy` requires
+            both `patientId` AND `admissionId`
+            (UUID).** Returns `{ id, label }`
+            shaped rows. Filters to
+            `status: APPROVED,
+            hasServicesAdded: false, no active
+            proxyBillRequestLink, ipdOTRequest.admissionId
+            = input`. This is the picker used
+            by the proxy-bill UI to link the new
+            bill to a specific OT request.
+
+  - id: pharmacy
+    kind: rest
+    status: pending
+    routes_count: 34
+    files:
+      - src/app/api/(pharmacy)/change-selling-price/route.ts
+      - src/app/api/(pharmacy)/change-selling-price/history/route.ts
+      - src/app/api/(pharmacy)/expiry-update-stocks/route.ts
+      - src/app/api/(pharmacy)/expiry-update-stocks/[id]/route.ts
+      - src/app/api/(pharmacy)/foc-items/route.ts
+      - src/app/api/(pharmacy)/foc-items-in-stock/route.ts
+      - src/app/api/(pharmacy)/grns/return-types/route.ts
+      - src/app/api/(pharmacy)/grns/returns/route.ts
+      - src/app/api/(pharmacy)/grns/returns/[id]/route.ts
+      - src/app/api/(pharmacy)/grns/returns/items/[id]/route.ts
+      - src/app/api/(pharmacy)/ipd-pharmacy-sales/by-admission/route.ts
+      - src/app/api/(pharmacy)/latest-price-list/route.ts
+      - src/app/api/(pharmacy)/maximum-retail-price/route.ts
+      - src/app/api/(pharmacy)/opd-pharmacy-transfers/route.ts
+      - src/app/api/(pharmacy)/opd-pharmacy-transfers/[id]/route.ts
+      - src/app/api/(pharmacy)/pharmacy-sales/route.ts
+      - src/app/api/(pharmacy)/pharmacy-sales/[id]/route.ts
+      - src/app/api/(pharmacy)/pharmacy-sales/by-patient/route.ts
+      - src/app/api/(pharmacy)/pharmacy-sales/by-patient/[id]/route.ts
+      - src/app/api/(pharmacy)/pharmacy-transfers/route.ts
+      - src/app/api/(pharmacy)/pharmacy-transfers/[id]/route.ts
+      - src/app/api/(pharmacy)/pharmacy-transfers/by-admission/route.ts
+      - src/app/api/(pharmacy)/purchase-orders/route.ts
+      - src/app/api/(pharmacy)/purchase-requests/route.ts
+      - src/app/api/(pharmacy)/purchase-requests/[id]/route.ts
+      - src/app/api/(pharmacy)/purchase-requests/items-advanced-search/route.ts
+      - src/app/api/(pharmacy)/purchased-price-updates/route.ts
+      - src/app/api/(pharmacy)/purchased-price-updates/[id]/route.ts
+      - src/app/api/(pharmacy)/purchased-price-updates/[id]/activity-logs/route.ts
+      - src/app/api/(pharmacy)/sale-returns/route.ts
+      - src/app/api/(pharmacy)/sale-returns/[id]/route.ts
+      - src/app/api/(pharmacy)/stock/batch/route.ts
+      - src/app/api/(pharmacy)/store-mapping/route.ts
+      - src/app/api/(pharmacy)/stores/route.ts
+    shared_schemas: [PharmacySale, SaleReturn, GRN, PurchaseRequest, PurchaseOrder, Stock, Batch, Store, StockTransfer, FOCItem, ExpiryUpdateStock, ChangeSellingPrice, PurchasedPriceUpdate]
+
+  # =========================================================================
+  # tRPC modules — one per router under src/lib/trpc/routers/
+  # =========================================================================
+
+  - id: trpc-auth
+    kind: trpc
+    status: documented
+    routes_count: 5
+    files: [src/lib/trpc/routers/auth.ts]
+    shared_schemas: [Session, SuccessMessage]
+    procedures:
+      - auth.login
+      - auth.getSession
+      - auth.changePassword
+      - auth.resetPassword
+      - auth.logout
+    notes: |
+      Documents an apparent bug in `auth.resetPassword`: the
+      `verifyPasswordProcedure` base input schema (which requires
+      `verifyPassword`) is overridden by `.input(resetPasswordSchema)`,
+      so the middleware will read `input.verifyPassword` as `undefined`
+      at runtime. Captured as `x-security-note` on the operation.
+
+  - id: trpc-users
+    kind: trpc
+    status: documented
+    routes_count: 6
+    files:
+      - src/lib/trpc/routers/users.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/user-management/users/features/types/index.ts
+      - src/app/(dashboard)/common/user-management/users/features/schemas/create-user-schema.ts
+      - src/app/(dashboard)/common/user-management/users/features/schemas/edit-user-schema.ts
+      - src/app/(dashboard)/common/user-management/users/features/schemas/get-user-schema.ts
+      - src/app/(dashboard)/common/user-management/users/features/user-service.ts
+      - src/app/(dashboard)/common/user-management/users/features/users-repository.ts
+    shared_schemas: [User, UserSummary, UserReference, UserStatus, UserWithPassword]
+    procedures:
+      - users.getUsers
+      - users.getTotalUsersCount
+      - users.createUser
+      - users.getUserById
+      - users.editUser
+      - users.deleteUser
+    notes: |
+      This router OWNS the canonical `User` type. Resolves the
+      `trpc-auth.Session.user` and `trpc-roles.Role.createdBy` /
+      `updatedBy` placeholders (both now point to schemas defined here).
+
+      Two security findings:
+        1. `editUser` and `deleteUser` responses include the Argon2
+           `password` hash. The repository's `updateUser` and
+           `deleteUser` methods do not pass `omit: { password: true }`
+           to Prisma. Documented via the `UserWithPassword` schema
+           and `x-security-notes` in paths/trpc-users.yaml.
+        2. All six procedures use `authProcedure` rather than
+           `authorizeProcedure`. Any authenticated user can manage
+           users. Worth confirming with the team.
+
+      Side benefit: `RoleSummary` was added to trpc-roles.yaml to
+      back the `User.role` partial projection
+      (`Pick<Role, "id" | "name" | "permissions" | "isSuperadmin">`).
+
+  - id: trpc-units
+    kind: trpc
+    status: documented
+    routes_count: 6
+    files:
+      - src/lib/trpc/routers/units.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/set-up/units/features/schemas/create-unit-schema.ts
+      - src/app/(dashboard)/common/set-up/units/features/schemas/update-unit-schema.ts
+      - src/app/(dashboard)/common/set-up/units/features/schemas/validate-unit-id-schema.ts
+      - src/app/(dashboard)/common/set-up/units/features/types/index.ts
+      - src/app/(dashboard)/common/set-up/units/features/unit-service.ts
+      - src/app/(dashboard)/common/set-up/units/features/unit-repository.ts
+    shared_schemas: [Unit]
+    procedures:
+      - units.createUnit
+      - units.getUnits
+      - units.getUnitTotalCount
+      - units.getUnitById
+      - units.updateUnitById
+      - units.deleteUnitById
+    notes: |
+      The `Unit` shape is fully populated (`createdBy`, `updatedBy`)
+      on every read AND write — the `unit-repository.ts` uses
+      `include: { createdBy: true, updatedBy: true }` consistently
+      across all six Prisma calls (create / getMany / getByAbbrev /
+      getById / getByName / update). No Bare/Full split for this
+      module, unlike `trpc-departments` / `trpc-stores` /
+      `trpc-categories` / `trpc-sub-categories`. `deleteUnitById`
+      returns `void` and the router wraps success in
+      `{ message: "Unit deleted successfully!" }`.
+
+      Activity logging is complete for all three mutating operations
+      (create, update, delete) — none of the half-finished call sites
+      seen in `trpc-categories` appear here.
+
+      Three minor code-hygiene findings:
+        1. `UnitService.getUnitById` calls
+           `unitRepository.getUnitById` twice in a row
+           (unit-service.ts:64, 68) — the second call is on the
+           success path after the existence check. No behavioral
+           effect, just an extra DB round-trip.
+        2. Inconsistent uniqueness semantics — `getUnitByName` uses
+           case-insensitive **contains** (so a new "Test 2" would
+           collide with an existing "Test"), while
+           `getUnitByAbbreviation` uses case-insensitive **equality**.
+           Two checks on the same field behave differently.
+        3. `defaultQuerySchema` `transform` is applied here too
+           (via `unitService.getUnits(input)`), so the effective input
+           to the repository is `{ page, limit, offset, search?, start?, end? }`.
+           No router-specific filter extensions (unlike
+           `trpc-sub-categories` which adds `categoryId`).
+
+      All six procedures use `authProcedure` — no
+      `verifyPasswordProcedure` (and thus no input-schema-override
+      bug), no `authorizeProcedure`. Any authenticated user can
+      manage units. Consistent with the rest of the Setup routers.
+
+  - id: trpc-departments
+    kind: trpc
+    status: documented
+    routes_count: 6
+    files:
+      - src/lib/trpc/routers/departments.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/user-management/departments/features/type/index.ts
+      - src/app/(dashboard)/common/user-management/departments/features/schemas/create-departments-schema.ts
+      - src/app/(dashboard)/common/user-management/departments/features/schemas/update-departments-schem.ts
+      - src/app/(dashboard)/common/user-management/departments/features/departments-service.ts
+      - src/app/(dashboard)/common/user-management/departments/features/departments-repository.ts
+    shared_schemas: [Department, DepartmentSummary, Publisher]
+    procedures:
+      - departments.getDepartments
+      - departments.getDepartmentCounts
+      - departments.getDepartmentById
+      - departments.createDepartment
+      - departments.updateDepartment
+      - departments.deleteDepartment
+    notes: |
+      This router OWNS the canonical `Department` type and the
+      `DepartmentSummary` projection referenced by trpc-users.yaml
+      (`User.department`). Resolves that placeholder.
+
+      Three findings:
+        1. `deleteDepartment` uses `verifyPasswordProcedure` with the
+           same input-schema-override bug as `auth.resetPassword` —
+           the base `{ verifyPassword }` schema is overridden by
+           `.input({ id })`, so the middleware reads `undefined`.
+           Documented under `x-security-note` on the operation.
+        2. **TS type/runtime mismatch** — the `Department` TS type
+           declares `createdBy: Publisher` and `updatedBy: Publisher | null`,
+           but the write methods (`createDepartment`, `updateDepartment`,
+           `deleteDepartment`) all call Prisma without an `include`
+           directive, so the response is the bare record. The bare
+           shape is exposed as `DepartmentBare`; the `x-runtime-populated-by`
+           note on `Department` explains which methods populate the
+           nested fields.
+        3. **Source filename typo** — the import points to
+           `update-departments-schem.ts` (missing trailing `a`). Same
+           misspelling in the router import statement. Not blocking.
+
+  - id: trpc-categories
+    kind: trpc
+    status: documented
+    routes_count: 5
+    files:
+      - src/lib/trpc/routers/categories.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/set-up/categories/features/type/index.ts
+      - src/app/(dashboard)/common/set-up/categories/features/schema/create-category-schema.ts
+      - src/app/(dashboard)/common/set-up/categories/features/schema/update-category-schema.ts
+      - src/app/(dashboard)/common/set-up/categories/features/categories-service.ts
+      - src/app/(dashboard)/common/set-up/categories/features/categories-repository.ts
+    shared_schemas: [Category]
+    procedures:
+      - categories.getCategories
+      - categories.getCategoryCounts
+      - categories.createCategory
+      - categories.updateCategory
+      - categories.deleteCategory
+    notes: |
+      References the canonical `common.yaml#/Publisher` (not redefined
+      locally). Convention breaks from Department/Store:
+        - `getCategories` response uses `{ categories, count }` (not
+          `{ data, count }`).
+        - `deleteCategory` uses plain `authProcedure` (not
+          `verifyPasswordProcedure`) — no input-schema-override bug.
+        - `getCategories` / `getCategoryCounts` filter to top-level
+          categories only (`parentCategoryId: null`). Sub-categories
+          are managed by `trpc-sub-categories`.
+        - `createCategory` and `updateCategory` schemas have only
+          `name` (no `description`).
+
+      Same TS/runtime mismatch as Department/Store: write methods
+      return bare records (documented via `CategoryBare`).
+
+      Two minor activity-log issues:
+        1. `updateCategory` does not call `activityLogger.log` at all.
+        2. `deleteCategory` calls `activityLogger.log` with
+           `userId: undefined` and missing `entity` / `entityId`.
+
+  - id: trpc-sub-categories
+    kind: trpc
+    status: documented
+    routes_count: 5
+    files:
+      - src/lib/trpc/routers/sub-categories.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/set-up/sub-categories/features/type/index.ts
+      - src/app/(dashboard)/common/set-up/sub-categories/features/schema/create-sub-category-schema.ts
+      - src/app/(dashboard)/common/set-up/sub-categories/features/schema/update-sub-category-schema.ts
+      - src/app/(dashboard)/common/set-up/sub-categories/features/schema/get-subcategories-schema.ts
+      - src/app/(dashboard)/common/set-up/sub-categories/features/sub-categories-service.ts
+      - src/app/(dashboard)/common/set-up/sub-categories/features/sub-categories-repository.ts
+    shared_schemas: [SubCategory, CategorySummary]
+    procedures:
+      - subCategories.getSubCategories
+      - subCategories.subCategoryTotalCounts
+      - subCategories.createSubCategory
+      - subCategories.updateSubCategory
+      - subCategories.deleteSubCategory
+    notes: |
+      **Architectural note:** sub-categories are NOT a separate table.
+      They are rows in the same `Category` table where
+      `parentCategoryId IS NOT NULL`. The router's repository enforces
+      this with `where: { parentCategoryId: { not: null } }`. Together,
+      the `trpc-categories` and `trpc-sub-categories` routers form the
+      full CRUD surface for `Category`, split by the parent predicate.
+
+      Convention breaks from Department/Store/Category:
+        - Response uses `{ subCategories, count }` (yet another field
+          name pattern).
+        - `getSubCategories` schema adds a `categoryId` filter (restricts
+          to a specific parent).
+        - `createSubCategory` and `updateSubCategory` require
+          `parentCategoryId` (mandatory for sub-categories).
+        - `deleteSubCategory` checks `Item` references (not users).
+
+      Two cross-module references established/resolved:
+        1. `SubCategory.parentCategory` references the new
+           `trpc-categories.yaml#/CategorySummary` (also added in this
+           turn).
+        2. `createdBy` / `updatedBy` reference the canonical
+           `common.yaml#/Publisher`.
+
+      Same TS/runtime mismatch on `parentCategory` / `createdBy` /
+      `updatedBy` as Department/Store/Category (documented via
+      `SubCategoryBare`).
+
+      Unlike `trpc-categories`, this router's `updateSubCategory` and
+      `deleteSubCategory` correctly populate the `activityLogger` payload.
+
+  - id: trpc-payment-methods
+    kind: trpc
+    status: documented
+    routes_count: 6
+    files:
+      - src/lib/trpc/routers/payment-methods.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/set-up/payment-method/features/schemas/create-payment-method.ts
+      - src/app/(dashboard)/common/set-up/payment-method/features/schemas/update-payment-method.ts
+      - src/app/(dashboard)/common/set-up/payment-method/features/type/index.ts
+      - src/app/(dashboard)/common/set-up/payment-method/features/payment-methods-service.ts
+      - src/app/(dashboard)/common/set-up/payment-method/features/payment-methods-repository.ts
+    shared_schemas: [PaymentMethod]
+    procedures:
+      - paymentMethods.getPaymentMethods
+      - paymentMethods.getPaymentMethodById
+      - paymentMethods.getPaymentMethodsTotalCount
+      - paymentMethods.createPaymentMethod
+      - paymentMethods.updatePaymentMethod
+      - paymentMethods.deletePaymentMethod
+    notes: |
+      Second "clean" module after `trpc-units` — repository uses
+      `include: { createdBy: true, updatedBy: true }` consistently
+      on every Prisma call. No Bare/Full split.
+
+      Notable: `deletePaymentMethod` returns the **deleted row**
+      (the repo's `prisma.paymentMethod.delete` returns the row, the
+      service forwards it). This is the inverse of `trpc-units`
+      whose delete returns `void` and is wrapped in `{ message }`
+      at the router. Both styles are valid; just inconsistent
+      across the Setup routers.
+
+      Activity logging is complete for all three mutating
+      operations (create, update, delete). No half-finished call
+      sites (unlike `trpc-categories`).
+
+      Five inconsistencies / minor findings flagged:
+        1. `getPaymentMethodById` and `deletePaymentMethod` accept
+           `z.string()` (bare id); `updatePaymentMethod` uses
+           `validateIdSchema` (`{ id }`). The client must match the
+           router's expected shape per-procedure.
+        2. `createPaymentMethod` error message: **"Payment method
+           name already exits"** (typo: "exits" instead of
+           "exists", preserved verbatim from
+           payment-methods-service.ts:21). `updatePaymentMethod`
+           correctly says "exists".
+        3. Revalidation path is singular: `/set-up/payment-method`
+           (other setup resources use the plural form).
+        4. `getPaymentMethodById` does NOT 404 on miss — the service
+           returns the Prisma result (which may be `null`)
+           directly. This is a **silent contract difference** for
+           clients — they receive `{ result: { data: null } }` for
+           a missing id rather than a 404 envelope. `units.getUnitById`
+           and `updatePaymentMethod` do throw 404.
+        5. Three cross-module FK checks on delete (run in a
+           `prisma.$transaction`): `DefaultSetting`,
+           `SupplierPaymentInfo`, `OPDBilling`. The richest set of
+           delete-validations in the Setup routers documented so far.
+
+      All six procedures use `authProcedure` — no
+      `verifyPasswordProcedure` (and thus no input-schema-override
+      bug), no `authorizeProcedure`.
+
+  - id: trpc-roles
+    kind: trpc
+    status: documented
+    routes_count: 5
+    files:
+      - src/lib/trpc/routers/roles.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/user-management/roles/features/utils.ts
+      - src/app/(dashboard)/common/user-management/roles/features/types/index.ts
+      - src/app/(dashboard)/common/user-management/roles/features/schemas/base-role-form-schema.ts
+      - src/app/(dashboard)/common/user-management/roles/features/schemas/create-role-schema.ts
+      - src/app/(dashboard)/common/user-management/roles/features/schemas/edit-role-schema.ts
+      - src/utils/pagination-utils.ts
+    shared_schemas: [Role, Permission, Action, Subject, PaginationQuery]
+    procedures:
+      - roles.getRoles
+      - roles.createRole
+      - roles.getRoleById
+      - roles.updateRole
+      - roles.deleteRole
+    notes: |
+      This router OWNS the RBAC vocabulary: the `Action` and `Subject` enums
+      (utils.ts:6-228) are referenced by every other `authorizeProcedure` call
+      site across the project.
+
+      Security flag: all five procedures use `authProcedure` rather than
+      `authorizeProcedure`. Any authenticated user can create / update /
+      delete roles and their permissions. Captured under `x-security-notes`
+      in docs/paths/trpc-roles.yaml.
+
+      The shared `defaultQuerySchema` (pagination-utils.ts:49-57) was promoted
+      to common.yaml#/PaginationQuery since it's used by every list-style
+      tRPC procedure.
+
+  - id: trpc-suppliers
+    kind: trpc
+    status: documented
+    routes_count: 6
+    files:
+      - src/lib/trpc/routers/suppliers.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/set-up/suppliers/features/schemas/create-supplier-schema.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/schemas/update-supplier-schema.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/schemas/query-supplier-schema.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/schemas/validate-id-schema.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/supplier-service.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/supplier-repository.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/supplier-errors.ts
+      - src/app/(dashboard)/common/set-up/suppliers/features/types/index.ts
+    shared_schemas:
+      - Supplier
+      - ContactPerson
+      - PaymentInfo
+      - ContactPersonInput
+      - PaymentInfoInput
+      - CreateSupplierInput
+      - UpdateSupplierInput
+      - DeleteSupplierInput
+      - SupplierQueryInput
+      - GetSuppliersResponse
+      - GetTotalSuppliersCountResponse
+    procedures:
+      - suppliers.createSupplier
+      - suppliers.getSuppliers
+      - suppliers.getTotalSuppliersCount
+      - suppliers.getSupplierById
+      - suppliers.updateSupplierById
+      - suppliers.deleteSupplierById
+    notes: |
+      CRUD over the `Supplier` model. Six procedures; five use
+      `authProcedure`, `deleteSupplierById` uses
+      `verifyPasswordProcedure`. **None** use `authorizeProcedure` —
+      any authenticated user can manage suppliers. Suppliers are
+      upstream of GRN, purchase orders, and items, so this is a
+      privileged surface — worth gating behind a
+      `manage_suppliers` action subject.
+
+      Key findings:
+        1. **`supplierId` is a human-friendly code** generated
+           client-side by `generateCustomId("SID", lastSupplier?.supplierId)`
+           (e.g. `SID00001`, `SID00002`, ...). Monotonic with the
+           most recent supplier. The `supplierId` column has a
+           `@unique` constraint in Prisma, but uniqueness is
+           enforced at the service layer (not the DB) — if two
+           creates race, the second could theoretically land on the
+           same code before Prisma picks it up.
+        2. **`getSupplierById` returns `null` on miss** — the
+           service calls `prisma.supplier.findUnique(...)` directly
+           with no `throw if null`. Callers must check the result
+           for `null`.
+        3. **Full-replacement pattern on update** for child
+           tables. The repository's `updateSupplierById` runs a
+           5-step `prisma.$transaction`:
+             1. `deleteMany` on `SupplierContactPerson`.
+             2. `createMany` with the new contact persons.
+             3. `deleteMany` on `SupplierPaymentInfo`.
+             4. `createMany` with the new payment infos.
+             5. `update` the parent `Supplier` row.
+           **On conflict the entire transaction rolls back** —
+           the contact-person / payment-info changes are not
+           partially applied.
+        4. **Mutation responses are message-only** —
+           `createSupplier`, `updateSupplierById`, and
+           `deleteSupplierById` all return
+           `{ message: "..." }` and do NOT return the affected
+           row. This differs from `stores.updateStore` (returns
+           `StoreBare`) and `departments.updateDepartment` (returns
+           `DepartmentBare`). Callers needing the row should
+           re-fetch via `getSupplierById`.
+        5. **`status` is a boolean on the wire, an enum in
+           storage.** The service translates:
+             - `status: true`  → `supplierStatus.ACTIVE`.
+             - `status: false` → `supplierStatus.INACTIVE`.
+           So the wire schema (`CreateSupplierInput.status`) is
+           `boolean`, but the response shape (`Supplier.status`)
+           is the enum string. **The inverse encoding is a foot-gun
+           for clients** — the storage form has 2 values but the
+           wire form is `true` / `false`.
+        6. **`paymentInfos` empty-row filter**: the Zod schema
+           applies a `.transform` that drops entries where every
+           field is `null`/empty (i.e. an "empty row" the user
+           might have left in the form). This is a UX-friendly
+           shape on the wire but means a client cannot
+           programmatically send an empty array to mean "no
+           payment infos" — the transform normalises both.
+        7. **`bankId` is commented out in two places** —
+             - The Zod schema
+               (`create-supplier-schema.ts:26` /
+               `update-supplier-schema.ts:26`).
+             - The repository's `select` on `getSupplierById`
+               (`supplier-repository.ts:108-113`).
+           The `SupplierPaymentInfo.bankId` Prisma column exists,
+           but the wire shape doesn't surface it and the read
+           doesn't include the bank join. Looks like an
+           in-progress feature.
+        8. **Typo in `PaymentFrequency` enum** — the value is
+           `QUATERLY` (one A), not `QUARTERLY`. Preserved verbatim
+           from
+           `src/app/(dashboard)/common/set-up/suppliers/features/types/index.ts:18`.
+           Renaming would be a breaking change for any persisted
+           value.
+        9. **Same input-schema-override bug** as
+           `auth.resetPassword` / `departments.deleteDepartment` /
+           `stores.deleteStore` — the `verifyPasswordProcedure`
+           base schema (requiring `verifyPassword`) is overridden
+           by `.input(validateIdSchema)` (just `{ id }`), so the
+           middleware reads `undefined` at runtime.
+       10. **Source filename typo** — `supplier-repository.ts` is
+           missing the `s` in "repository" (`reposi t ory`). Same
+           misspelling in the import statement on
+           `suppliers.ts:4`.
+       11. **`revalidatePath("set-up/suppliers")` is called with
+           a non-`/` prefix** — other routers in this folder use
+           `revalidatePath("/set-up/...")`. Both work in Next.js
+           (the leading slash is optional for plain path strings)
+           but the inconsistency is worth flagging.
+       12. **Module-level singleton service**: the feature folder
+           exports `supplierService = new SupplierService(new
+           SupplierRepository(prisma))` at module scope
+           (`supplier-service.ts:148-150`). The router does not
+           import this singleton — it instantiates a fresh
+           `SupplierService` on every call. The singleton is
+           exported but unused (presumably for future use).
+
+  - id: trpc-stores
+    kind: trpc
+    status: documented
+    routes_count: 6
+    files:
+      - src/lib/trpc/routers/stores.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/set-up/stores/features/type/index.ts
+      - src/app/(dashboard)/common/set-up/stores/features/schema/create-store-schema.tsx
+      - src/app/(dashboard)/common/set-up/stores/features/schema/update-store-schema.tsx
+      - src/app/(dashboard)/common/set-up/stores/features/store-service.ts
+      - src/app/(dashboard)/common/set-up/stores/features/store-repository.ts
+    shared_schemas: [Store]
+    procedures:
+      - stores.getStores
+      - stores.storeTotalCounts
+      - stores.getStoreById
+      - stores.createStore
+      - stores.updateStore
+      - stores.deleteStore
+    notes: |
+      Structurally parallel to the `trpc-departments` module. The
+      `Publisher` type (id/fullName/username) was identical in both
+      feature folders and is now promoted to `common.yaml#/Publisher`.
+      `trpc-departments.yaml` was updated to reference the canonical
+      version; this module references it from the start.
+
+      Two findings (same patterns as trpc-departments):
+        1. `deleteStore` uses `verifyPasswordProcedure` with the
+           same input-schema-override bug as `auth.resetPassword`
+           and `departments.deleteDepartment`. Documented under
+           `x-security-note` on the operation.
+        2. **TS type/runtime mismatch** — `Store.createdBy` /
+           `updatedBy` are declared on the TS type but not populated
+           by the write methods (no `include` directive). Documented
+           via `StoreBare` and the `x-runtime-populated-by` note.
+
+      Minor: schema files use `.tsx` extension (no JSX in either).
+
+  - id: trpc-store-mapping
+    kind: trpc
+    status: documented
+    routes_count: 8
+    files:
+      - src/lib/trpc/routers/store-mapping.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/shared/pharmacy/services/store-mapping.service.ts
+      - src/app/(dashboard)/shared/pharmacy/repositories/store-mapping-repository.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/store/create-store-mapping-schema.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/store/update-store-mapping-schema.ts
+      - src/app/(dashboard)/shared/pharmacy/types/store-mapping.types.ts
+    shared_schemas:
+      - CreateStoreMappingInput
+      - UpdateStoreMappingInput
+      - DeleteStoreMappingInput
+      - GetStoreMappingsResponse
+      - GetTotalStoreMappingsCountResponse
+      - UserWithMappedStores
+      - UserWithMappedStoresById
+      - MappedStoreEntry
+      - CreatedStoreMappingRow
+      - SwitchStoresResponse
+    procedures:
+      - storeMapping.getStoreMappings
+      - storeMapping.storeMappingTotalCounts
+      - storeMapping.getStoreMappingById
+      - storeMapping.createStoreMapping
+      - storeMapping.updateStoreMapping
+      - storeMapping.deleteStoreMapping
+      - storeMapping.getSwitchStores
+    notes: |
+      CRUD over the `StoreMapping` model — the user × store join
+      that drives per-user store switching. 8 procedures; 7 use
+      `authProcedure`, `deleteStoreMapping` uses
+      `verifyPasswordProcedure`. **None** use `authorizeProcedure` —
+      any authenticated user can manage store mappings. Store
+      mappings drive per-user store switching, so this is a
+      privileged surface — worth gating behind a
+      `manage_store_mappings` action subject.
+
+      Architectural note: the read endpoints return rows rooted
+      at the `User` model (with `mappedStores[]` as a side
+      relation), not the `StoreMapping` model itself. The router
+      file lives under `routers/store-mapping.ts` but the
+      implementation is user-centric.
+
+      Key findings:
+        1. **`getStoreMappingById` takes a user id, not a
+           `StoreMapping` row id.** The router reads `id` from
+           the input and passes it straight to
+           `prisma.user.findFirst({ where: { id } })` — the table
+           being queried is `User`, not `StoreMapping`.
+        2. **Misleading "User already exists" / "User not found"
+           errors**. The service's
+           `storeMappingRepository.findExistingUser(userId)`
+           actually queries
+           `prisma.storeMapping.findFirst({ where: { userId } })`
+           — the check is really "user already has at least one
+           `StoreMapping` row" / "user has no `StoreMapping`
+           rows", not whether the user themselves exist. The
+           error messages "User already exists" (409 on create)
+           and "User not found" (404 on update / delete) are
+           misleading.
+        3. **`storeMappingTotalCounts` returns the raw
+           `prisma.storeMapping.groupBy` result**, NOT a single
+           count integer. The array length is the "number of
+           distinct users with a mapping" — but clients that
+           read the field as a single number will get a runtime
+           error. This is a silent-contract gotcha.
+        4. **Full-replacement pattern on update**. The
+           repository's `updateStoreMapping` runs a 2-step
+           `prisma.$transaction`:
+             1. `deleteMany` on `StoreMapping.userId`.
+             2. `create` (one per `storeId`).
+           **On conflict the entire transaction rolls back** —
+           the user is not left with partial mappings.
+        5. **Delete is a `deleteMany` on `userId`** (deletes ALL
+           `StoreMapping` rows for that user in one call). The
+           `deleteStoreMapping` mutation takes a single input
+           field `id` which the service uses as `userId` (the
+           field is renamed at the call site). The response is
+           the `deleteMany` result (`{ count }`).
+        6. **No date-range filter on `getStoreMappings`**. The
+           repository's `buildWhereQuery` only handles `search`
+           (and filters to users with `mappedStores: { some: {} }`).
+        7. **Misleading search filter** — the
+           `storeMappingRepository.buildWhereQuery` overrides the
+           default `search` semantics to only target `username`.
+           Other routers' `buildWhereQuery` match against
+           `fullName`, `username`, `phoneNo`, etc. This one only
+           does `username`. (Other prisma-searchable fields are
+           not searched.)
+        8. **Module-level singleton service is exported but
+           unused**. `storeMappingService = new
+           StoreMappingService(new StoreMappingRepository(prisma))`
+           is exported from `store-mapping.service.ts:58-60`, but
+           the router creates a fresh `StoreMappingService` on
+           every call. The singleton is presumably for future use
+           but adds a bit of dead code.
+        9. **Same input-schema-override bug** as
+           `auth.resetPassword` / `departments.deleteDepartment` /
+           `stores.deleteStore` / `suppliers.deleteSupplierById` —
+           the `verifyPasswordProcedure` base schema is
+           overridden by `.input({ id: z.string() })`, so the
+           middleware reads `undefined` at runtime.
+       10. **No activity logging on any of the three mutating
+           operations** — the service does not call
+           `activityLogger.log` on `createStoreMapping`,
+           `updateStoreMapping`, or `deleteStoreMapping`. This is
+           a gap relative to `SupplierService` (which logs
+           create / update / delete) and `StoreService` (which
+           logs create / update / delete). Worth adding.
+       11. **Empty `storeId` array is rejected** by both schemas
+           (`z.array(z.string()).min(1)`) — clients must send at
+           least one store.
+
+  - id: trpc-default-setting
+    kind: trpc
+    status: documented
+    routes_count: 3
+    files:
+      - src/lib/trpc/routers/default-setting.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/default-setting/features/schemas/create-default-setting-schema.ts
+      - src/app/(dashboard)/common/default-setting/features/schemas/update-default-setting-schema.ts
+      - src/app/(dashboard)/common/default-setting/features/type/index.ts
+      - src/app/(dashboard)/common/default-setting/features/default-setting-service.ts
+      - src/app/(dashboard)/common/default-setting/features/default-setting-repository.ts
+    shared_schemas: [DefaultSettingFull, DefaultSettingBare]
+    procedures:
+      - defaultSetting.getDefaultSetting
+      - defaultSetting.createDefaultSetting
+      - defaultSetting.updateDefaultSetting
+    notes: |
+      Smallest tRPC module — three procedures only. The
+      application treats the `DefaultSetting` Prisma model as a
+      singleton config row. The model itself does NOT have a
+      global unique constraint, but `storeId` is `@unique`, so at
+      most one row exists per referenced Store.
+
+      Notable findings:
+        1. **TS type / runtime mismatch on the wire** — the input
+           has `displayTaxField` and `displayFOCField` as
+           top-level fields, but the repository destructures them
+           out and writes them inside the `settings` JSON blob
+           (default-setting-repository.ts:38, 51). The returned
+           row has no top-level `displayTaxField` /
+           `displayFOCField`. The TS type `DefaultSetting`
+           (`type/index.ts:9-31`) reflects the **input** shape
+           for these fields; the `Settings` interface in the
+           same file is documented as "for type casting with
+           returned data from api endpoint".
+        2. **Bare/Full split**: `getDefaultSetting` returns the
+           full shape with `paymentMethod: {id,name}` and
+           `store: {id,name}` partial projections. The write
+           methods (`createDefaultSetting`, `updateDefaultSetting`)
+           return the **bare** row (no joined relations). The
+           client must call `getDefaultSetting` separately to
+           get the joined view.
+        3. **Schema/state drift**:
+             - `billTypeId` and `billType` are in the Prisma
+               model (nullable, with FK) but **commented out**
+               in both Zod schemas and the TS types. Looks like
+               an in-progress feature.
+             - `version` is in the Prisma model (`String?`) but
+               missing from the TS type and Zod schema entirely.
+             - `createdById` / `updatedById` are NOT in the
+               Prisma model. Activity logging uses `ctx.user.id`
+               for the log entry but does not record it on the
+               row. Unique in the application in this regard.
+             - `settings` is `Json` (not nullable) in Prisma,
+               but `JsonValue | null` in the TS type.
+        4. **Security: should be `authorizeProcedure`**. All
+           three procedures use `authProcedure`. The default
+           setting affects every downstream billing/alert flow,
+           so this is privileged access. Worth gating behind a
+           `manage_default_settings` action subject.
+        5. **No DB-level singleton enforcement**. `getDefaultSetting`
+           uses `findFirst` with no order, so if multiple rows
+           ever exist (across different `storeId`s), the
+           response is arbitrary. The application-level intent
+           is clearly a singleton.
+        6. **FK constraints use `onDelete: Cascade`** on
+           `paymentMethod` and `store`. This is why
+           `paymentMethods.deletePaymentMethod` checks
+           `DefaultSetting.paymentMethodId` before allowing the
+           delete (see `trpc-payment-methods`).
+        7. **Module-level singleton service**: the router
+           instantiates `defaultDefaultRepository` and
+           `defaultSettingService` at module scope
+           (default-setting.ts:9-12). A single service instance
+           lives in module memory for the process lifetime.
+        8. **Activity logging is complete** for both mutating
+           operations.
+        9. **`rounding` is a free-form string** (not a number) —
+           no value validation at the router layer. The
+           application interprets it downstream.
+
+  - id: trpc-items
+    kind: trpc
+    status: documented
+    routes_count: 2
+    files:
+      - src/lib/trpc/routers/items.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/items/features/items-service.ts
+      - src/app/(dashboard)/common/items/features/items-repository.ts
+      - src/app/(dashboard)/common/items/features/schemas/get-items-schema.ts
+      - src/app/(dashboard)/common/items/features/types/index.ts
+    shared_schemas:
+      - Item
+      - GetItemsInput
+      - GetItemsResponse
+    procedures:
+      - items.getItems
+      - items.getById
+    notes: |
+      **Read-only** tRPC surface over the `Item` model — only 2
+      procedures: `getItems` (paginated, searchable) and
+      `getById`. The full CRUD surface is reached via:
+        - REST: `src/app/api/(common)/items/route.ts` +
+          `src/app/api/(common)/items/[id]/route.ts` (documented
+          as the `common-items` sub-area).
+        - server actions: `src/app/(dashboard)/common/items/features/actions.ts`
+          (out of scope for OpenAPI).
+
+      Key findings:
+        1. **Search uses `startsWith`, not `contains`** — the
+           repository's `findItemsAndCount` builds the search
+           clause with
+           `name: { startsWith: query.search, mode: "insensitive" }`
+           for all three searched fields (`name`, `itemId`,
+           `generic`). This is different from
+           `trpc-suppliers.getSuppliers` which uses `contains`.
+           Two routers in the same setup area have inconsistent
+           search semantics.
+        2. **Inclusive `end` date** — the repository uses
+           `lte: query.end` (inclusive), not `lt` (exclusive).
+           Different from `trpc-suppliers.getSuppliers` which
+           uses `lt`.
+        3. **Decimal coercion** — `Item.taxValue` is read as
+           `Prisma.Decimal` and coerced via `Number(item.taxValue)`.
+           Lossy for high-precision tax rates; clients that need
+           exact decimals should re-fetch.
+        4. **Module-level singleton service** — `itemsService =
+           new ItemsService(new ItemsRepository(prisma), new
+           StockRepository(prisma))` is constructed at module
+           scope (items.ts:11-14) and shared across all calls.
+           This is the **only** tRPC router in the documented
+           set so far that uses a module-level singleton. The
+           `StockRepository` is wired in even though the current
+           read methods do not use it — the service's
+           `updateItem` does use
+           `stockRepository.getTotalStockQtyAcrossAllStores(id)`
+           for the unit-change guard, but the write methods are
+           not exposed on this tRPC router.
+        5. **No `getTotalCount` companion endpoint** — unlike
+           other Setup routers (which split list and count into
+           separate procedures), `itemsRouter` has no
+           `items.getTotalItemsCount`. Clients that need the
+           unfiltered total can compute it as
+           `getItems({ page: 1, limit: 0 })` (the repository's
+           `take: query.limit > 0 ? query.limit : undefined` makes
+           `limit: 0` return all rows, but it's an N+1 cost).
+        6. **Manifest drift** — the original `routes_count: ~8`
+           was a placeholder. The actual count is **2** — the
+           tRPC router is read-only. CRUD goes through REST
+           and server actions.
+        7. **`getById` input is a bare string, not an object**.
+           The router does `authProcedure.input(z.string())` —
+           clients send a JSON-encoded string as the request
+           body. Documented as a `type: string` in the
+           OpenAPI body schema.
+        8. **Allergic-status typo** — the type module exports
+           `illergyStatus` (sic — should be `allergyStatus`).
+           The enum value is `NON_ALLERGIC` (with an underscore)
+           which is preserved verbatim on the wire.
+        9. **`sellingPriceGroup` is included with no Pick** —
+           the repository's `include: { sellingPriceGroup: true }`
+           returns the full `SellingPriceGroup` Prisma model. The
+           `SellingPriceGroup` tRPC router is not yet documented
+           (a future task); the reference in the schema is a thin
+           pass-through.
+       10. **No `authorizeProcedure` gating** — both procedures
+           use `authProcedure`. Item data is not particularly
+           sensitive but the full inventory is exposed to any
+           logged-in user. Worth confirming with the team.
+
+  - id: trpc-hospital-info
+    kind: trpc
+    status: documented
+    routes_count: 2
+    files:
+      - src/lib/trpc/routers/hospital-info.ts
+      # Supporting files discovered while documenting this module:
+      - src/app/(dashboard)/common/hospital-info/features/hospital-info-service.ts
+      - src/app/(dashboard)/common/hospital-info/features/hospital-info-repository.ts
+      - src/app/(dashboard)/common/hospital-info/features/schemas/create-hospital-info.ts
+      - src/app/(dashboard)/common/hospital-info/features/types/index.ts
+    shared_schemas:
+      - HospitalInfo
+      - HospitalPhoneNumber
+      - CreateHospitalInfoInput
+      - GetHospitalInfoByIdResponse
+    procedures:
+      - hospitalInfo.getHospitalInfoById
+      - hospitalInfo.createHospitalInfo
+    notes: |
+      **Singleton config surface** — only 2 procedures:
+      `getHospitalInfoById` and `createHospitalInfo`. The
+      `HospitalInfo` Prisma model is treated as a single global
+      row.
+
+      Both procedures use `authProcedure` (no
+      `authorizeProcedure`). The hospital info drives the
+      header logo / footer / contact details on every page —
+      so this is a **privileged** surface. Worth gating
+      behind a `manage_hospital_info` action subject.
+
+      Key findings:
+        1. **Misnamed procedure** — `getHospitalInfoById` does
+           NOT take an id; it returns the singleton row. The
+           router declares
+           `getHospitalInfoById: authProcedure.query(...)` with
+           no `.input(...)`. The procedure name is a historical
+           artifact.
+        2. **`createHospitalInfo` is an upsert** — the same
+           procedure creates the row if it doesn't exist, or
+           updates it if it does. The service's logic is in
+           `hospital-info-service.ts:11-62` and uses
+           `hospitalInfoRepository.findOne()` to branch. The
+           update path runs a 3-step `prisma.$transaction`:
+             1. `deleteMany` on `HospitalPhoneNumber` for this
+                hospital.
+             2. `createMany` with the new phone-number rows.
+             3. `update` the parent `HospitalInfo` row.
+        3. **No activity logging** — the service does NOT call
+           `activityLogger.log` for create or update.
+           Hospital-info changes are not tracked in the
+           activity log. Worth adding for auditability.
+        4. **No `createdBy` / `updatedBy` columns** on the
+           `HospitalInfo` Prisma model — the model is a
+           singleton config row, not a user-managed entity.
+        5. **S3 logo cleanup is broken** — the service has a
+           commented-out `pg-boss` job
+           (`DELETE_HOSPITAL_INFO_LOGO_JOB`) that would delete
+           the previous logo from S3 when the logo is replaced.
+           The comment says "having issues with .send method /
+           will look into it later / TODO: fix this". The
+           current behaviour leaves orphaned logos in S3 when
+           the hospital uploads a new logo.
+        6. **No singleton enforcement at the DB layer** — the
+           `HospitalInfo` model has no `@unique` constraint
+           that would limit it to one row. If two rows ever
+           exist (e.g. from a manual DB insert),
+           `getHospitalInfoById` returns an arbitrary one (the
+           first by `findFirst`'s implicit order). The
+           application-level intent is clearly a singleton.
+        7. **`phoneNos.type` is an application-level string**
+           (not a Prisma `enum`). The values are lowercase
+           strings (`"primary"`, `"additional"`). No validation
+           at the DB layer; the type column is `String`.
+        8. **Manifest drift** — the original `routes_count: ~3`
+           was a placeholder. The actual count is **2**. The
+           `(common)/hospital-info` REST sub-area (1 GET
+           endpoint) is the third documented surface for the
+           same model — that one is part of the `common`
+           module.
+        9. **No module-level singleton service** — the service
+           is NOT exported as a module-level singleton (no
+           `export const hospitalInfoService = new
+           HospitalInfoService(...)` at the bottom of
+           `hospital-info-service.ts`). The router creates a
+           fresh `HospitalInfoService` on every call.
+       10. **Typo in service source** — `exisitngHospital` (sic
+           — should be `existingHospital`) appears twice
+           (`hospital-info-service.ts:12, 28`).
+
+  - id: trpc-purchase-requests
+    kind: trpc
+    status: documented
+    routes_count: 3
+    procedures:
+      - trpc_purchaseRequests_createPurchaseRequest
+      - trpc_purchaseRequests_getPurchaseRequests
+      - trpc_purchaseRequests_getPurchaseRequestById
+    files:
+      - src/lib/trpc/routers/purchase-requests.ts
+      - src/app/(dashboard)/shared/pharmacy/services/purchase-requests.service.ts
+      - src/app/(dashboard)/shared/pharmacy/repositories/purchase-requests-repository.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/purchase-request/create-purchase-request.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/purchase-request/query-purchase-requests.schema.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/purchase-request/validate-id-schema.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/purchase-request/update-purchase-request.ts
+      - src/app/(dashboard)/shared/pharmacy/schemas/purchase-request/purchase-request-form-schema.ts
+      - src/app/(dashboard)/shared/pharmacy/types/purchase-request.types.ts
+    shared_schemas:
+      - CreatePurchaseRequestInput
+      - QueryPurchaseRequestsInput
+      - GetPurchaseRequestByIdInput
+      - GetPurchaseRequestsResponse
+      - GetPurchaseRequestByIdResponse
+      - PurchaseRequest
+      - PurchaseRequestItem
+      - PurchaseRequestItemInput
+      - Status
+      - PriorityStatus
+    notes: |
+      Read-mostly tRPC router — 3 procedures, all on
+      `authProcedure`. The service has additional
+      `updatePurchaseRequestById` and
+      `deletePurchaseRequestById` methods (with state-machine
+      and PENDING guards + activity logging) but those are
+      reached via REST + server actions, NOT tRPC. The
+      `createPurchaseRequest` response is a plain
+      `{ message: ... }` envelope, not the persisted row.
+      Module-level singleton service. Search uses `contains`
+      on `purchaseRequestId` + `createdBy.username` +
+      `updatedBy.username` (not item fields). `end` date
+      bound is exclusive (`lt`).
+
+  - id: trpc-purchase-orders
+    kind: trpc
+    status: pending
+    routes_count: ~5
+    files: [src/lib/trpc/routers/purchase-orders.ts]
+    shared_schemas: [PurchaseOrder]
+
+  - id: trpc-grn
+    kind: trpc
+    status: pending
+    routes_count: ~6
+    files: [src/lib/trpc/routers/grn.ts]
+    shared_schemas: [GRN]
+
+  - id: trpc-stocks-summary
+    kind: trpc
+    status: pending
+    routes_count: ~3
+    files: [src/lib/trpc/routers/stocks-summary.ts]
+    shared_schemas: [StocksSummary]
+
+  - id: trpc-stock-expiry
+    kind: trpc
+    status: pending
+    routes_count: ~3
+    files: [src/lib/trpc/routers/stock-expiry.ts]
+    shared_schemas: [StockExpiry]
+
+  - id: trpc-inventory
+    kind: trpc
+    status: pending
+    routes_count: ~6
+    files: [src/lib/trpc/routers/inventory.ts]
+    shared_schemas: [Inventory]
+
+  - id: trpc-stock-movement
+    kind: trpc
+    status: pending
+    routes_count: ~4
+    files: [src/lib/trpc/routers/stock-movement.ts]
+    shared_schemas: [StockMovement]
+
+  - id: trpc-stock-request
+    kind: trpc
+    status: pending
+    routes_count: ~5
+    files: [src/lib/trpc/routers/stock-request.ts]
+    shared_schemas: [StockRequest]
+
+  - id: trpc-selling-price-groups
+    kind: trpc
+    status: pending
+    routes_count: ~3
+    files: [src/lib/trpc/routers/selling-price-groups.ts]
+    shared_schemas: [SellingPriceGroup]
+
+  - id: trpc-batch
+    kind: trpc
+    status: pending
+    routes_count: ~4
+    files: [src/lib/trpc/routers/batch.ts]
+    shared_schemas: [Batch]
+
+  - id: trpc-stock-transfers
+    kind: trpc
+    status: pending
+    routes_count: ~4
+    files: [src/lib/trpc/routers/stock-transfers.ts]
+    shared_schemas: [StockTransfer]
+
+  - id: trpc-change-selling-price
+    kind: trpc
+    status: pending
+    routes_count: ~4
+    files: [src/lib/trpc/routers/change-selling-price.ts]
+    shared_schemas: [ChangeSellingPrice]
+
+  - id: trpc-banks
+    kind: trpc
+    status: pending
+    routes_count: ~0
+    note: banksRouter is imported in trpc/index.ts but commented out (`// import { banksRouter }`). Inactive — skip.
+
+shared:
+  - id: error_envelope
+    inferred: true
+    documented: true
+    file: docs/schemas/common.yaml
+    description: |
+      tRPC error envelope (src/lib/trpc/trpc.ts `errorFormatter`):
+      `{ signature: "AppError" | "TRPCError" | "UnknownError", message, httpStatus, code }`.
+      REST routes also surface AppError; shape varies (NextResponse.json with status).
+      Formalised in docs/schemas/common.yaml#/ErrorEnvelope.
+  - id: pagination
+    inferred: true
+    documented: true
+    file: docs/schemas/common.yaml
+    description: |
+      tRPC: `defaultQuerySchema` in `src/utils/pagination-utils.ts:49-57` —
+      `{ page, limit, search?, start?, end? }` transformed to
+      `{ page, limit, offset, ... }`. Documented as `PaginationQuery` in
+      `docs/schemas/common.yaml`. Used by every list-style tRPC procedure.
+
+      REST list endpoints appear to follow a similar pattern
+      (`?page=&pageSize=&search=&...`) but the exact shape varies per
+      route. To be confirmed per REST module as it is documented.
+  - id: session
+    inferred: true
+    description: |
+      Cookie-based session (`sid`, httpOnly, lax). Stored in Prisma `Session` model
+      with expiry handled by AuthService. Argon2 password hashing.
+  - id: middleware
+    inferred: false
+    note: No root `middleware.ts` exists. Auth is enforced inside each route/procedure
+      via `verifyAuth()` (REST) or `authProcedure`/`authorizeProcedure` (tRPC).
+  - id: server-actions
+    inferred: true
+    description: |
+      Many writes go through `next-safe-action` server actions
+      (src/lib/safe-action.ts) invoked from RSC. They are NOT mounted as HTTP
+      routes and are out of scope for OpenAPI generation.
+
+# -----------------------------------------------------------------------------
+# Mixed-style notes
+# -----------------------------------------------------------------------------
+trpc_note: |
+  This project uses BOTH REST and tRPC. Both must be documented.
+
+  REST (437 routes) is mounted directly under /api/**. The natural module
+  boundary is the route group folder under src/app/api/(group)/. Each group
+  is one module in this manifest.
+
+  tRPC (28 routers) is mounted at /api/trpc/<router>.<procedure>. The
+  catch-all is at src/app/api/trpc/[trpc]/route.ts. Each file in
+  src/lib/trpc/routers/ is one module, prefixed with `trpc-` to keep ids
+  unique (e.g. `trpc-auth` is the tRPC auth router; the REST auth surface
+  lives in the `common` module under `(common)/auth/**`).
+
+  Per-procedure security in tRPC:
+    - publicProcedure        → no security
+    - authProcedure          → SessionAuth required
+    - authorizeProcedure(a,s)→ SessionAuth + x-required-permission: { action, subject }
+      (action ∈ Action enum, subject ∈ Subject enum — see roles router)
+
+  Module ordering suggestion (smallest first to validate patterns):
+    1. system            (2 routes, public)
+    2. trpc-auth         (login/session flows)
+    3. trpc-roles        (defines Action/Subject enums other routers depend on)
+    4. trpc-departments, trpc-stores, trpc-categories, trpc-sub-categories,
+       trpc-units, trpc-payment-methods, trpc-default-setting,
+       trpc-hospital-info, trpc-suppliers, trpc-store-mapping
+       (small lookup tables)
+    5. trpc-users, trpc-batch, trpc-items, trpc-selling-price-groups
+    6. appointment       (REST — small, illustrates patterns)
+    7. membership, daycare, ed, cathlab, endo, hd, ot (REST)
+    8. opd, imaging, lab, pharmacy (REST)
+    9. ipd, emr, common  (REST — largest)
+   10. security, root    (final phases)

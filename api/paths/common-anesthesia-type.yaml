@@ -1,0 +1,130 @@
+# docs/paths/common-anesthesia-type.yaml
+# REST endpoint: GET /api/anesthesia-type
+# Source: src/app/api/(common)/anesthesia-type/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) live on the
+# `AnesthesiaTypeService` but are reached via server actions
+# / tRPC — they are NOT exposed as REST routes here.
+
+/api/anesthesia-type:
+  get:
+    summary: List anesthesia types (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      anesthesia types with the total row count.
+
+      Response shape:
+        ```
+        { anesthesiaTypes: AnesthesiaType[]; totalCount: number }
+        ```
+      (Field named `anesthesiaTypes`, **not** `data`.)
+
+      Filters (from `getAnesthesiaTypeSchema`):
+        - `search` — case-insensitive substring match against
+          `name`.
+        - `status` — stringly-typed boolean. The repository
+          maps `query.status === "ACTIVE"` to
+          `where.isActive = true`. Any other value (or
+          undefined) means "no filter on isActive".
+        - `start` / `end` — `createdAt` range.
+
+      The repository orders by `createdAt: desc`.
+
+      Note on auth: this route uses the simpler `apiHandler`
+      wrapper, **not** `enhancedApiHandler`. Authentication
+      is checked manually via `verifyApiAuth()` at the start
+      of the handler — equivalent to
+      `auth: { required: true }` in `enhancedApiHandler`,
+      but bypasses the `auth.permissions` and
+      `auth.assertStoreId` machinery entirely. The error
+      envelope is the `apiHandler` default
+      (`{ success: false, message: "Internal Server Error",
+      result: null, error: <err msg> }`).
+
+      Source:
+      `src/app/api/(common)/anesthesia-type/route.ts:14-29`.
+    tags:
+      - Common / Anesthesia Type
+    operationId: rest_common_anesthesia_type_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: |
+            Stringly-typed boolean — the repository maps
+            `status === "ACTIVE"` to `isActive: true`. The
+            literal string `"INACTIVE"` is treated the same
+            as any other non-`"ACTIVE"` value (i.e. no
+            `isActive: false` filter is applied). To match
+            inactive rows, leave the param off entirely.
+    responses:
+      "200":
+        description: Paginated list of anesthesia types.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-anesthesia-type.yaml#/GetAnesthesiaTypesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions** — auth is checked manually via
+    `verifyApiAuth()` at the top of the handler; the route
+    does not declare `auth: { required: true, permissions: [...] }`.
+    Any authenticated user can list anesthesia types.
+  - **Dead `params` declaration** — the handler signature is
+    `(req, { params }: { params: Promise<{ id: number }> })`
+    and the first line is `await params`, but the route
+    file has no `[id]` segment. The `params` object is
+    always empty `{}` and the `await` is a no-op. The
+    `id: number` type is also wrong (the Prisma id is a
+    UUID string). Looks like a copy-paste leftover from a
+    sibling route. Not blocking.
+  - **No `data` field on success** — the response envelope
+    is `{ success: true, result, error: "" }` (no `message`
+    field). This differs from `enhancedApiHandler` callers,
+    which emit `{ success: true, result, message: "",
+    error: null }` or similar. The `apiHandler` error path
+    is `{ success: false, message: "Internal Server Error",
+    result: null, error: <err> }`.
+  - **`status` query param is stringly-typed** — the Zod
+    schema accepts any string. The repository only treats
+    `"ACTIVE"` as truthy; any other value silently does
+    nothing. The OpenAPI `enum: [ACTIVE, INACTIVE]` is
+    documentation-only — the runtime does not enforce it
+    and does not interpret `"INACTIVE"` as `isActive: false`.
+  - **The list endpoint uses `select: { id, fullName,
+    username }` for `createdBy` / `updatedBy`**, while the
+    helper `getAnesthesiaTypeById` /
+    `getAnesthesiaTypeByName` use `include: { createdBy:
+    true, updatedBy: true }` (which returns the full `User`
+    row, exposing `password` hash and other PII — the
+    service's `createAnesthesiaType` /
+    `updateAnesthesiaType` paths use these helpers
+    internally for the duplicate-name check). Worth
+    confirming the `createAnesthesiaType` /
+    `updateAnesthesiaType` return values are not
+    inadvertently leaking the password hash. The
+    `create` / `update` Prisma calls themselves do not
+    include `createdBy` / `updatedBy`, so the **return
+    value** of those calls is a bare row — but the
+    service may be calling the helpers before/after, and
+    the activity log also uses the row internally.
+  - **Write operations (create / update / delete) are
+    NOT exposed as REST routes** — they live on
+    `AnesthesiaTypeService` and are reached via server
+    actions / tRPC (not part of this documentation set).
+    This REST sub-area is read-only.

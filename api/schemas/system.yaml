@@ -1,0 +1,92 @@
+# docs/schemas/system.yaml
+# Schemas for the system / infrastructure endpoints.
+
+HealthError:
+  type: object
+  description: |
+    One per-component failure recorded by `HealthCheckService`. The service
+    pushes entries here when an individual probe throws; the aggregate
+    `status` is derived from these plus the boolean threshold checks.
+  required:
+    - component
+    - message
+  properties:
+    component:
+      type: string
+      enum:
+        - memory
+        - disk
+        - database
+      description: Which subsystem produced the error.
+    message:
+      type: string
+      description: The thrown error's `.message` (or a generic fallback).
+
+HealthSnapshot:
+  type: object
+  description: |
+    Full response body of `GET /api/health`. Returned regardless of whether
+    checks passed — the `status` field carries the verdict.
+  required:
+    - status
+    - checks
+    - metrics
+    - timestamp
+  properties:
+    status:
+      type: string
+      enum:
+        - OK
+        - WARN
+        - ERROR
+      description: |
+        Aggregate verdict.
+          - `OK` — every probe passed and no errors were caught.
+          - `WARN` — at least one error was caught (e.g. an unhandled exception
+            in a probe) but no threshold was breached.
+          - `ERROR` — at least one probe exceeded its threshold (memory > 85%,
+            disk > 90%, or DB unreachable).
+    checks:
+      type: object
+      description: Per-probe pass/fail booleans. `database` is omitted when the DB check is disabled.
+      required:
+        - memory
+        - disk
+      properties:
+        database:
+          type: boolean
+          description: True iff `prisma.$queryRaw\`SELECT 1\`` resolved. Omitted when the service was constructed with `checkDatabase: false`.
+        memory:
+          type: boolean
+          description: True iff memory usage is below the configured threshold (default 85%).
+        disk:
+          type: boolean
+          description: True iff disk usage is below the configured threshold (default 90%).
+    metrics:
+      type: object
+      description: Raw usage percentages for memory and disk. Zero-filled when the probe failed.
+      required:
+        - memoryUsagePercent
+        - diskUsagePercent
+      properties:
+        memoryUsagePercent:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          description: `(totalMem - freeMem) / totalMem` as a percentage, rounded to nearest integer.
+        diskUsagePercent:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          description: `(totalBlocks - availableBlocks) / totalBlocks` as a percentage, rounded to nearest integer.
+    errors:
+      type: array
+      description: Per-component errors. Empty when all probes succeeded without throwing.
+      items:
+        $ref: ./system.yaml#/HealthError
+    timestamp:
+      type: string
+      format: date-time
+      description: ISO-8601 timestamp of when the snapshot was generated (`new Date().toISOString()`).

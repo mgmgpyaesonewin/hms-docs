@@ -1,0 +1,481 @@
+# docs/paths/membership.yaml
+# REST endpoints: membership module under
+# `src/app/api/(membership)/`. 8 read endpoints,
+# no mutations.
+#
+# Endpoints exposed:
+#   - GET  /api/member-card-type
+#   - GET  /api/member-card-type/{id}
+#   - GET  /api/member-card-list
+#   - GET  /api/member-card-list/{id}
+#   - GET  /api/member-card-by-patient
+#   - GET  /api/member-card/usage-count
+#   - GET  /api/member-card/room-usage-count
+#   - GET  /api/member-list
+#
+# All 8 routes are GET. The module has NO POST /
+# PUT / PATCH / DELETE on the REST surface —
+# member-card and member-card-type create / edit
+# / delete happen via server actions under
+# `member-card-list/features/*.actions.ts` (not
+# in scope for the OpenAPI REST surface).
+#
+# The routes split into 3 patterns:
+#   1. **`apiHandler` + `verifyApiAuth()`** —
+#      `/api/member-card-type`,
+#      `/api/member-card-list`,
+#      `/api/member-list`. These use the older
+#      `apiHandler` wrapper and call
+#      `verifyApiAuth()` explicitly. The
+#      response shape is
+#      `{ success: true, result, error: "", message: "" }`.
+#   2. **`apiHandler` (no explicit
+#      `verifyApiAuth()`)** —
+#      `/api/member-card-type/{id}`,
+#      `/api/member-card-list/{id}`. These
+#      inherit auth handling from `apiHandler`
+#      itself.
+#   3. **`enhancedApiHandler`** —
+#      `/api/member-card-by-patient`. Uses
+#      the newer handler with
+#      `auth: { required: true }` declared on
+#      the config.
+#   4. **Raw `GET` + `new PrismaClient()`** —
+#      `/api/member-card/usage-count`,
+#      `/api/member-card/room-usage-count`.
+#      These bypass the service and repository
+#      layers entirely and **do not use any
+#      `*Handler` wrapper**. They return a
+#      non-standard envelope and a 400 with
+#      `{ message: "Invalid query", issues }` on
+#      validation failure. They also create a
+#      new `PrismaClient()` per request instead
+#      of using the shared `prisma` singleton
+#      (an anti-pattern — should use
+#      `import { prisma }`).
+#
+# The module has no RBAC permissions. All
+# routes that go through `apiHandler` /
+# `enhancedApiHandler` rely on
+# `auth: { required: true }` only.
+
+# =============================================================================
+# Member card type — list / detail
+# =============================================================================
+#
+# Backed by `MemberCardTypeService` →
+# `MemberCardTypeRepository`. The list endpoint
+# additionally computes
+# `hasValidActiveMemberCard` per row via the
+# `_count` member-card join. The detail
+# endpoint normalises the embedded
+# `servicePrice` / `servicePackage.price` JSON
+# values into the typed `SubPriceSchema` shape.
+
+/api/member-card-type:
+  get:
+    operationId: getMemberCardTypeList
+    summary: Member card type list
+    description: |
+      Authenticated query. Returns a paginated
+      list of `MemberCardType` rows. Service:
+      `MemberCardTypeService.getMemberCardType`
+      →
+      `MemberCardTypeRepository.getMemberCardTypeList`.
+
+      Validation: `getMemberCardTypeSchema`
+      (`id?`, `memberCardTypeId?`, `status?`
+      ∈ {ACTIVE, INACTIVE}, plus standard
+      pagination — note: only `id` and the
+      pagination fields are actually consumed by
+      the repository; `memberCardTypeId` and
+      `status` are accepted by the schema but
+      not applied as filters in the current
+      implementation).
+
+      List-only side effect: the repository
+      computes `hasValidActiveMemberCard` per
+      row (true if ≥ 1 active `MemberCard` of
+      that type currently exists with
+      `validFrom ≤ now ≤ validTo`).
+
+      Search is case-insensitive `contains`
+      against `name`.
+    tags: [Membership]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: id
+        schema: { type: string }
+    responses:
+      "200":
+        description: Member card types for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardTypeListResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/member-card-type/{id}:
+  get:
+    operationId: getMemberCardTypeById
+    summary: Member card type by id
+    description: |
+      Authenticated query. Returns a single
+      `MemberCardType` with the full nested
+      `memberCardTypeService[]` /
+      `memberCardTypeServicePackage[]`. The
+      service transforms the embedded
+      `servicePrice` / `servicePackage.price`
+      JSON values into the typed `SubPriceSchema`
+      shape (4-tier
+      local/foreigner/insurance/government) —
+      missing values are filled with zeros.
+
+      Returns `result: null` if the id is
+      unknown (no HTTP 404 — the route does not
+      throw).
+    tags: [Membership]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Member card type (or `null` if not found).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardTypeByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Member card list / detail
+# =============================================================================
+#
+# Backed by `MemberCardService` →
+# `MemberCardRepository`. Note: these are READ
+# endpoints only — create / edit / delete are
+# server-action only.
+
+/api/member-card-list:
+  get:
+    operationId: getMemberCardList
+    summary: Member card list
+    description: |
+      Authenticated query. Returns a paginated
+      list of `MemberCard` rows with the full
+      `memberCardType` (services +
+      service-packages) include tree and the
+      slim `memberList[]` projection. Service:
+      `MemberCardService.getMemberCard` →
+      `MemberCardRepository.findMemberCardsAndCount`.
+
+      Validation: `getMemberCardSchema` (`id?`,
+      `memberCardTypeId?`, `status?` ∈ {ACTIVE,
+      INACTIVE}, plus standard pagination). The
+      `status` value is mapped to
+      `MemberCard.isActive` (boolean). Search
+      matches against `memberCardId` only.
+
+      Note: the schema accepts `id` and
+      `memberCardTypeId` but only
+      `memberCardTypeId` is applied as a filter
+      in the current implementation. `id` is
+      accepted but ignored.
+    tags: [Membership]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: id
+        schema: { type: string }
+      - in: query
+        name: memberCardTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Member cards for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardListResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/member-card-list/{id}:
+  get:
+    operationId: getMemberCardById
+    summary: Member card by id
+    description: |
+      Authenticated query. Returns a single
+      `MemberCard` by id with the full include
+      tree. Service:
+      `MemberCardService.getMemberCardById` →
+      `MemberCardRepository.findById`.
+
+      Returns `result: null` if the id is
+      unknown (no HTTP 404 — the route does not
+      throw).
+    tags: [Membership]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Member card (or `null` if not found).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Member card by patient (active member lookup)
+# =============================================================================
+#
+# Returns the FIRST `MemberCard` (by
+# `createdAt: desc`) for which the patient has
+# an active `MemberList` row.
+
+/api/member-card-by-patient:
+  get:
+    operationId: getMemberCardWithPatientId
+    summary: Active member card for a patient
+    description: |
+      Authenticated query. Returns the first
+      active `MemberCard` (sorted by `createdAt`
+      desc) for which the given patient has an
+      active `MemberList` row. The card's
+      `isActive` must also be true.
+
+      Service: `MemberCardService.getMemberCardWithPatientId`
+      →
+      `MemberCardRepository.getMemeberCardWithPatiendId`
+      (sic — typo in the repository method
+      name).
+
+      The response uses a reduced member-card-type
+      projection (no room-charge fields, no
+      colours) but the full nested
+      `memberCardTypeService[]` /
+      `memberCardTypeServicePackage[]` is
+      included.
+
+      Returns `result: null` if no active card
+      matches.
+
+      Validation: `getMemberCardWithPatientId` —
+      `patientId: z.string()` (NOT a UUID; the
+      schema accepts any non-empty string).
+    tags: [Membership]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Member card (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardWithPatientIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# Member card usage counters (standalone, no service layer)
+# =============================================================================
+#
+# Both routes bypass the service layer and
+# instantiate their own `PrismaClient`. The
+# response shape is non-standard (no `success` /
+# `result` / `error` / `message` fields) — just
+# `{ usageCount, lastUsedAt, previousUsedAt }`.
+
+/api/member-card/usage-count:
+  get:
+    operationId: getMemberCardServiceUsageCount
+    summary: Member card service usage count
+    description: |
+      Authenticated query. Returns the
+      `PatientMemberCardServiceUsage` row for
+      the (patient, memberCardTypeService) pair
+      — a per-patient counter for how many
+      times a specific (card-type, service) has
+      been used.
+
+      **Non-standard route implementation**:
+      instantiates a fresh `PrismaClient()`
+      inside the route file (does NOT use the
+      shared `prisma` singleton from
+      `src/lib/db.ts`), validates query params
+      with an inline `z.object({ patientId:
+      uuid, memberCardTypeServiceId: uuid })`
+      schema, and returns either:
+        - HTTP 400 `{ message: "Invalid query", issues }`
+          on validation failure, or
+        - HTTP 200
+          `{ usageCount, lastUsedAt, previousUsedAt }`
+          directly (no `success` / `result` /
+          `error` / `message` wrapper).
+
+      If the row does not exist, the response
+      is zeroed:
+      `{ usageCount: 0, lastUsedAt: null, previousUsedAt: null }`.
+    tags: [Membership]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: memberCardTypeServiceId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Usage counter for the (patient, service) pair.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardServiceUsageCountResponse" }
+      "400":
+        description: "Invalid query — returns `{ message: \"Invalid query\", issues }`."
+
+/api/member-card/room-usage-count:
+  get:
+    operationId: getMemberCardRoomUsageCount
+    summary: Member card room-usage count
+    description: |
+      Authenticated query. Returns the
+      `PatientMemberCardTypeRoomChargeUsage` row
+      for the (patient, memberCardType) pair —
+      a per-patient counter for room-charge
+      usage of a specific card type.
+
+      Same non-standard implementation as
+      `/api/member-card/usage-count`:
+      fresh `PrismaClient()` per request, inline
+      `z.object({ patientId: uuid,
+      memberCardTypeId: uuid })` validation, raw
+      `{ usageCount, lastUsedAt, previousUsedAt }`
+      response shape (no envelope), and a
+      zeroed response when the row does not
+      exist.
+    tags: [Membership]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: memberCardTypeId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Room-usage counter for the (patient, card-type) pair.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberCardRoomUsageCountResponse" }
+      "400":
+        description: "Invalid query — returns `{ message: \"Invalid query\", issues }`."
+
+# =============================================================================
+# Member list (active-member lookup, paginated)
+# =============================================================================
+#
+# Backed by `MemberListService` →
+# `MemberListRepository`. The list endpoint
+# does NOT filter by `isActive` — it returns
+# all `MemberList` rows matching the filter
+# (active or not).
+
+/api/member-list:
+  get:
+    operationId: getMemberList
+    summary: Member list (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `MemberList` rows (one per
+      patient × member-card pair). Service:
+      `MemberListService.getMemberList` →
+      `MemberListRepository.findMemberAndCount`.
+
+      Validation: `getMemberListSchema` (`id?`,
+      `memberCardTypeId?`, `status?` ∈ {ACTIVE,
+      INACTIVE}, plus standard pagination). The
+      schema accepts `status` and `id` but only
+      `memberCardTypeId` is currently applied as
+      a filter — the others are accepted but
+      ignored by the repository.
+
+      Search matches against:
+        - patient `name` / `patientId` /
+          `phoneNo` (case-insensitive `contains`)
+        - `memberCard.memberCardId`
+        - `memberCard.memberCardType.name`
+
+      Response is `{ memberLists, totalCount }`
+      where each `memberList` row includes the
+      full `patient`, `memberCard` (with
+      `memberCardType`), `createdBy`, and
+      `updatedBy` relations.
+    tags: [Membership]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: id
+        schema: { type: string }
+      - in: query
+        name: memberCardTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Member list rows for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetMemberListResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }

@@ -1,0 +1,297 @@
+# docs/paths/trpc-sub-categories.yaml
+# tRPC router: sub-categories (src/lib/trpc/routers/sub-categories.ts)
+#
+# IMPORTANT: sub-categories are **not** a separate database table. They
+# are rows in the same `Category` table where `parentCategoryId IS NOT NULL`.
+# This router is a focused view over `Category` filtered to non-null
+# parents. The `categories` router is its complement.
+x-trpc-source: src/lib/trpc/routers/sub-categories.ts
+x-trpc-router: subCategories
+
+/api/trpc/subCategories.getSubCategories:
+  post:
+    summary: List sub-categories (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of sub-categories
+      (rows in `Category` with `parentCategoryId != null`).
+
+      Response shape:
+        ```
+        { subCategories: SubCategory[], count: number }
+        ```
+      (Field named `subCategories`, **not** `data` — matches the
+      `categories.getCategories` convention of using a domain-specific
+      plural.)
+
+      Filters:
+        - `search` (from `baseQuerySchema`) — case-insensitive substring
+          match against `name`.
+        - `categoryId` (specific to this router) — restrict to
+          sub-categories of a specific parent.
+
+      The repository's `buildWhereQuery` pins
+      `parentCategoryId: { not: null }` (sub-categories-repository.ts:122).
+
+      Service: `SubCategoryService.getSubCategories`. Source:
+      `src/lib/trpc/routers/sub-categories.ts:12-20`.
+    tags:
+      - Sub-Categories
+    operationId: trpc_subCategories_getSubCategories
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-sub-categories.yaml#/GetSubCategoriesInput
+    responses:
+      "200":
+        description: Paginated list of sub-categories.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-sub-categories.yaml#/GetSubCategoriesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/subCategories.subCategoryTotalCounts:
+  post:
+    summary: Get sub-category count
+    description: |
+      Authenticated query. Returns the count of sub-categories
+      (`prisma.category.count({ where: { parentCategoryId: { not: null } } })`).
+      Source: `src/lib/trpc/routers/sub-categories.ts:22-27`.
+    tags:
+      - Sub-Categories
+    operationId: trpc_subCategories_subCategoryTotalCounts
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total sub-category count.
+        content:
+          application/json:
+            schema:
+              type: integer
+              minimum: 0
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/subCategories.createSubCategory:
+  post:
+    summary: Create a new sub-category
+    description: |
+      Authenticated mutation. Creates a new row in `Category` with the
+      given `parentCategoryId`.
+
+      Side effects:
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/sub-categories")`.
+        - Logs the creation via `activityLogger`
+          (description: "Created SubCategory", action: "Create",
+          entity: "SubCategory", entityId: result.id).
+
+      Validation failures:
+        - Empty `name` → 400.
+        - Sub-category name already exists (case-insensitive, scoped to
+          rows where `parentCategoryId != null`) → 409
+          (`AppError("SubCategory already exists", 409)`).
+
+      **Response does not populate `parentCategory`, `createdBy`, or
+      `updatedBy`** — the repository's `createSubCategory` calls
+      `prisma.category.create({ data })` with no `include`.
+
+      Service: `SubCategoryService.createSubCategory`. Source:
+      `src/lib/trpc/routers/sub-categories.ts:29-45`.
+    tags:
+      - Sub-Categories
+    operationId: trpc_subCategories_createSubCategory
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-sub-categories.yaml#/CreateSubCategoryInput
+    responses:
+      "200":
+        description: Sub-category created. **Response is a bare `Category` row** (no parentCategory / createdBy / updatedBy).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-sub-categories.yaml#/SubCategoryBare
+      "400":
+        description: Validation failure (empty name).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: Sub-category name already exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/subCategories.updateSubCategory:
+  post:
+    summary: Update a sub-category
+    description: |
+      Authenticated mutation. Updates the sub-category identified by `id`.
+      Can also move the sub-category to a different parent
+      (`parentCategoryId` is editable here, unlike
+      `categories.updateCategory` which doesn't allow it).
+
+      Validation:
+        - Sub-category must exist (else 404).
+        - If `name` is changing, the new `name` must not collide with
+          another existing sub-category → 409
+          (`AppError("Sub Category with same name already exists", 409)`).
+
+      Side effects:
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/sub-categories")`.
+        - Logs the update via `activityLogger` (description: "Updated SubCategory",
+          action: "Update", entity: "SubCategory", entityId: payload.id).
+
+      **Response does not populate `parentCategory`, `createdBy`, or
+      `updatedBy`**.
+
+      Service: `SubCategoryService.updateSubCategory`. Source:
+      `src/lib/trpc/routers/sub-categories.ts:47-62`.
+    tags:
+      - Sub-Categories
+    operationId: trpc_subCategories_updateSubCategory
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-sub-categories.yaml#/UpdateSubCategoryInput
+    responses:
+      "200":
+        description: Updated sub-category. **Response is a bare `Category` row**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-sub-categories.yaml#/SubCategoryBare
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Sub-category not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: New name collides with another sub-category.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/subCategories.deleteSubCategory:
+  post:
+    summary: Delete a sub-category
+    description: |
+      Authenticated mutation. Deletes the sub-category identified by `id`.
+
+      Validation:
+        - Sub-category must exist (else 404).
+        - The sub-category must not be referenced by any `Item`
+          (`prisma.item.findFirst({ where: { subCategoryId: id } })`).
+          If any item references it → 400
+          (`AppError("Sub Category is in use and cannot be deleted", 400)`).
+
+      Side effects:
+        - Calls `revalidatePath("/set-up/sub-categories")`.
+        - Logs the deletion via `activityLogger` (description: "Deleted SubCategory",
+          action: "Delete", entity: "SubCategory", entityId: id).
+
+      **Response does not populate `parentCategory`, `createdBy`, or
+      `updatedBy`**.
+
+      Service: `SubCategoryService.deleteSubCategory`. Source:
+      `src/lib/trpc/routers/sub-categories.ts:64-78`.
+    tags:
+      - Sub-Categories
+    operationId: trpc_subCategories_deleteSubCategory
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Sub-category id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: Deleted sub-category. **Response is a bare `Category` row**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-sub-categories.yaml#/SubCategoryBare
+      "400":
+        description: Sub-category is referenced by an item.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Sub-category not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all five procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - All five procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can manage sub-categories.
+  - **Same TS/runtime mismatch** as Department/Store/Category — write
+    methods (`createSubCategory`, `updateSubCategory`,
+    `deleteSubCategory`) call Prisma without an `include` directive,
+    so the response is a bare `Category` row. Documented as
+    `SubCategoryBare`. The full `SubCategory` shape with
+    `parentCategory` / `createdBy` / `updatedBy` is only populated by
+    `getSubCategories`.
+  - **Underlying storage note** — sub-categories are rows in the same
+    `Category` table where `parentCategoryId IS NOT NULL`. The router
+    enforces this with a `where: { parentCategoryId: { not: null } }`
+    filter in the repository. The `categories` and `sub-categories`
+    routers together form the complete CRUD surface for `Category`,
+    split by the `parentCategoryId` predicate.
+  - `updateSubCategory` and `deleteSubCategory` properly populate the
+    `activityLogger` payload (unlike `categories.updateCategory` and
+    `categories.deleteCategory` which have half-finished calls).

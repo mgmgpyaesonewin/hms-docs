@@ -1,0 +1,437 @@
+# docs/schemas/ed.yaml
+# Schemas for the Emergency Department (ED)
+# REST module. 5 read-only endpoints; all
+# return
+# `{ success, result, message: "", error: null }`
+# envelopes. ED bills are modelled as
+# `ProxyBill` rows with
+# `departmentType = DepartmentEnum.ED`.
+# Three of the five endpoints declare
+# `auth: { required: false }` — see the
+# per-endpoint notes in docs/paths/ed.yaml.
+
+# =============================================================================
+# Response envelopes
+# =============================================================================
+
+GetAppointmentsForEdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/appointments-for-ed`. `result`
+    is whatever
+    `EdBillRepository.getAppointmentForEd(query)`
+    returns — typically a list of
+    `Appointment` rows with joined `doctor`,
+    `appointmentType`, `user`, etc. PII
+    exposure.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetEdBillListResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/ed-bills`. `result` is
+    `EdBillRepository.getEdBillList(query)`
+    — a list of `ProxyBill` rows filtered
+    to `departmentType = ED` (the filter is
+    hard-coded in the repository; the input
+    schema does not expose a
+    `departmentType` parameter).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetEdBillByIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/ed-bills/{id}`. `result` is
+    the full `ProxyBill` row (with
+    `departmentType = ED`) including
+    optional `serviceBill`, `procedureBill`,
+    `servicePackageBill`, `pharmacyBill`
+    sub-objects.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/ed.yaml#/EDBill
+        - type: "null"
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetEdBillActivitiesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/ed-bills/{id}/activities`. The
+    row shape is per the `ProxyBillActivity`
+    (or equivalent log model) — a list of
+    `{ action, userId, userName, createdAt,
+    remark }` entries. Not formally typed at
+    the Zod level.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetPatientsForEdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/patients-for-ed`. `result` is
+    `EdBillRepository.getPatientForEd(query)`.
+    PII-heavy (name, phone, nrcNo,
+    township, region, etc.). The schema is
+    the same as the OPD patient list.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+EDBill:
+  type: object
+  description: |
+    Canonical ED-bill shape. **An ED bill
+    is a `ProxyBill` row with
+    `departmentType = ED`.** The
+    `EdBillRepository` writes to the
+    `proxyBill` table (e.g.,
+    `trx.proxyBill.create({ data: { ...,
+    departmentType: DepartmentEnum.ED }})`).
+    The fields below mirror the canonical
+    `ProxyBill` Prisma model — the ED bill
+    is distinguished only by its
+    `departmentType` value at the DB level.
+    Most of the schema is identical to
+    `daycare.yaml#/ProxyBill`; documented
+    here for renderer-friendliness.
+
+    Notable columns on the model:
+      - `id` (UUID PK).
+      - `storeId` (FK to `Store`).
+      - `billTypeId` (FK to `BillType`).
+      - `patientId` (FK to `Patient`).
+      - `appointmentId` (FK; **required**
+        for ED bills per
+        `createEdBillSchema.appointmentId:
+        z.string()` — the ED module differs
+        from daycare / proxy-bill in that
+        the appointment link is mandatory,
+        not optional).
+      - `departmentType` = `ED`.
+      - `patientGroup` / `patientType`
+        (enums, optional in the ED create
+        schema).
+      - `date` (`DateTime`).
+      - `subtotal`, `taxAmount`,
+        `taxPercentage`, `discountAmount`,
+        `discountPercentage`, `totalAmount`,
+        `foc`, `paid` (`Decimal?` for
+        paid; others non-nullable).
+      - `remark` (`String?`).
+      - `paymentStatus`
+        (`BillPaymentStatusEnum`,
+        nullable).
+      - `displayFOCField` (`Boolean
+        @default(false)`).
+      - `createdBy` / `updatedBy` (FK to
+        `User`, nullable).
+      - `isCanceled`, `cancelRemark`
+        (Boolean / String?).
+      - Sub-bills (all optional FK to
+        `ProxyBillServiceBill`,
+        `ProxyBillProcedureBill`,
+        `ProxyBillServicePackageBill`,
+        `ProxyBillPharmacyBill`).
+
+    Per `createEdBillSchema.refine`: at
+    least one of `serviceBill.services`,
+    `servicePackageBill.servicePackages`,
+    `procedureBill.procedures`,
+    `pharmacyBill.items` must be present
+    (unlike daycare's `createProxyBillSchema`,
+    team-fees are not a separate case here).
+  required:
+    - id
+    - storeId
+    - billTypeId
+    - patientId
+    - appointmentId
+    - date
+    - departmentType
+    - createdAt
+    - updatedAt
+  properties:
+    id: { type: string, format: uuid }
+    storeId: { type: string, format: uuid }
+    billTypeId: { type: string, format: uuid }
+    patientId: { type: string, format: uuid }
+    appointmentId: { type: string, format: uuid }
+    departmentType:
+      type: string
+      enum:
+        - ED
+    patientGroup: { type: string, nullable: true }
+    patientType:
+      type: string
+      enum: [OPD, IPD, ED, DAYCARE, EMERGENCY, OTHER]
+      nullable: true
+    date: { type: string, format: date-time }
+    subtotal: { type: number, minimum: 0 }
+    taxAmount: { type: number, minimum: 0 }
+    taxPercentage: { type: number, minimum: 0 }
+    discountAmount: { type: number, minimum: 0 }
+    discountPercentage: { type: number, minimum: 0 }
+    totalAmount: { type: number, minimum: 0 }
+    foc: { type: number, minimum: 0 }
+    paid: { type: number, nullable: true }
+    remark: { type: string, nullable: true }
+    paymentStatus:
+      type: string
+      enum: [PENDING, PARTIALLY_PAID, PAID, CANCELLED, REFUNDED]
+      nullable: true
+    displayFOCField: { type: boolean }
+    isCanceled: { type: boolean, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    serviceBillId: { type: string, format: uuid, nullable: true }
+    procedureBillId: { type: string, format: uuid, nullable: true }
+    servicePackageBillId: { type: string, format: uuid, nullable: true }
+    pharmacyBillId: { type: string, format: uuid, nullable: true }
+    createdById: { type: string, format: uuid, nullable: true }
+    updatedById: { type: string, format: uuid, nullable: true }
+    serviceBill:
+      $ref: ../schemas/ed.yaml#/EDBillServiceBill
+    procedureBill:
+      $ref: ../schemas/ed.yaml#/EDBillProcedureBill
+    servicePackageBill:
+      $ref: ../schemas/ed.yaml#/EDBillServicePackageBill
+    pharmacyBill:
+      $ref: ../schemas/ed.yaml#/EDBillPharmacyBill
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+EDBillServiceBill:
+  type: object
+  description: |
+    The optional `ProxyBillServiceBill`
+    sub-bill (identical shape to the
+    daycare version). A list of `Service`
+    line items with the `serviceBillItemSchema`
+    constraints (`.refine` enforces
+    `cancelRemark` when `isCancel` is true).
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    services:
+      type: array
+      items:
+        $ref: ../schemas/ed.yaml#/EDBillServiceItem
+
+EDBillServiceItem:
+  type: object
+  description: |
+    A single service line. Per
+    `serviceBillItemSchema` in
+    `shared/ed/schemas/ed-bill.schema.ts`
+    (a duplicate of the proxy-bill
+    schema, possibly with subtle
+    differences — verify before
+    cross-referencing).
+  required: [serviceId]
+  properties:
+    id: { type: string, nullable: true }
+    name: { type: string, nullable: true }
+    serviceBillId: { type: string, nullable: true }
+    serviceId: { type: string }
+    servicePrice:
+      type: object
+      additionalProperties: true
+    referredPrice: { type: object, additionalProperties: true }
+    reportingPrice: { type: object, additionalProperties: true }
+    urgentPrice: { type: object, additionalProperties: true }
+    priceType: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    categoryId: { type: string, nullable: true }
+    categoryName: { type: string, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    qty: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    foc: { type: number, nullable: true }
+    amount: { type: number, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean, nullable: true }
+
+EDBillProcedureBill:
+  type: object
+  description: |
+    The optional `ProxyBillProcedureBill`
+    sub-bill. Identical shape to the
+    daycare version.
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    procedures:
+      type: array
+      items:
+        $ref: ../schemas/ed.yaml#/EDBillProcedureItem
+
+EDBillProcedureItem:
+  type: object
+  description: |
+    A single procedure line. Per
+    `ProcedureBillItemSchema` in
+    `shared/ed/schemas/ed-bill.schema.ts`.
+  properties:
+    id: { type: string, nullable: true }
+    name: { type: string, nullable: true }
+    procedureBillId: { type: string, nullable: true }
+    procedureId: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    localPrice: { type: number, minimum: 0, nullable: true }
+    foreignerPrice: { type: number, minimum: 0, nullable: true }
+    insurancePrice: { type: number, minimum: 0, nullable: true }
+    governmentPrice: { type: number, minimum: 0, nullable: true }
+    qty: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    foc: { type: number, nullable: true }
+    amount: { type: number, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean, nullable: true }
+
+EDBillServicePackageBill:
+  type: object
+  description: |
+    The optional
+    `ProxyBillServicePackageBill` sub-bill.
+    Identical shape to the daycare version.
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    servicePackages:
+      type: array
+      items:
+        $ref: ../schemas/ed.yaml#/EDBillServicePackageItem
+
+EDBillServicePackageItem:
+  type: object
+  description: |
+    A single service-package line. Per
+    `ServicePackageBillItemSchema`.
+  properties:
+    id: { type: string, nullable: true }
+    name: { type: string, nullable: true }
+    servicePackageBillId: { type: string, nullable: true }
+    servicePackageId: { type: string, nullable: true }
+    servicePackagePrice:
+      type: object
+      additionalProperties: true
+    price: { type: number, minimum: 0, nullable: true }
+    qty: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    foc: { type: number, nullable: true }
+    amount: { type: number, nullable: true }
+
+EDBillPharmacyBill:
+  type: object
+  description: |
+    The optional `ProxyBillPharmacyBill`
+    sub-bill. Identical shape to the
+    daycare version (uses the same
+    `proxyPharmacySaleItemSchema` from
+    `shared/proxy-bill/schemas/proxy-bill.schema.ts`).
+    The stock validation, foc-vs-qty, and
+    cancel-remark `.refine`s are inherited.
+  properties:
+    id: { type: string, nullable: true }
+    proxyBillId: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    patientGroup: { type: string, nullable: true }
+    date: { type: string, nullable: true }
+    invoiceNo: { type: string, nullable: true }
+    billTypeId: { type: string, nullable: true }
+    storeId: { type: string, nullable: true }
+    subtotal: { type: number, minimum: 0, nullable: true }
+    taxPercentage: { type: number, minimum: 0, nullable: true }
+    taxAmount: { type: number, minimum: 0, nullable: true }
+    discountPercentage: { type: number, minimum: 0, nullable: true }
+    discountAmount: { type: number, minimum: 0, nullable: true }
+    totalAmount: { type: number, minimum: 0, nullable: true }
+    remark: { type: string, nullable: true }
+    items:
+      type: array
+      items:
+        $ref: ../schemas/ed.yaml#/EDBillPharmacyItem
+
+EDBillPharmacyItem:
+  type: object
+  description: |
+    A single pharmacy sale item. Per
+    `proxyPharmacySaleItemSchema` —
+    `pharmacySaleItemShape` extended with
+    `id`, `cancelRemark`, `cancelledById`,
+    `isCancel`. Stock-validation,
+    foc-vs-qty, and cancel-remark `.refine`s
+    are inherited.
+  properties:
+    id: { type: string, nullable: true }
+    itemId: { type: string, nullable: true }
+    qty: { type: number, minimum: 0 }
+    focQty: { type: number, minimum: 0 }
+    isNewAddedItem: { type: boolean, nullable: true }
+    initialQty: { type: number, minimum: 0, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    amount: { type: number, minimum: 0, nullable: true }
+    stock:
+      type: object
+      additionalProperties: true
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean, nullable: true }

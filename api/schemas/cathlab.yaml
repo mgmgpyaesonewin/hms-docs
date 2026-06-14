@@ -1,0 +1,537 @@
+# docs/schemas/cathlab.yaml
+# Schemas for the REST `cathlab` module
+# (src/app/api/(cathlab)/).
+#
+# All endpoints are read-only. They expose the cathlab list,
+# cathlab detail, audits, billable requests for admission,
+# patients eligible for cathlab, the cathlab-request list /
+# detail, and infection-screening data.
+#
+# The corresponding write operations (create / update / delete
+# CathLab, create / update / delete CathLabRequest) live on
+# the services but are reached via server actions / tRPC —
+# they are NOT part of this documentation set.
+#
+# All endpoints use `enhancedApiHandler` with
+# `auth: { required: true }` and no `permissions` array.
+#
+# Response envelope is the project standard REST shape:
+#   { success: boolean; result: <data>; message: string; error: string | null }
+
+# =============================================================================
+# Enums
+# =============================================================================
+
+CathRequestStatus:
+  type: string
+  enum: [REQUESTED, APPROVED, COMPLETED, CANCELLED, REJECTED]
+  description: |
+    Prisma `CathRequestStatus` enum imported by
+    `getCathLabRequestsSchema` and
+    `getPatientsForCathLabSchema`. Values: PENDING →
+    REQUESTED → APPROVED → COMPLETED. CANCELLED / REJECTED are
+    terminal.
+
+CathSourceDepartment:
+  type: string
+  enum: [OPD, ED, IPD]
+  description: |
+    `sourceDepartment` filter on `getCathLabRequestsSchema`
+    (inline enum).
+
+PaymentStatusFlag:
+  type: string
+  enum: [PAID, UNPAID]
+  description: |
+    `paymentStatus` derived on the cathlab list endpoint —
+    the repo walks `admission.ipddailyBills[].ipdfinalBillWithDailyBills[].ipdFinalBill.paymentStatus`
+    and returns `"PAID"` if any daily bill is linked to a
+    paid IPD final bill, otherwise `"UNPAID"`.
+
+InfectionScreeningDisplay:
+  type: string
+  enum: [Positive, Negative, Pending]
+  description: |
+    `InfectionScreeningDisplay` from
+    `src/utils/infection-screening.ts:9`:
+    `"Positive" | "Negative" | "Pending"`.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetCathLabsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getCathLabsSchema`
+        (src/app/(dashboard)/shared/cathlab/schemas/get-cathlab.schema.ts:8-15).
+        `.merge(baseQuerySchema).transform(transformPaginationSchema)` —
+        post-transform: `{ page, limit, offset, search?, start?, end?,
+        storeId?, patientType?, patientGroup? }`.
+      properties:
+        storeId:
+          type: string
+          description: |
+            CathLab.storeId filter. **Not** validated as UUID at
+            the router layer (the schema is `z.string()`).
+        patientType:
+          type: string
+          description: |
+            `patientType` from
+            `src/app/(dashboard)/shared/opd/types/opb-billing.types`
+            (Prisma enum, see get-cathlab.schema.ts:6).
+        patientGroup:
+          type: string
+          description: |
+            `patientGroup` Prisma enum, but accepted as
+            `z.string()` (not nativeEnum). The repo casts to
+            `PatientGroup` for the Prisma filter
+            (cathlab.repository.ts:223).
+
+GetPatientsForCathLabQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getPatientsForCathLabSchema`
+        (src/app/(dashboard)/shared/cathlab/schemas/get-patients-for-cathlab.schema.ts:9-14).
+        Layers `cathLabRequestStatus` on top of the shared
+        `baseGetPatientsSchema` from
+        `src/app/(dashboard)/common/patients/features/schemas/get-patients-schema.ts:8-21`.
+      properties:
+        cathLabRequestStatus:
+          $ref: ./cathlab.yaml#/CathRequestStatus
+        includePatientId:
+          type: string
+          description: Short-circuit to a single patient id.
+        hasAdmission:
+          type: boolean
+          description: From `baseGetPatientsSchema`.
+        patientType:
+          type: string
+        patientTypes:
+          type: array
+          items:
+            type: string
+        patientGroup:
+          type: string
+        region:
+          type: string
+        township:
+          type: string
+        checkHasPendingBills:
+          type: boolean
+        hasNewBornRecord:
+          type: boolean
+        currentAdmissionId:
+          type: string
+
+GetCathLabRequestsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getCathLabRequestsSchema`
+        (src/app/(dashboard)/shared/cathlab/schemas/cathlab-request/get-cathlab-request.schema.ts:9-19).
+      properties:
+        status:
+          $ref: ./cathlab.yaml#/CathRequestStatus
+        gender:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+        admissionId:
+          type: string
+          description: Not validated as UUID (`z.string()`).
+        patientId:
+          type: string
+          description: Not validated as UUID (`z.string()`).
+        sourceDepartment:
+          $ref: ./cathlab.yaml#/CathSourceDepartment
+
+CathLabRequestsForBillingQuery:
+  type: object
+  description: |
+    Inline query schema at
+    `src/app/api/(cathlab)/cath-lab-requests-for-billing/route.ts:6-9`.
+    Both fields are required.
+  required:
+    - patientId
+    - admissionId
+  properties:
+    patientId:
+      type: string
+      format: uuid
+    admissionId:
+      type: string
+      format: uuid
+
+CathLabInfectionScreeningQuery:
+  type: object
+  description: |
+    Inline query schema at
+    `src/app/api/(cathlab)/cathlab-infection-screening/route.ts:6-8`.
+    `patientId` is required.
+  required:
+    - patientId
+  properties:
+    patientId:
+      type: string
+      format: uuid
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetCathLabsResponse:
+  type: object
+  description: |
+    Response of `GET /api/cathlab`. Repository signature
+    (cathlab.repository.ts:215, returned at line 310):
+    `Promise<{ cathLabs: CathLabWithPaymentStatus[]; totalCount: number }>`.
+  required:
+    - cathLabs
+    - totalCount
+  properties:
+    cathLabs:
+      type: array
+      items:
+        $ref: ./cathlab.yaml#/CathLabWithPaymentStatus
+    totalCount:
+      type: integer
+      minimum: 0
+
+GetPatientsForCathLabResponse:
+  type: object
+  description: |
+    Response of `GET /api/cathlab/patients-for-cathlab`.
+    Repository signature (cathlab.repository.ts:317, returned
+    at line 370-373): `Promise<{ patients: Patient[];
+    totalCount: number }>`.
+  required:
+    - patients
+    - totalCount
+  properties:
+    patients:
+      type: array
+      items:
+        $ref: ./common.yaml#/Publisher
+        description: |
+          Stand-in — the on-the-wire patients are full `Patient`
+          Prisma rows (no `select` clause — see
+          cathlab.repository.ts:359-366). The `Patient` type is
+          defined under the OPD module; not re-defined here.
+    totalCount:
+      type: integer
+      minimum: 0
+
+GetBillableCathLabRequestsForAdmissionResponse:
+  type: array
+  description: |
+    Response of
+    `GET /api/cath-lab-requests-for-billing`. The handler
+    maps each `cathLabRequest` row to a small
+    `{ id, label }` shape (cathlab.service.ts:97-101):
+      ```
+      { id: r.id, label: r.requestId ?? "Unknown Request ID" }
+      ```
+  items:
+    type: object
+    required:
+      - id
+      - label
+    properties:
+      id:
+        type: string
+        format: uuid
+      label:
+        type: string
+
+GetCathLabByIdResponse:
+  type: object
+  description: |
+    Response of `GET /api/cathlab/{id}`. Returns the
+    `CathLabWithItems` shape from the repository's
+    `cathLabWithItemsValidator` — a fully-populated CathLab
+    including `store`, `patient`, `admission`, `cathLabServiceItems`,
+    `CathLabProcedureItem`, `cathLabCompanyDirectItems`,
+    and `CathLabPharmacySale`. The Prisma `include` is the
+    base `cathLabValidator` plus an items-related expansion.
+
+    May be `null` if the id does not match an existing
+    CathLab — the service/repo does not throw 404 on miss.
+
+GetCathLabAuditsByIdResponse:
+  type: object
+  description: |
+    Response of `GET /api/cathlab/{id}/audits`. Returns the
+    CathLab with the `CathLabAudit` array included
+    (`cathLabWithAuditsValidator`,
+    cathlab.repository.ts:175-208). Each audit entry has
+    `createdBy` / `updatedBy` projections that include a
+    `role.name` field — distinctive from the rest of the
+    application, which only projects `id`/`fullName`/`username`.
+
+GetCathLabRequestsResponse:
+  type: object
+  description: |
+    Response of `GET /api/cathlab-requests`. Repository
+    signature (cathlab-request.repository.ts:240):
+    `Promise<{ cathLabRequests: CathLabRequest[]; totalCount: number }>`.
+  required:
+    - cathLabRequests
+    - totalCount
+  properties:
+    cathLabRequests:
+      type: array
+      items:
+        $ref: ./cathlab.yaml#/CathLabRequest
+    totalCount:
+      type: integer
+      minimum: 0
+
+GetCathLabRequestByIdResponse:
+  type: object
+  description: |
+    Response of `GET /api/cathlab-requests/{id}`. Returns
+    the single CathLabRequest with the same shape as the
+    list endpoint (via `cathLabRequestValidator`).
+
+GetInfectionScreeningForPatientResponse:
+  type: object
+  description: |
+    Response of
+    `GET /api/cathlab-infection-screening`. Service signature
+    (cathlab-request.service.ts:46-75):
+    `Promise<{ hasApprovedRequest: boolean; cathLabRequestId: string | null; displayLabel: InfectionScreeningDisplay | null; isPositiveAlert: boolean }>`.
+
+    `displayLabel` is the human-readable summary derived from
+    the four screening markers (`hbAg`, `hcv`, `hiv`, `vdrl`)
+    plus `otherScreening`. Computed by
+    `getInfectionScreeningDisplay` from
+    `src/utils/infection-screening.ts:9`.
+  required:
+    - hasApprovedRequest
+    - cathLabRequestId
+    - displayLabel
+    - isPositiveAlert
+  properties:
+    hasApprovedRequest:
+      type: boolean
+    cathLabRequestId:
+      type: string
+      format: uuid
+      nullable: true
+    displayLabel:
+      $ref: ./cathlab.yaml#/InfectionScreeningDisplay
+      nullable: true
+    isPositiveAlert:
+      type: boolean
+      description: Convenience flag: `displayLabel === "Positive"`.
+
+# =============================================================================
+# Entity schemas (high-level shape only; nested relations summarised)
+# =============================================================================
+
+CathLabWithPaymentStatus:
+  type: object
+  description: |
+    CathLab list-row shape — the base CathLab (via
+    `cathLabValidator` include) plus a derived `paymentStatus`
+    field computed by the repository
+    (cathlab.repository.ts:296-308).
+
+    The full nested Prisma `include` selects `store`, `patient`
+    (with `memberList.memberCard`), `admission` (with `deposits`,
+    `ipddailyBills.ipdfinalBillWithDailyBills.ipdFinalBill`),
+    `createdBy` / `updatedBy`, `cathLabRequest`,
+    `cathLabServiceItems`, `CathLabProcedureItem`,
+    `cathLabCompanyDirectItems`, `CathLabPharmacySale`, and
+    `CathLabAudit`. See `cathLabValidator`
+    (cathlab.repository.ts:16-173) for the full include
+    definition.
+
+    This schema documents the top-level fields and the most
+    important nested relations; clients should treat deep
+    nested shapes as opaque pass-through unless documented
+    elsewhere.
+  properties:
+    id:
+      type: string
+      format: uuid
+    storeId:
+      type: string
+      format: uuid
+    patientId:
+      type: string
+      format: uuid
+    cathLabRequestId:
+      type: string
+      format: uuid
+      nullable: true
+    admissionId:
+      type: string
+      format: uuid
+      nullable: true
+    ipdDailyBillId:
+      type: string
+      format: uuid
+      nullable: true
+    date:
+      type: string
+      format: date-time
+    remark:
+      type: string
+      nullable: true
+    isDeleted:
+      type: boolean
+      description: |
+        Soft-delete flag. The list endpoint filters to
+        `isDeleted: false` (cathlab.repository.ts:218).
+    paymentStatus:
+      $ref: ./cathlab.yaml#/PaymentStatusFlag
+      description: |
+        Derived from
+        `admission.ipddailyBills.ipdfinalBillWithDailyBills.ipdFinalBill.paymentStatus`.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    patient:
+      type: object
+      description: Full `Patient` Prisma row (with `memberList.memberCard`).
+    store:
+      type: object
+      description: Full `Store` Prisma row.
+    admission:
+      type: object
+      description: |
+        Full `Admission` row (with `deposits` and the deeply
+        nested `ipddailyBills[].ipdfinalBillWithDailyBills[].ipdFinalBill`).
+    cathLabRequest:
+      type: object
+      nullable: true
+    cathLabServiceItems:
+      type: array
+      items:
+        type: object
+    CathLabProcedureItem:
+      type: array
+      items:
+        type: object
+    cathLabCompanyDirectItems:
+      type: array
+      items:
+        type: object
+    CathLabPharmacySale:
+      type: array
+      items:
+        type: object
+    CathLabAudit:
+      type: array
+      items:
+        type: object
+
+CathLabRequest:
+  type: object
+  description: |
+    CathLabRequest list-row shape — selected via
+    `cathLabRequestValidator`
+    (cathlab-request.repository.ts:19-121). Includes the
+    request's own fields plus `createdBy` / `updatedBy` as
+    `Publisher` projections, plus `admission` (id only),
+    `patient` (full row), `referralDoctor` (id/doctorId/title +
+    user.fullName + specialization.name), `referralClinic`
+    (id/name), `anesthesiaType` (id/name), and the
+    cardiologist / assistant-doctor / assistant-nurse join
+    tables with their nested projections.
+  properties:
+    id:
+      type: string
+      format: uuid
+    requestId:
+      type: string
+      description: |
+        Human-readable display id (e.g. "CLR-202405-0001"),
+        generated by `generateMonthlyResetId` and used as
+        the search target.
+    patientId:
+      type: string
+      format: uuid
+    admissionId:
+      type: string
+      format: uuid
+      nullable: true
+    cathLabRequestStatus:
+      $ref: ./cathlab.yaml#/CathRequestStatus
+    sourceDepartment:
+      $ref: ./cathlab.yaml#/CathSourceDepartment
+      nullable: true
+    referralDoctorId:
+      type: string
+      format: uuid
+      nullable: true
+    referralClinicId:
+      type: string
+      format: uuid
+      nullable: true
+    anesthesiaTypeId:
+      type: string
+      format: uuid
+      nullable: true
+    operationDate:
+      type: string
+      format: date-time
+      nullable: true
+    operationTime:
+      type: string
+      format: date-time
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    admission:
+      type: object
+      properties:
+        admissionId:
+          type: string
+    patient:
+      type: object
+      description: Full `Patient` Prisma row.
+    referralDoctor:
+      type: object
+      nullable: true
+    referralClinic:
+      type: object
+      nullable: true
+    anesthesiaType:
+      type: object
+      nullable: true
+    cathLabRequestCardiologist:
+      type: array
+      items:
+        type: object
+    cathLabRequestAssistantDoctor:
+      type: array
+      items:
+        type: object
+    cathLabRequestAssistantNurses:
+      type: array
+      items:
+        type: object

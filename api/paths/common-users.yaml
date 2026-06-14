@@ -1,0 +1,318 @@
+# docs/paths/common-users.yaml
+# REST endpoints:
+#   GET /api/users
+# Source: src/app/api/(common)/users/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions or other routes (e.g. the
+# login / logout flows are reached via tRPC
+# `authRouter`).
+
+/api/users:
+  get:
+    summary: List users (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of users with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            data: User[],
+            totalCount: number,
+          },
+          message: "",
+          error: ""
+        }
+        ```
+
+      Notable: the result's data key is
+      `data`, not `users` (the inconsistent
+      naming among `common-*` endpoints —
+      most use the resource name, this one
+      uses `data`).
+
+      Filters (from `getUserSchema`, interpreted
+      by `findAndCountUsers`):
+        - `search` — `contains` (case-insensitive)
+          against `username`, `fullName`, `userId`,
+          `phoneNo`, or `email`. Five-branch `OR`.
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`). Both must be present
+          (the repository only sets the range if
+          both are truthy).
+        - `role` — exact match (`where.roleId`).
+          Note: the Zod field is `z.string()`,
+          so a malformed UUID string is accepted
+          by the schema and passed through to
+          Prisma.
+        - `department` — exact match
+          (`where.departmentId`). Same
+          string-not-UUID issue.
+        - `status` — `nativeEnum(userStatus)`:
+          `ACTIVE` / `INACTIVE`. Exact match.
+
+      Repository ordering: `createdAt: desc`.
+      The `findMany` and `count` share the
+      same `where`, so `totalCount` is the
+      filtered total.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` only — no
+      `permissions`. Any authenticated user
+      can read the full user list, including
+      the joined `role.permissions` matrix
+      and the full `department` row.
+
+      Source:
+      `src/app/api/(common)/users/route.ts:6-17`.
+    tags:
+      - Common / Users
+    operationId: rest_common_users_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: role
+        schema:
+          type: string
+        description: |
+          Filter by `roleId` (a UUID string). The
+          Zod field is `z.string()`, so malformed
+          UUIDs are accepted by the schema and
+          passed through to Prisma (which will
+          return zero rows).
+      - in: query
+        name: department
+        schema:
+          type: string
+        description: |
+          Filter by `departmentId` (a UUID
+          string). Same UUID-validity issue.
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    responses:
+      "200":
+        description: Paginated list of users.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-users.yaml#/GetUsersResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — the
+    route declares only
+    `auth: { required: true }`, no
+    `permissions` array. Any authenticated
+    user can read the full user list. The
+    endpoint is a major PII / capability
+    surface (see leaks below).
+  - **Major leak: `user.role.permissions:
+    true`** — the `findAndCountUsers`
+    repository includes the joined
+    `role: { include: { permissions: true } }`
+    (users-repository.ts:101-105). So every
+    list response item carries the user's
+    full `Permission[]` for their role. Same
+    pattern as [[common-doctors]]. This is
+    the user-list endpoint — the most
+    sensitive list in the system.
+  - **Major leak: `password` is NOT omitted
+    on the list endpoint** — the
+    `createUser` repository uses
+    `omit: { password: true }` on the
+    `prisma.user.create` call, but
+    `findAndCountUsers` does NOT. It uses
+    `include: { ... }` only, with no
+    `omit`. Since the list response goes
+    through the standard
+    `NextResponse.json` serialization, the
+    `password` field is in the JSON
+    response.
+    **Caveat**: the `User` model declares
+    `password String @db.VarChar(255)`. The
+    field is always present on the model.
+    The omission pattern in `createUser`
+    suggests the developer knew about
+    `omit`. The list endpoint is the bug.
+    **This is a serious security issue —
+    every list response item carries the
+    user's Argon2 hash**. Worth verifying
+    in the running app.
+  - **`department` is the full `Department`
+    row** — the `include: { department: true }`
+    (no projection) returns all `Department`
+    columns. Same forward-compat hazard as
+    [[common-items]].
+  - **`role` is the full `Role` row plus
+    `permissions`** — the
+    `include: { role: { include: { permissions:
+    true } } }` (no projection on `role`).
+    The full `Role` includes fields like
+    `isSuperadmin`, `description`, etc.
+  - **`userId` is sequential and
+    guessable** — `userId @unique` is
+    auto-generated by the service as
+    `UID-NNNN` (4-digit zero-pad) via
+    `getLastUserId` (which sorts by
+    `createdAt: desc` and reads
+    `lastUser.userId`) and increments the
+    trailing number. First user is `UID-0001`.
+    Same probe-by-duplicate pattern as
+    [[common-clinic]],
+    [[common-departments]],
+    [[common-roles]],
+    [[common-selling-price-groups]],
+    [[common-doctors]].
+  - **`role` / `department` query params
+    are loosely-typed** — the Zod fields
+    are `z.string()`, not
+    `z.string().uuid()`. Malformed UUIDs
+    are accepted by the schema; Prisma
+    then returns zero rows.
+  - **`search` matches `email`** — a
+    five-branch `OR` on `username`,
+    `fullName`, `userId`, `phoneNo`,
+    `email`. The `email` is `@unique` in
+    the Prisma model, so a search of an
+    email value returns the matching user
+    (if the case-insensitive contains
+    matches). This is a `findUserByEmail`
+    surface, even though the canonical
+    `findUserByEmail` is implemented
+    elsewhere. Any authenticated user
+    can enumerate emails of any other
+    user via this list.
+  - **`getTotalUsersCount` is a separate
+    repository method that counts ALL
+    users** — `getTotalCount` does
+    `prisma.user.count()` with no `where`
+    (users-repository.ts:116-118). It is
+    not exposed via REST (the route does
+    not call it), but it is exported and
+    likely used by dashboard widgets.
+    Multi-tenant hazard: counts across
+    all stores.
+  - **`createUser` uses `omit: {
+    password: true }` on the `create`
+    call** — but the `createUser` route
+    is not exposed as REST (it's a
+    server action). The `findAndCount`
+    list does NOT use `omit`. So REST
+    list = password leak; server-action
+    create = no password leak. Inconsistent.
+  - **`findById` (used by `editUser`,
+    `deleteUser`) uses `omit: { password:
+    true }` on the joined `createdBy` /
+    `updatedBy` but NOT on the main user
+    row** — so `editUser` / `deleteUser`
+    server actions also see the password
+    hash on the main user. The
+    `omit: { password: true }` on
+    `createdBy` / `updatedBy` is
+    recursive (a nested `omit` on an
+    include selector). Same bug as
+    `findAndCountUsers`.
+  - **`updateUser` returns the full user
+    row (no `omit`)** — so the
+    `editUser` server action's return
+    value includes the password. The
+    caller of the server action (likely
+    a tRPC router or another server
+    action) sees the hash.
+  - **`User` model has 70+ FK relations**
+    — a `delete` is heavily FK-constrained.
+    The `deleteUser` service throws
+    `AppError("User is in use and cannot
+    be deleted", 400)` on FK violations.
+    Note: 400 is inconsistent with the 409
+    used by other endpoints. The 400 also
+    is used for "Superadmin cannot be
+    deleted" — same status code for two
+    semantically different errors.
+  - **`isSuperadmin: true` blocks delete
+    and deactivation** — the service
+    checks `user.isSuperadmin` before
+    allowing delete / deactivation
+    (user-service.ts:17-19, 104-106).
+    Both raise 400. The "Superadmin
+    cannot be inactive" check is unique
+    to the edit flow.
+  - **`createUser` sequential `userId`
+    generation is a race hazard** —
+    `getLastUserId` reads the most recent
+    user, computes the next `UID-NNNN`,
+    then creates. Two concurrent
+    `createUser` calls could both read
+    the same "last" user and try to
+    insert the same `userId`. The
+    `userId` column is `@unique`, so
+    one would fail with a Prisma unique
+    violation. The service does not
+    catch / retry this — the error
+    surfaces as 500.
+  - **`User` type and `User` schema are
+    inconsistent** — the TS `User` type
+    declares `phoneNo: string` (non-null)
+    but the Prisma model declares
+    `phoneNo String @map("phone_no")` (also
+    non-null, consistent). The `email`
+    field is `String? @unique` (nullable
+    in Prisma) and `string | null` in TS
+    — consistent. The TS `role: Pick<Role,
+    "id" | "name" | "permissions" |
+    "isSuperadmin">` is narrower than the
+    repository's full-row `include`. The
+    `password` field is on the Prisma
+    model (always present) but not in the
+    TS `User` type — so the TS type
+    correctly does not admit the password,
+    but the runtime data does include it
+    (a serious type-vs-runtime mismatch
+    on the list endpoint).
+  - **`roleId` is non-nullable in the
+    Prisma model** — `roleId String
+    @map("role_id") @db.Uuid` (no `?`).
+    So every user must have a role. The
+    TS type declares `roleId: string | null`
+    — inconsistent (the TS type allows
+    null but the schema does not). The
+    `findAndCountUsers` filter `where.roleId
+    = role` will always have a non-null
+    value to match against.
+  - **`departmentId` is nullable in both
+    Prisma (`String? @map("department_id")
+    @db.Uuid`) and TS (`string | null`)** —
+    consistent.
+  - **`updatedBy` is `omit: { password:
+    true }` only on `findById`, not on
+    `findAndCountUsers`** — same
+    inconsistency. The list endpoint
+    leaks the password hash on every
+    joined creator / updater; the
+    single-user endpoint omits the
+    password on the joined creator /
+    updater but NOT on the main user.
+  - **`userId`, `email`, `username`,
+    `employeeId` are all `@unique` in
+    the Prisma model** — so a search
+    of an exact value returns the
+    single matching user. The search
+    uses `contains` (not `equals`),
+    so partial matches also work.

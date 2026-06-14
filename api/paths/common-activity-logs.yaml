@@ -1,0 +1,339 @@
+# docs/paths/common-activity-logs.yaml
+# REST endpoints:
+#   GET  /api/activity-logs
+#   POST /api/activity-logs
+# Source: src/app/api/(common)/activity-logs/route.ts
+#
+# This is the only REST sub-area for activity
+# logs; the bulk of `common-reports` is
+# separate (49 sub-routes). The write side is
+# used for client-side `PageView` events.
+
+/api/activity-logs:
+  get:
+    summary: List activity logs (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of activity logs with the total row
+      count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            logs: ActivityLog[],
+            totalCount: number,
+          },
+          message: ""
+        }
+        ```
+      Notably, the `error` field is **omitted**
+      on success (the route does not set it
+      explicitly, so the `NextResponse.json`
+      output is missing the `error: null`
+      field). This is inconsistent with the
+      `{ success, result, message, error }`
+      envelope used by most other `common-*`
+      endpoints.
+
+      Filters (from `getActivityLogsSchema`,
+      which is `baseQuerySchema.transform(
+      transformPaginationSchema)` — i.e. the
+      standard pagination schema plus
+      `search`, `start`, `end`):
+        - `search` — `contains` (case-insensitive)
+          against the joined `user.username`,
+          joined `user.fullName`, or joined
+          `user.role.name`. Three-branch `OR`,
+          each going through the `user` relation.
+        - `start` / `end` — `timestamp` range
+          (`gte` / `lte`). Both must be present
+          (the service only sets the range if
+          both are truthy).
+        - `page` / `limit` — standard
+          `transformPaginationSchema` shape.
+          Defaults: `limit: 10, offset: 0` (the
+          service applies `take: query.limit ||
+          10, skip: query.offset || 0`).
+
+      Repository ordering: `timestamp: desc`.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` only — no
+      `permissions`. Any authenticated user
+      can read the full audit log of the
+      system.
+
+      Source:
+      `src/app/api/(common)/activity-logs/route.ts:8-26`.
+    tags:
+      - Common / Activity Logs
+    operationId: rest_common_activity_logs_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of activity logs.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-activity-logs.yaml#/GetActivityLogsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+  post:
+    summary: Create an activity log entry
+    description: |
+      Authenticated write. Accepts a body
+      describing a client-side activity (a
+      page view, click, or hover).
+
+      Body (`createActivityLogSchema`):
+        - `event` — enum
+          `["PageView", "Click", "Hover"]`.
+          Defaults to `"PageView"`. When the
+          event is `PageView`, `page` is
+          required (enforced via
+          `superRefine`).
+        - `page` — optional string. Required
+          only when `event === "PageView"`.
+
+      Flow:
+        - If `event === "PageView"`, the route
+          calls
+          `pageViewLogger.logPageView(body.page, user.id)`.
+          The `PageViewLogger` constructs a
+          description
+          `` `Viewed \`${page}\`` `` and
+          delegates to the shared
+          `activityLogger` (the in-memory
+          batched writer that flushes to
+          `prisma.activityLog.create` every
+          5 seconds or when the buffer hits
+          50 entries).
+        - For `Click` and `Hover`, **no
+          `logger.log` call is made in the
+          route** — the route returns
+          `result: null` without persisting
+          anything. So the `Click` / `Hover`
+          branches are currently no-ops
+          (the schema accepts them, but the
+          handler ignores them). The schema
+          may be anticipating future
+          per-event handlers.
+
+      Response shape on success:
+        ```
+        {
+          success: true,
+          result: null,
+          message: ""
+        }
+        ```
+      No `error` field on success (same as
+      the GET). No `id` of the created log
+      is returned — the log is batched
+      asynchronously, so the client cannot
+      read it back.
+
+      The route uses `enhancedApiHandler`
+      with `auth: { required: true }` only —
+      no `permissions`.
+
+      Source:
+      `src/app/api/(common)/activity-logs/route.ts:28-47`.
+    tags:
+      - Common / Activity Logs
+    operationId: rest_common_activity_logs_create
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common-activity-logs.yaml#/CreateActivityLogBody
+    responses:
+      "200":
+        description: |
+          Activity logged (or, for `Click` /
+          `Hover`, silently accepted with no
+          side-effect). No `result` body
+          content.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-activity-logs.yaml#/CreateActivityLogResponse
+      "400":
+        description: |
+          Body validation failed (e.g.,
+          `event === "PageView"` and `page` is
+          missing).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — both
+    `GET` and `POST` declare only
+    `auth: { required: true }`, no
+    `permissions` array. Any authenticated
+    user can read the full audit log of the
+    system AND log events on behalf of
+    themselves.
+  - **The `GET` endpoint is an audit-log
+    enumeration surface** — there is no
+    `entityId` / `action` / `entity` /
+    `userId` filter on the `findAndCount`
+    service (only `search`, `start`, `end`).
+    So a caller cannot narrow the query to
+    "logs about Item X" or "logs by user Y"
+    via the API. They must use `search`
+    (full-text-ish) or the timestamp range.
+    Notable: the Prisma `ActivityLog` model
+    has `@@index([userId])`,
+    `@@index([action])`, `@@index([entity])`
+    — so the index support for those
+    filters is in place, but the API does
+    not expose them.
+  - **`POST` accepts `event: "Click" | "Hover"`
+    but does nothing** — the route branches
+    on `event === "PageView"` and logs; for
+    other events, it returns success with
+    `result: null` and no side effect. The
+    schema and event type are forward-looking
+    but currently dead.
+  - **POST is rate-limit free** — a client
+    could call this endpoint with arbitrary
+    frequency, generating one `PageView`
+    log per call. The `activityLogger`
+    batches in memory (50 entries / 5
+    seconds), but there's no upstream
+    rate-limit on the route.
+  - **`PageView` description is user-supplied**
+    — the `page` field goes directly into
+    the description:
+    `` `Viewed \`${page}\`` ``
+    (page-view-logger.ts:17). So a malicious
+    user can inject arbitrary text into
+    `ActivityLog.description` (it's a
+    free-form string column with no length
+    cap visible in the schema). Not a
+    critical issue (it's their own audit
+    log), but worth noting.
+  - **`activityLogger` uses the shared
+    singleton `prisma` import** — the
+    logger's `ActivityLogger` class
+    accepts a `prismaClient` config but
+    the `pageViewLogger` and the route's
+    `activityLogsService` both use the
+    default singleton. So all in-flight
+    requests share the same batch buffer.
+    If the buffer never flushes (e.g. the
+    process restarts), the unflushed
+    entries are lost.
+  - **The `countPromise` is `await`ed
+    sequentially, not in parallel** — the
+    `findMany` is started first (returns a
+    promise), then the `count` is
+    `await`ed before `Promise.all`. So the
+    `count` blocks the `findMany` from
+    being parallelized. The same pattern
+    appears in [[common-bill-types]] and
+    [[common-departments]]. See the
+    related note in the security notes of
+    those sub-areas.
+  - **`user` is included as a full
+    `Pick<User, "id" | "fullName" | "userId"
+    | "username"> & { role: Pick<Role, "id"
+    | "name"> }` projection** — the
+    `user.password` is not in the
+    projection (good), but the projection
+    does NOT include `email` / `phoneNo` /
+    `status` / `isSuperadmin` / `roleId` /
+    `departmentId` / `joiningDate`. The
+    joined `role` is narrowed to
+    `Pick<Role, "id" | "name">` (no
+    `permissions`). This is a clean
+    pattern — narrower than the canonical
+    `Publisher` (which includes `fullName`
+    + `username`) only by the addition of
+    `userId`. See the related `Publisher`
+    schema in `common.yaml`.
+  - **The `ActivityLog` model has no
+    `entity` enum constraint** — both
+    `entity` and `action` are nullable
+    `String`s. The application-level
+    `Activity` type (types/index.ts:33-70)
+    documents `action` as "for example
+    CREATE / UPDATE / DELETE / APPROVE"
+    but doesn't enforce an enum. So the
+    list of `action` strings is open.
+  - **`entityId` is a nullable UUID** —
+    the `entityId` column is
+    `String? @db.Uuid` — so it must be a
+    valid UUID or null. The
+    `PageViewLogger` sets `entity: page`
+    (the page string), not `entityId`, so
+    the FK-to-something semantic is loose
+    (an `entityId` is not enforced to
+    exist in the target table). The
+    `ActivityLog` has no FK relation
+    named `entity` — only `userId` (FK to
+    `User`).
+  - **`onDelete: Cascade` on `userId`** —
+    the `user User @relation(... onDelete:
+    Cascade)` means deleting a `User`
+    deletes all their activity logs.
+  - **The `findMany` does not include
+    `description` / `action` / `entity` /
+    `entityId` in the `include` — but
+    those are scalar columns, not
+    relations, so they come through
+    automatically with the default
+    projection**. The `user` is the only
+    `include`. So the `ActivityLog`
+    response shape includes: `id, entityId,
+    action, entity, userId, timestamp,
+    description, additionalData, user`.
+  - **No `action` / `entity` /
+    `entityId` filtering on the API** —
+    even though the `ActivityLog` model
+    has `@@index([action])` and
+    `@@index([entity])`, the API does not
+    accept those query parameters. A
+    caller can find an `ActivityLog` by
+    `search` (full-text-ish) or by
+    `start` / `end` range, but not by
+    `action: "Create"`, `entity: "Item"`,
+    or `entityId: <uuid>`. Forward-compat
+    note: the indexes are in place, so
+    adding the filters later is cheap.
+  - **The `search` filter goes through
+    the `user` relation** — three
+    nested-relation conditions on
+    `user.username`, `user.fullName`, and
+    `user.role.name`. So a search of
+    "admin" would match all activity
+    logs whose user has a role named
+    "admin" OR whose username / fullName
+    contains "admin". The nested `OR` is
+    flattened (the three clauses are
+    siblings in a single `where.OR`
+    array).

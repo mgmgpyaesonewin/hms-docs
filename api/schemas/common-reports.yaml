@@ -1,0 +1,1404 @@
+# docs/schemas/common-reports.yaml
+# Schemas for the common-reports sub-area of
+# the `common` REST module. 47 endpoints across
+# three path files (clinical, financial, misc).
+# All endpoints are GET-only, all require an
+# authenticated session, none declare explicit
+# RBAC permissions. See the per-file notes for
+# per-route details.
+
+# =============================================================================
+# Generic envelopes
+# =============================================================================
+#
+# Most reports endpoints return a passthrough
+# service result. The schema's exact field
+# shape (array vs object, with or without a
+# count) is not formally constrained by Zod
+# in the repository — the Zod schemas in
+# src/app/(dashboard)/common/reports/features/
+# schemas/ define the *row* shape, not the
+# *envelope*. The envelopes are documented
+# per-endpoint in the path files.
+
+GenericServiceResult:
+  type: object
+  description: |
+    Common passthrough shape for report
+    endpoints whose repository returns a
+    service-specific object that the
+    application does not formally type. The
+    wire shape is whatever the service
+    produces — typically
+    `{ rows: [...], totalCount: number }` or
+    a bare array.
+  additionalProperties: true
+
+# =============================================================================
+# Clinical / appointment reports
+# =============================================================================
+
+AppointmentsByDoctorRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/appointments-by-doctor`
+    (and `/export` uses a similar but
+    per-appointment shape). Per
+    `appointmentsByDoctorReportSchema`.
+  required:
+    - id
+    - doctorId
+    - doctorName
+    - specialization
+    - department
+    - totalAppointments
+    - booked
+    - confirmed
+    - completed
+    - cancelled
+  properties:
+    id: { type: string }
+    doctorId: { type: string }
+    doctorName: { type: string }
+    specialization: { type: string }
+    department: { type: string }
+    totalAppointments: { type: integer, minimum: 0 }
+    booked: { type: integer, minimum: 0 }
+    confirmed: { type: integer, minimum: 0 }
+    completed: { type: integer, minimum: 0 }
+    cancelled: { type: integer, minimum: 0 }
+
+GetAppointmentsByDoctorResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/appointments-by-doctor`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/AppointmentsByDoctorRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+AppointmentsByDoctorExportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/appointments-by-doctor/export`.
+    Per
+    `appointmentsByDoctorReportExportSchema`.
+    All fields nullable (the raw SQL joins
+    can drop fields for cancelled
+    appointments).
+  properties:
+    id: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    doctorName: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    patientName: { type: string, nullable: true }
+    township: { type: string, nullable: true }
+    region: { type: string, nullable: true }
+    appointmentType: { type: string, nullable: true }
+    appointmentDate: { type: string, format: date-time, nullable: true }
+    startTime: { type: string, format: date-time, nullable: true }
+    status: { type: string, nullable: true }
+
+GetAppointmentsByDoctorExportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/appointments-by-doctor/export`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/AppointmentsByDoctorExportRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+AppointmentsByDoctorPatientRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/appointments-by-doctor/{id}/patient`.
+    Per `appointmentsByDoctorPatientSchema`.
+    PII: patientName, patientId, township,
+    region, appointmentDate + start.
+  required:
+    - patientId
+    - name
+    - patientType
+    - patientGroup
+    - township
+    - region
+    - appointmentType
+    - appointmentStatus
+    - appointmentDate
+    - start
+  properties:
+    patientId: { type: string }
+    name: { type: string }
+    patientType: { type: string }
+    patientGroup: { type: string }
+    township: { type: string }
+    region: { type: string }
+    appointmentType: { type: string }
+    appointmentStatus: { type: string }
+    appointmentDate: { type: string, format: date-time }
+    start: { type: string, format: date-time }
+
+GetAppointmentsByDoctorPatientResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/appointments-by-doctor/{id}/patient`.
+    `{ success: true, result, error: "",
+    message: "" }`.
+  required: [success, result, error, message]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/AppointmentsByDoctorPatientRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+    message: { type: string, example: "" }
+
+GetDoctorInfoResponse:
+  type: object
+  description: |
+    Response shape of the doctor-info card
+    endpoints
+    (`/api/reports/appointments-by-doctor/{id}`,
+    `/api/reports/referral-report/doctor/{id}/doctor-info`,
+    `/api/reports/under-care-doctor/{id}`).
+    `{ success: true, result, error: "",
+    message: "" }` for the appointment one;
+    `{ success: true, result, error: "" }` for
+    the referral one; `{ success: true,
+    result, error: "", message: "" }` for
+    the under-care one. The result is the
+    `Doctor` row from
+    `getDoctorInfo(id)` (canonical Doctor
+    type — id, doctorId, title,
+    user.fullName, etc.).
+  required: [success, result]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/common-doctors.yaml#/Doctor
+        - type: "null"
+        - type: object
+          additionalProperties: true
+    error: { type: string }
+    message: { type: string }
+
+AppointmentsBySpecializationRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/appointments-by-specialization`.
+    Per
+    `appointmentsBySpecializationReportSchema`.
+    The numeric fields are
+    `z.coerce.number()` in the schema — the
+    service may feed string aggregates from
+    raw SQL.
+  required:
+    - specialization
+    - totalAppointments
+    - booked
+    - confirmed
+    - completed
+    - cancelled
+  properties:
+    specialization: { type: string }
+    totalAppointments: { type: number, minimum: 0 }
+    booked: { type: number, minimum: 0 }
+    confirmed: { type: number, minimum: 0 }
+    completed: { type: number, minimum: 0 }
+    cancelled: { type: number, minimum: 0 }
+
+GetAppointmentsBySpecializationResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/appointments-by-specialization`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/AppointmentsBySpecializationRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+FollowUpPatientRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/follow-up-patients`. Per
+    `followUpPatientSchema`. PII: patientName,
+    patientId, phoneNo, age.
+  required:
+    - appointmentDate
+    - appointmentTime
+    - patientName
+    - patientId
+    - age
+    - gender
+    - phoneNo
+    - title
+    - doctorName
+    - doctorId
+    - specialization
+    - appointmentTypeId
+    - appointmentTypeName
+    - status
+    - createdAt
+    - createdByName
+  properties:
+    appointmentDate: { type: string, format: date-time }
+    appointmentTime: { type: string, format: date-time }
+    patientName: { type: string }
+    patientId: { type: string }
+    age:
+      type: string
+      format: date-time
+      description: |
+        **The schema declares
+        `z.coerce.date()` for this field**, so
+        the wire shape is a `Date` (or an
+        ISO-8601 string), not a number.
+        Misleading field name — this is a date
+        type, not an age-in-years.
+    gender:
+      type: string
+      enum: [MALE, FEMALE, OTHER]
+    phoneNo: { type: string }
+    title: { type: string }
+    doctorName: { type: string }
+    doctorId: { type: string }
+    specialization: { type: string }
+    appointmentTypeId: { type: string }
+    appointmentTypeName: { type: string }
+    status:
+      type: string
+      enum: [BOOKED, CONFIRMED, CANCELLED, COMPLETED]
+    createdAt: { type: string, format: date-time }
+    createdByName: { type: string }
+
+GetFollowUpPatientsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/follow-up-patients`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/FollowUpPatientRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+ReferralClinicSummaryRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/referral-report/clinic`.
+    Per `referralClinicSummarySchema`.
+    `clinicType` is **hard-coded to
+    `"OUT_SERVICE"` by the schema's
+    `.transform`** — the underlying SQL
+    column is not surfaced.
+  required:
+    - id
+    - clinicId
+    - clinicName
+    - clinicType
+    - totalPatients
+  properties:
+    id: { type: string }
+    clinicId: { type: string }
+    clinicName: { type: string }
+    clinicType:
+      type: string
+      enum: [OUT_SERVICE]
+    totalPatients: { type: integer, minimum: 0 }
+
+GetReferralClinicSummaryResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/referral-report/clinic`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ReferralClinicSummaryRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+ReferralDoctorSummaryRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/referral-report/doctor`.
+    Per `referralDoctorSummarySchema`.
+  required:
+    - id
+    - doctorId
+    - doctorName
+    - doctorType
+    - totalPatients
+  properties:
+    id: { type: string }
+    doctorId: { type: string }
+    doctorName: { type: string }
+    doctorType: { type: string }
+    totalPatients: { type: integer, minimum: 0 }
+
+GetReferralDoctorSummaryResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/referral-report/doctor`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ReferralDoctorSummaryRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+ReferralDetailRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/referral-report/{clinic,doctor}/{id}`
+    (and the `/{id}/patient` aliases). Per
+    `referralDetailSchema`. PII: patientName,
+    patientId, referralDate.
+  required:
+    - patientId
+    - patientName
+    - patientGroup
+    - patientType
+    - referralDate
+  properties:
+    patientId: { type: string }
+    patientName: { type: string }
+    patientGroup: { type: string }
+    patientType: { type: string }
+    referralDate: { type: string, format: date-time }
+    appointmentType:
+      type: string
+      nullable: true
+
+GetReferralClinicDetailResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/referral-report/clinic/{id}`,
+    `/doctor/{id}`, and the `/{id}/patient`
+    aliases. Envelope varies slightly
+    (`error: ""` vs `error: "", message: ""`).
+  required: [success, result]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ReferralDetailRow
+        - type: object
+          additionalProperties: true
+    error: { type: string }
+    message: { type: string }
+
+GetGenericObjectResponse:
+  type: object
+  description: |
+    Generic passthrough for endpoints whose
+    service return type is not formally
+    documented at the Zod level (e.g.,
+    payment-method-report, daily-profit-reports).
+    Documented as `additionalProperties: true`
+    so the wire schema is faithful to the
+    codebase (no synthetic constraints).
+  required: [success, result]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    error:
+      oneOf:
+        - type: string
+        - type: "null"
+    message: { type: string }
+
+UnderCareDoctorSummaryRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/under-care-doctor`. Per
+    `underCareDoctorReportSchema`.
+  required:
+    - id
+    - doctorId
+    - doctorName
+    - totalPatients
+  properties:
+    id: { type: string }
+    doctorId: { type: string }
+    doctorName: { type: string }
+    totalPatients: { type: integer, minimum: 0 }
+
+GetUnderCareDoctorSummaryResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/under-care-doctor`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/UnderCareDoctorSummaryRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+UnderCareDoctorAdmissionRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/under-care-doctor/{id}/admissions`.
+    Per
+    `underCareDoctorAdmissionSchema`. PII:
+    patientName, patientId, patientDbId,
+    admissionId, admissionDateTime.
+  required:
+    - admissionDateTime
+    - admissionId
+    - patientName
+    - patientId
+    - patientDbId
+  properties:
+    admissionDateTime: { type: string, format: date-time }
+    admissionId: { type: string }
+    patientName: { type: string }
+    patientId: { type: string }
+    patientDbId: { type: string }
+    patientGroup: { type: string, nullable: true }
+    roomName: { type: string, nullable: true }
+    roomType: { type: string, nullable: true }
+    floorName: { type: string, nullable: true }
+    buildingName: { type: string, nullable: true }
+
+GetUnderCareDoctorAdmissionsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/under-care-doctor/{id}/admissions`.
+    `{ success: true, result, error: "",
+    message: "" }`.
+  required: [success, result, error, message]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/UnderCareDoctorAdmissionRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+    message: { type: string, example: "" }
+
+# =============================================================================
+# Financial / sales reports
+# =============================================================================
+
+SalesReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/sale-reports`. Per
+    `salesReportSchema`. PII: patientName,
+    patientId.
+  required:
+    - date
+    - itemId
+    - itemName
+    - qty
+    - unit
+    - maximumRetailPrice
+  properties:
+    date: { type: string, format: date-time }
+    itemId: { type: string }
+    itemName: { type: string }
+    invoiceNo: { type: string, nullable: true }
+    patientName: { type: string, nullable: true }
+    patientId: { type: string, nullable: true }
+    doctorName: { type: string, nullable: true }
+    doctorTitle: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    billType: { type: string, nullable: true }
+    billTypeId: { type: string, nullable: true }
+    qty: { type: number, minimum: 0 }
+    unit: { type: string }
+    focQty: { type: number, nullable: true }
+    taxAmount: { type: number, nullable: true }
+    taxPercentage: { type: number, nullable: true }
+    discountAmount: { type: number, nullable: true }
+    discountPercentage: { type: number, nullable: true }
+    paymentStatus:
+      type: string
+      enum: [PENDING, PAID]
+      nullable: true
+    maximumRetailPrice: { type: number, minimum: 0 }
+
+GetSalesReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/sale-reports`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/SalesReportRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+GRNItemReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/grn-item-reports`. Per
+    `grnItemReportSchema`. Business data:
+    purchase prices, qty, amounts.
+  required:
+    - grnId
+    - grn
+    - purchasingId
+    - itemId
+    - item
+    - unit
+    - purchasedPricePerUnit
+    - qty
+    - amount
+    - status
+  properties:
+    grnId: { type: string }
+    grn:
+      type: object
+      required: [id, date, status]
+      properties:
+        id: { type: string }
+        grnId: { type: string }
+        date: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+        purchaseOrder:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            purchaseOrderId: { type: string }
+            totalAmount: { type: number }
+            totalItemQty: { type: number }
+        store:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            name: { type: string }
+        supplier:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            companyName: { type: string }
+    purchasingId: { type: string }
+    itemId: { type: string }
+    item:
+      type: object
+      required: [id, name, unit]
+      properties:
+        id: { type: string }
+        itemId: { type: string }
+        name: { type: string }
+        supplier:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            companyName: { type: string }
+        unit:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+    unit: { type: string }
+    purchasedPricePerUnit: { type: number, minimum: 0 }
+    qty: { type: number, minimum: 0 }
+    amount: { type: number, minimum: 0 }
+    status:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED]
+
+GetGRNItemReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/grn-item-reports`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/GRNItemReportRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+GRNReturnItemReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/grn-return-item-reports`.
+    Per `grnReturnItemReportSchema`.
+  required:
+    - returnedQty
+    - grnReturn
+    - grnItem
+  properties:
+    returnedQty: { type: number }
+    grnReturn:
+      type: object
+      required: [id, grnReturnId, createdAt, grnId, status]
+      properties:
+        id: { type: string }
+        grnReturnId: { type: string }
+        createdAt: { type: string }
+        grnId: { type: string }
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+        remark: { type: string }
+        grn:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            grnId: { type: string }
+            date: { type: string }
+            store:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string }
+                name: { type: string }
+            supplier:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string }
+                companyName: { type: string }
+            purchaseOrder:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string }
+                purchaseOrderId: { type: string }
+                totalItemQty: { type: number }
+                totalAmount: { type: number }
+    grnItem:
+      type: object
+      required: [id, purchasedPricePerUnit, item]
+      properties:
+        id: { type: string }
+        purchasedPricePerUnit: { type: number }
+        item:
+          type: object
+          required: [id, name, unit]
+          properties:
+            id: { type: string }
+            itemId: { type: string }
+            name: { type: string }
+            supplier:
+              type: object
+              nullable: true
+              properties:
+                id: { type: string }
+                companyName: { type: string }
+            unit:
+              type: object
+              properties:
+                id: { type: string }
+                name: { type: string }
+
+GetGRNReturnItemReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/grn-return-item-reports`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/GRNReturnItemReportRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+# =============================================================================
+# Operational / stock / activity reports
+# =============================================================================
+
+StockDamageItemReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/stock-damage-item`. Per
+    `stockDamageItemReportSchema`.
+  required:
+    - damagedDate
+    - itemId
+    - itemName
+    - pricePerUnit
+    - damagedQuantity
+    - totalCost
+    - status
+    - storeName
+    - storeId
+  properties:
+    damagedDate: { type: string, format: date-time }
+    itemId: { type: string }
+    itemName: { type: string }
+    unit: { type: string, nullable: true }
+    pricePerUnit: { type: number, minimum: 0 }
+    damagedQuantity: { type: number, minimum: 0 }
+    totalCost: { type: number, minimum: 0 }
+    status: { type: string }
+    storeName: { type: string }
+    storeId: { type: string }
+
+GetStockDamageItemReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/stock-damage-item`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/StockDamageItemReportRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+StockRequestItemReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/stock-request-item`. Per
+    `stockRequestItemReportSchema`.
+  required:
+    - stockRequestId
+    - itemId
+    - itemName
+    - requestedDate
+    - requestedFromStore
+    - requestedToStore
+    - approvalStatus
+    - requestedQty
+  properties:
+    stockRequestId: { type: string }
+    itemId: { type: string }
+    itemName: { type: string }
+    unit: { type: string, nullable: true }
+    requestedDate: { type: string, format: date-time }
+    requestedFromStore: { type: string }
+    requestedToStore: { type: string }
+    approvalStatus: { type: string }
+    requestedQty: { type: number, minimum: 0 }
+
+GetStockRequestItemReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/stock-request-item`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/StockRequestItemReportRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+StockTransferReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/stock-transfer-report`.
+    Per `stockTransferReportSchema`.
+  required:
+    - transferredDate
+    - requestedDate
+    - stockRequestId
+    - batchNo
+    - batchId
+    - itemId
+    - itemName
+    - unit
+    - requestedFrom
+    - requestedTo
+    - fromStoreId
+    - toStoreId
+    - requestedQty
+    - transferredQty
+    - itemBatchNo
+  properties:
+    transferredDate: { type: string, format: date-time }
+    requestedDate: { type: string, format: date-time }
+    stockRequestId: { type: string }
+    batchNo: { type: string }
+    batchId: { type: string }
+    itemId: { type: string }
+    itemName: { type: string }
+    unit: { type: string }
+    requestedFrom: { type: string }
+    requestedTo: { type: string }
+    fromStoreId: { type: string }
+    toStoreId: { type: string }
+    requestedQty: { type: number, minimum: 0 }
+    transferredQty: { type: number, minimum: 0 }
+    itemBatchNo: { type: string }
+
+GetStockTransferReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/stock-transfer-report`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/StockTransferReportRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+UsedItemsReportRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/used-items-report`. Per
+    `usedItemReportSchema`. PII: username,
+    userId.
+  required:
+    - usedItemDate
+    - itemId
+    - itemName
+    - purchasedPricePerUnit
+    - unit
+    - usedItemQty
+    - username
+    - userId
+    - status
+    - storeName
+    - storeId
+  properties:
+    usedItemDate: { type: string, format: date-time }
+    itemId: { type: string }
+    itemName: { type: string }
+    purchasedPricePerUnit: { type: number, minimum: 0 }
+    unit: { type: string }
+    usedItemQty: { type: number, minimum: 0 }
+    username: { type: string }
+    userId: { type: string }
+    status:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED]
+    storeName: { type: string }
+    storeId: { type: string }
+
+GetUsedItemsReportResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/used-items-report`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/UsedItemsReportRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+# =============================================================================
+# Item summary tree
+# =============================================================================
+
+ItemSummaryRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/item-summary`. Per
+    `itemSummarySchema`.
+  required:
+    - id
+    - item
+    - itemId
+    - generic
+    - minQty
+    - maxQty
+    - reOrderQty
+    - category
+    - allStocksQty
+    - unit
+    - unitAbbreviation
+  properties:
+    id: { type: string }
+    item: { type: string }
+    itemId: { type: string }
+    generic: { type: string }
+    minQty: { type: number, minimum: 0 }
+    maxQty: { type: number, minimum: 0 }
+    reOrderQty: { type: number, nullable: true }
+    category: { type: string }
+    allStocksQty: { type: number, minimum: 0 }
+    unit: { type: string }
+    unitAbbreviation: { type: string }
+
+GetItemSummaryResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/item-summary`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ItemSummaryRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+ItemSummaryInfoRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/item-summary/{id}`. Per
+    `itemSummaryInfoSchema`.
+  required:
+    - itemName
+    - itemId
+    - generic
+    - allStocksQty
+    - unitName
+  properties:
+    itemName: { type: string }
+    itemId: { type: string }
+    generic: { type: string }
+    allStocksQty: { type: number, minimum: 0 }
+    unitName: { type: string }
+
+GetItemSummaryByIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/item-summary/{id}`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/common-reports.yaml#/ItemSummaryInfoRow
+        - type: "null"
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+ItemSummaryBatchRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/item-summary/{id}/batches`.
+    Per
+    `itemSummaryByIdWithBatchSchema`.
+  required:
+    - batchNo
+    - totalQty
+    - stores
+  properties:
+    batchNo: { type: string }
+    totalQty: { type: number, minimum: 0 }
+    stores:
+      type: array
+      items:
+        type: object
+        required: [storeName, qty]
+        properties:
+          storeName: { type: string }
+          qty: { type: number, minimum: 0 }
+
+GetItemSummaryByIdWithBatchesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/item-summary/{id}/batches`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ItemSummaryBatchRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+ItemSummaryItemBatchRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/item-summary/{id}/item-batches`.
+    Per
+    `itemSummaryByIdWithItemBatchSchema`.
+    Note: the source column is
+    `item_batch_no` (the `ItemBatch.no`
+    column), not `batch_no`.
+  required:
+    - batchNo
+    - totalQty
+    - stores
+  properties:
+    batchNo: { type: string }
+    totalQty: { type: number, minimum: 0 }
+    stores:
+      type: array
+      items:
+        type: object
+        required: [storeName, qty]
+        properties:
+          storeName: { type: string }
+          qty: { type: number, minimum: 0 }
+
+GetItemSummaryByIdWithItemBatchesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/item-summary/{id}/item-batches`.
+    `{ success: true, result, error: null,
+    message: "" }` (note: `error: null`,
+    unlike the `batches` sibling which uses
+    `error: ""`).
+  required: [success, result, error, message]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ItemSummaryItemBatchRow
+        - type: object
+          additionalProperties: true
+    error:
+      oneOf:
+        - type: "null"
+    message: { type: string, example: "" }
+
+ItemSummaryStockPerStoreRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/item-summary/stock-per-store`.
+    Per
+    `itemSummaryStockPerStoreExportSchema`.
+  required:
+    - itemId
+    - itemName
+    - generic
+    - category
+    - unit
+    - totalQty
+    - stores
+  properties:
+    itemId: { type: string }
+    itemName: { type: string }
+    generic: { type: string }
+    minQty: { type: number, nullable: true }
+    maxQty: { type: number, nullable: true }
+    reOrderQty: { type: number, nullable: true }
+    category: { type: string }
+    unit: { type: string }
+    totalQty: { type: number, minimum: 0 }
+    stores:
+      type: array
+      items:
+        type: object
+        required: [name, qty]
+        properties:
+          name: { type: string }
+          qty: { type: number, minimum: 0 }
+
+GetItemSummaryStockPerStoreResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/item-summary/stock-per-store`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/ItemSummaryStockPerStoreRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+# =============================================================================
+# Patient / supplier
+# =============================================================================
+
+PatientSummaryByTownshipRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/patient-summary`. Per
+    `patientSummarySchema`. **The schema
+    transform does not rename `patient_count`
+    to `patientCount`** — the wire shape
+    includes `patient_count` while every
+    other field name happens to already be
+    lowercase.
+  required: [township]
+  properties:
+    township: { type: string, nullable: true }
+    region: { type: string, nullable: true }
+    patient_count:
+      type: integer
+      minimum: 0
+      nullable: true
+      description: |
+        **Field name is `patient_count` on
+        the wire** — the schema's
+        `.transform` does not rename it
+        (inconsistent with the other reports
+        schemas in the same file).
+
+GetPatientSummaryByTownshipResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/patient-summary`.
+    `{ success: true, result, message: "",
+    error: "" }`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/PatientSummaryByTownshipRow
+        - type: object
+          additionalProperties: true
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+
+SupplierItemsRow:
+  type: object
+  description: |
+    Row shape of
+    `GET /api/reports/supplier-items`. Per
+    `supplierItemsSchema`.
+  required:
+    - supplier
+    - totalAmount
+    - supplierId
+  properties:
+    supplier: { type: string }
+    totalAmount: { type: number, minimum: 0 }
+    supplierId: { type: string }
+
+GetSupplierItemsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/supplier-items`.
+    `{ success: true, result, error: "" }`.
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - type: array
+          items:
+            $ref: ../schemas/common-reports.yaml#/SupplierItemsRow
+        - type: object
+          additionalProperties: true
+    error: { type: string, example: "" }
+
+SupplierItemsByIdRow:
+  type: object
+  description: |
+    Result shape of
+    `GET /api/reports/supplier-items/{id}`.
+    Per `supplierItemsByIdSchema` (the schema
+    is an array of items that the transform
+    groups into a single row).
+  required:
+    - supplierName
+    - totalAmount
+    - items
+  properties:
+    supplierName: { type: string }
+    totalAmount: { type: number, minimum: 0 }
+    items:
+      type: array
+      items:
+        type: object
+        required:
+          - companyBatchNo
+          - grossAmount
+          - itemId
+          - itemName
+          - pricePerUnit
+          - purchaseOrderId
+          - purchasedDate
+          - qty
+          - unitName
+          - unitAbbreviation
+          - totalAmount
+        properties:
+          companyBatchNo: { type: string }
+          expiryDate: { type: string, format: date-time, nullable: true }
+          grossAmount: { type: number, minimum: 0 }
+          itemId: { type: string }
+          itemName: { type: string }
+          pricePerUnit: { type: number, minimum: 0 }
+          purchaseOrderId: { type: string }
+          purchasedDate: { type: string, format: date-time }
+          qty: { type: number, minimum: 0 }
+          unitName: { type: string }
+          unitAbbreviation: { type: string }
+          totalAmount: { type: number, minimum: 0 }
+
+GetSupplierItemsByIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/reports/supplier-items/{id}`.
+    `{ success: true, result, error: null }`
+    (the route has no `message` field).
+  required: [success, result, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/common-reports.yaml#/SupplierItemsByIdRow
+    error:
+      oneOf:
+        - type: "null"

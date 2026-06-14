@@ -1,0 +1,718 @@
+# docs/schemas/common-services.yaml
+# Schemas for the common-services sub-area of
+# the `common` REST module. Seven endpoints:
+#   GET /api/services
+#   GET /api/services/[id]
+#   GET /api/services/consultation-service
+#   GET /api/services/doctor-service
+#   GET /api/services/doctor-service/[id]
+#   GET /api/services/doctor-service/by-service-id/[id]
+#   GET /api/services/service-category-module-mapping
+# Source: src/app/api/(common)/services/*/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetServicesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getServicesSchema }`. The schema is a
+        `z.object({ categoryId, departmentId, status,
+        module, isInitialService, isMapService,
+        isConsultationService, addOthersForCt,
+        serviceType, patientId, memberCardId }).
+        merge(baseQuerySchema).transform(transformPaginationSchema)`.
+
+        The repository's `findServices` interprets:
+          - `search` — `contains` (case-insensitive)
+            against `serviceId` or `name`.
+          - `start` / `end` — `createdAt` range
+            (`gte` / `lte`). Both must be present.
+          - `departmentId` / `categoryId` —
+            exact match.
+          - `module` — narrows via joined
+            `category.ServiceCategoryModuleMapping`
+            (the value is uppercased).
+          - `status` — `nativeEnum(serviceStatus)`.
+          - `isInitialService` /
+            `isMapService` /
+            `isConsultationService` /
+            `addOthersForCt` — string `"true"` →
+            `true`; everything else → `undefined`.
+          - `serviceType` — enum; maps to
+            different `where` branches (see
+            paths file).
+          - `patientId` / `memberCardId` —
+            accepted by the schema but NOT
+            applied by the repository.
+        Ordering: `createdAt: desc`.
+      properties:
+        categoryId:
+          type: string
+        departmentId:
+          type: string
+        module:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        isInitialService:
+          type: string
+        isMapService:
+          type: string
+        isConsultationService:
+          type: string
+        addOthersForCt:
+          type: string
+        serviceType:
+          type: string
+          enum:
+            - LAB_TEST
+            - INITIAL_SERVICE
+            - CONSULTATION_SERVICE
+            - ADD_OTHERS_FOR_CT
+            - ROUND_SERVICE
+            - IN_HOUSE_DOCTOR_SERVICE
+            - TELE_CONSULTANT_SERVICE
+        patientId:
+          type: string
+        memberCardId:
+          type: string
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetServicesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/services`. The
+    repository returns
+    `Promise<{ services: Service[]; totalCount: number }>`
+    and the route wraps it in
+    `{ success: true, result, error: "" }` — no
+    `message` field.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [services, totalCount]
+      properties:
+        services:
+          type: array
+          items:
+            $ref: ./common-services.yaml#/Service
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetServiceByIdResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/services/[id]`. The
+    route wraps the service (or `null`) in
+    `{ success: true, result, error: null, message: "" }`.
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-services.yaml#/Service
+        - type: "null"
+
+GetConsultationServicesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/services/consultation-service`. The
+    repository's `findConsultationServices`
+    actually returns `DoctorService` rows
+    (with joined `service`), NOT a list of
+    consultation `Service` rows. The `where`
+    is always `{}` (no consultation-specific
+    filter).
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [consultationServices, totalCount]
+      properties:
+        consultationServices:
+          type: array
+          items:
+            $ref: ./common-services.yaml#/DoctorServiceWithService
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetDoctorServicesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/services/doctor-service`. The
+    repository returns
+    `Promise<{ doctorServices: Doctor[]; totalCount: number }>`
+    — `doctorServices` is the response key,
+    but each row is a `Doctor` with joined
+    `doctorServices` (the mapping).
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [doctorServices, totalCount]
+      properties:
+        doctorServices:
+          type: array
+          items:
+            $ref: ./common-services.yaml#/DoctorWithServices
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetDoctorServiceByIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/services/doctor-service/[id]`. The
+    path parameter is the **doctor's** primary
+    key (UUID), not a `DoctorService` id. The
+    repository returns the `Doctor` row (or
+    `null`).
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-services.yaml#/DoctorWithServices
+        - type: "null"
+
+GetDoctorsByServiceIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/services/doctor-service/by-service-id/[id]`.
+    The path parameter is the **service's**
+    primary key (UUID). The repository
+    returns `DoctorService` rows (with joined
+    `doctor`).
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [serviceDoctors, totalCount]
+      properties:
+        serviceDoctors:
+          type: array
+          items:
+            $ref: ./common-services.yaml#/DoctorServiceWithDoctor
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetServiceCategoryModuleMappingsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/services/service-category-module-mapping`.
+    The repository returns
+    `Promise<{ result: ServiceCategoryModuleMapping[];
+    count: number }>` (note: `result` and
+    `count`, not `totalCount`). The route
+    forwards it under
+    `{ success: true, result: { result, count },
+    error: null, message: "" }` — so the
+    consumer reads `result.result.result`.
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [result, count]
+      properties:
+        result:
+          type: array
+          items:
+            $ref: ./common-services.yaml#/ServiceCategoryModuleMapping
+        count:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Service:
+  type: object
+  description: |
+    Canonical service shape. Maps to the
+    Prisma `Service` model (prisma/schema.prisma,
+    @@map("services")). The list/detail
+    repositories use a `serviceValidator` that
+    includes:
+      - `department` (id, name only).
+      - `LabTest` (id, serviceId,
+        labCollectionMethodId, labSampleId,
+        labUnitId, joined
+        `labCollectionMethod.name`,
+        `labSample.name`, `labUnit.name`).
+        **No** `isActive` projection.
+      - `category` (id, name only).
+      - `subCategory` (id, name only).
+      - `createdBy` / `updatedBy` —
+        canonical 3-field `Publisher`
+        projection.
+
+    Notable columns on the model:
+      - `name` (NOT `@unique` globally —
+        only `@@unique([name, departmentId])`).
+      - `status` (`ServiceStatus` enum,
+        `ACTIVE`/`INACTIVE`, default
+        `ACTIVE`).
+      - `includeInRegistration`,
+        `isConsultationService`,
+        `isMapService`, `addOthersForCt`
+        (all `Boolean @default(false)`).
+      - `serviceTypeMeta` (`Json
+        @default("{}")`).
+      - `servicePrice`, `referredPrice`,
+        `reportingPrice`,
+        `urgentReportingPrice`,
+        `urgentPrice` (`Json @default("{}")`
+        — per-group pricing).
+      - `serviceId` (`@unique`, sequential
+        `SID-NNN` via `generateCustomId`).
+      - 20+ FK relations — a `delete` is
+        heavily FK-constrained.
+  required:
+    - id
+    - serviceId
+    - name
+    - status
+    - categoryId
+    - departmentId
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    serviceId:
+      type: string
+    name:
+      type: string
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    includeInRegistration:
+      type: boolean
+    isConsultationService:
+      type: boolean
+    isMapService:
+      type: boolean
+    addOthersForCt:
+      type: boolean
+    serviceTypeMeta:
+      type: object
+      description: |
+        `Json @default("{}")`. Holds the
+        `roundService`, `inHouseDoctorService`,
+        `teleConsultantService` boolean flags.
+    servicePrice:
+      type: object
+    referredPrice:
+      type: object
+    reportingPrice:
+      type: object
+    urgentReportingPrice:
+      type: object
+    urgentPrice:
+      type: object
+    categoryId:
+      type: string
+      format: uuid
+    subCategoryId:
+      type: string
+      format: uuid
+      nullable: true
+    departmentId:
+      type: string
+      format: uuid
+    department:
+      $ref: ./common-services.yaml#/ServiceDepartment
+    category:
+      $ref: ./common-services.yaml#/ServiceCategory
+    subCategory:
+      $ref: ./common-services.yaml#/ServiceCategory
+    LabTest:
+      type: object
+      nullable: true
+      description: |
+        Joined `LabTest` row (id, serviceId,
+        labCollectionMethodId, labSampleId,
+        labUnitId, joined
+        `labCollectionMethod.name`,
+        `labSample.name`, `labUnit.name`).
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+ServiceDepartment:
+  type: object
+  description: |
+    The joined `Department` row for a `Service`.
+    Projection is `{ id, name }` only.
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+
+ServiceCategory:
+  type: object
+  description: |
+    The joined `ServiceCategory` or
+    `ServiceSubCategory` row for a `Service`.
+    Projection is `{ id, name }` only.
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+
+DoctorServiceWithService:
+  type: object
+  description: |
+    A `DoctorService` row with the joined
+    `service` (full `Service` row, no
+    projection). Used by the
+    `/api/services/consultation-service`
+    endpoint. The `consultationValidator` is
+    `Prisma.validator<Prisma.DoctorServiceDefaultArgs>()`
+    with `include: { service: true }` only —
+    the rest of the `DoctorService` columns
+    (`servicePrice`, `urgentPrice`,
+    `firstRoundPrice`, `createdById`, etc.)
+    come through automatically.
+  required:
+    - id
+    - serviceId
+    - doctorId
+  properties:
+    id:
+      type: string
+      format: uuid
+    serviceId:
+      type: string
+      format: uuid
+    doctorId:
+      type: string
+      format: uuid
+    servicePrice:
+      type: object
+    urgentPrice:
+      type: object
+    firstRoundPrice:
+      type: object
+    service:
+      $ref: ./common-services.yaml#/Service
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+DoctorWithServices:
+  type: object
+  description: |
+    A `Doctor` row with the joined
+    `doctorServices[]` (the `DoctorService`
+    mapping rows for that doctor). The
+    `doctorServiceValidator` is a
+    `Prisma.validator<Prisma.DoctorDefaultArgs>()`
+    with `select: { ... }` — the projection
+    is:
+      - `id`, `title`, `doctorId`,
+        `specialization` (the string
+        column).
+      - `user` (joined; `fullName` + `id`
+        only).
+      - `doctorServices[]` (each with
+        `createdBy` (3-field),
+        `updatedBy` (3-field),
+        `createdAt`, `updatedAt`,
+        `service` (joined; `name`, `id`,
+        `isConsultationService`),
+        `servicePrice`, `urgentPrice`,
+        `firstRoundPrice`, `id`).
+      - `_count.doctorServices` (number).
+
+    Used by `/api/services/doctor-service`
+    and `/api/services/doctor-service/[id]`.
+  required:
+    - id
+    - doctorId
+    - title
+  properties:
+    id:
+      type: string
+      format: uuid
+    title:
+      type: string
+    doctorId:
+      type: string
+    specialization:
+      type: string
+      description: |
+        The `Doctor.specialization` string
+        column (denormalized). Not the
+        joined `Specialization` row.
+    user:
+      type: object
+      required: [fullName, id]
+      properties:
+        fullName:
+          type: string
+        id:
+          type: string
+          format: uuid
+    doctorServices:
+      type: array
+      items:
+        $ref: ./common-services.yaml#/DoctorServiceEntry
+    _count:
+      type: object
+      properties:
+        doctorServices:
+          type: integer
+          minimum: 0
+
+DoctorServiceEntry:
+  type: object
+  description: |
+    A single `DoctorService` mapping row in
+    the `DoctorWithServices.doctorServices`
+    array.
+  required:
+    - id
+    - service
+  properties:
+    id:
+      type: string
+      format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      type: object
+      required: [fullName, username, id]
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+        id:
+          type: string
+          format: uuid
+    updatedBy:
+      type: object
+      required: [fullName, username, id]
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+        id:
+          type: string
+          format: uuid
+    service:
+      type: object
+      required: [name, id, isConsultationService]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+          format: uuid
+        isConsultationService:
+          type: boolean
+    servicePrice:
+      type: object
+    urgentPrice:
+      type: object
+    firstRoundPrice:
+      type: object
+
+DoctorServiceWithDoctor:
+  type: object
+  description: |
+    A `DoctorService` row with the joined
+    `doctor` (id, title, doctorId, joined
+    `specialization.name`, joined
+    `user.fullName`). Used by the
+    `/api/services/doctor-service/by-service-id/[id]`
+    endpoint.
+  required:
+    - id
+    - serviceId
+    - doctorId
+  properties:
+    id:
+      type: string
+      format: uuid
+    serviceId:
+      type: string
+      format: uuid
+    doctorId:
+      type: string
+      format: uuid
+    servicePrice:
+      type: object
+    urgentPrice:
+      type: object
+    firstRoundPrice:
+      type: object
+    doctor:
+      type: object
+      required: [id, title, doctorId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        doctorId:
+          type: string
+        specialization:
+          type: object
+          required: [name]
+          properties:
+            name:
+              type: string
+        user:
+          type: object
+          required: [fullName]
+          properties:
+            fullName:
+              type: string
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+ServiceCategoryModuleMapping:
+  type: object
+  description: |
+    A `ServiceCategoryModuleMapping` row.
+    The `serviceCategoryModuleMappingValidator`
+    includes:
+      - `serviceCategory` (id, name only).
+      - `createdBy` / `updatedBy` — canonical
+        3-field `Publisher` projection.
+
+    The `module` column is a `ServiceCategoryModule`
+    Prisma enum (e.g., `OPD`, `IPD`,
+    `PHARMACY`, `LAB`, etc.).
+  required:
+    - id
+    - serviceCategoryId
+    - module
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    serviceCategoryId:
+      type: string
+      format: uuid
+    module:
+      type: string
+    serviceCategory:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

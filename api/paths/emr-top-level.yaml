@@ -1,0 +1,442 @@
+# docs/paths/emr-top-level.yaml
+# Top-level EMR REST surface. 9
+# patient-centric read-only endpoints
+# under `src/app/api/(emr)/emr/`. Each
+# route takes a `patientId` path
+# parameter and returns a single
+# "tab" of merged EMR data across
+# OPD, IPD, ED care settings.
+#
+# The data is assembled by
+# `PatientEmrService` (`src/app/
+# (dashboard)/shared/emr/services/
+# patient-emr.service.ts`) which fans
+# out to a single repository
+# `PatientEmrRepository.getPatientEmrRawRecords`
+# (etc.) to fetch raw records from
+# each care setting, then merges +
+# sorts + paginates them in JS.
+#
+# All 9 endpoints are GET-only, all
+# use `enhancedApiHandler` with
+# `auth: { required: true }` only —
+# no RBAC. All 9 return
+# `{ success: true, result, message:
+# "", error: null }`.
+
+# =============================================================================
+# Patient profile (snapshot tab)
+# =============================================================================
+
+/api/emr/patient-profile/{id}:
+  get:
+    operationId: getPatientProfileTabData
+    summary: Patient profile snapshot (latest across IPD/OPD/ED)
+    description: |
+      Returns a single "profile" snapshot
+      for a patient: the latest vital
+      sign across IPD, OPD, ED; the
+      upcoming-or-latest appointment;
+      the latest referral name; and
+      the latest-visit timestamp.
+      Service: `PatientEmrService
+      .getPatientProfileTabData`
+      → `PatientEmrRepository
+      .getPatientProfileSnapshot`.
+
+      Returns 404 (`AppError
+      "Patient not found"`) when no
+      `Patient` row exists for the
+      supplied id.
+
+      **Note:** `{id}` is a patient id,
+      not an appointment / admission /
+      EMR id. All sibling endpoints in
+      this file also take a patient id
+      as `{id}`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+        description: Patient id (UUID).
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientProfileTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Patient not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Tab data (paginated, date-range filtered)
+# =============================================================================
+#
+# The following 7 routes share the
+# same query schema
+# `getPatientEmrTabQuerySchema` which
+# is just `baseQuerySchema`
+# (pagination + search + start/end).
+# They all merge records across IPD /
+# OPD / ED before paginating in JS.
+# Each returns a `totalCount` plus
+# the paginated array of records.
+
+/api/emr/patient-doctor-notes/{id}:
+  get:
+    operationId: getPatientDoctorNotesTabData
+    summary: Doctor notes (merged across care settings)
+    description: |
+      Returns merged, deduped, sorted
+      doctor notes for a patient. Pulls
+      from `IPDDoctorNote`, `OPDEmrDoctorNote`,
+      and `EDEmrDoctorNote` (the latter
+      two via the `OPDEMRDoctorNote`
+      join). Service: `PatientEmrService
+      .getPatientDoctorNotesTabData`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientDoctorNotesTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/emr/patient-nurse-notes/{id}:
+  get:
+    operationId: getPatientNurseNotesTabData
+    summary: Nurse notes (merged across care settings)
+    description: |
+      Returns merged, deduped, sorted
+      nurse notes for a patient. Pulls
+      from `IPDNurseNote`,
+      `OPDEmrNurseNote`, and the ED
+      counterpart. Service: `PatientEmrService
+      .getPatientNurseNotesTabData`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientNurseNotesTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/emr/patient-vital-signs/{id}:
+  get:
+    operationId: getPatientVitalSignsTabData
+    summary: Vital signs (merged across care settings)
+    description: |
+      Returns merged, deduped, sorted
+      vital signs for a patient. Pulls
+      from `IPDVitalSign`,
+      `OPDEmrVitalSign`, and the ED
+      counterpart. The service maps the
+      `Decimal` DB columns
+      (`systolicBloodPressure`,
+      `weight`, `bodyTemperature`, etc.)
+      to JS `number` and the `Date`
+      columns to ISO strings via
+      `Number(...)` + `Date.toISOString()`.
+      Service: `PatientEmrService
+      .getPatientVitalSignsTabData`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientVitalSignsTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/emr/patient-treatment-prescriptions/{id}:
+  get:
+    operationId: getPatientTreatmentPrescriptionTabData
+    summary: Prescriptions (merged across care settings)
+    description: |
+      Returns merged prescriptions
+      (prescription → prescriptionItems
+      → item → unit). Sorts by
+      `createdAt` desc and paginates
+      in JS. Service: `PatientEmrService
+      .getPatientTreatmentPrescriptionTabData`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientTreatmentPrescriptionsTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/emr/patient-treatment-procedures/{id}:
+  get:
+    operationId: getPatientTreatmentProcedureTabData
+    summary: Treatment procedures (OT, HD, CATHLAB)
+    description: |
+      Returns merged treatment
+      procedures for a patient — pulls
+      from `OTRequest`, `HDRequest`,
+      and `CathLabRequest` (with the
+      `operationType` / `cathLabRequestCardiologist`
+      relations populated). Each record
+      carries a discriminated union
+      with one of `otSummary`,
+      `hdSummary`, `cathLabSummary`
+      populated and the others `null`.
+      Service: `PatientEmrService
+      .getPatientTreatmentProcedureTabData`.
+
+      Note: `recordedAt` is computed
+      as `combineDateAndTime
+      (operationDate, operationTime)`
+      (or `hdDate`/`hdTime` for HD)
+      — when both are present they're
+      merged into a single `Date`; when
+      only one is present that one is
+      used. Falls back to `item.operationDate`
+      when both are null.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientTreatmentProceduresTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/emr/patient-investigation/{id}:
+  get:
+    operationId: getPatientInvestigationTabData
+    summary: Investigations (lab + imaging + endo)
+    description: |
+      Returns merged investigations for
+      a patient. Pulls from
+      `OPDEmrServiceRequest`,
+      `EDEmrServiceRequest`,
+      `IPDServiceRequest`, and
+      `EndoRequest`. Each record has a
+      `kind` discriminator
+      (`"SERVICE_REQUEST" | "ENDO"`)
+      and a `reportAction` object that
+      points to the linked `labReport`,
+      `imagingService`, or `endoReport`
+      (or `null` if the upstream report
+      is missing / not yet verified).
+      Service: `PatientEmrService
+      .getPatientInvestigationTabData`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientInvestigationTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/emr/patient-discharge-summary/{id}:
+  get:
+    operationId: getPatientDischargeSummaryTabData
+    summary: Discharge summaries (IPD)
+    description: |
+      Returns the discharge-summary
+      records (one per IPD discharge
+      event) for a patient. Sorts by
+      `createdAt` (the intimation
+      timestamp) desc, paginates in
+      JS. Service: `PatientEmrService
+      .getPatientDischargeSummaryTabData`.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientDischargeSummaryTabResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Clinical-document activity log
+# =============================================================================
+
+/api/emr/clinical-documents/{id}/activities:
+  get:
+    operationId: getEmrClinicalDocumentActivities
+    summary: Activity log for an EMR clinical document
+    description: |
+      Returns the activity-log entries
+      for a single clinical-document
+      record (the per-document
+      create / update / delete trail).
+      Service: `opd-emr.service` →
+      `OPDEmrService.getEmrClinicalDocumentActivities`
+      → `EmrClinicalDocumentRepository
+      .getClinicalDocumentActivities`.
+
+      **Note:** although the import
+      line in `route.ts` says
+      `edEmrService`, the underlying
+      service is the same `OPDEmrService`
+      instance — the `edEmrService`
+      export from
+      `@/app/(dashboard)/shared/emr/opd/service/opd-emr.service`
+      is an `OPDEmrService` configured
+      with `moduleType: "ED"`. The
+      `getEmrClinicalDocumentActivities`
+      method is module-agnostic, so
+      both names are equivalent.
+    tags: [EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: Clinical-document id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`. Result is
+          the list of activity-log rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetEmrClinicalDocumentActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

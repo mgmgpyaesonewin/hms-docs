@@ -1,0 +1,156 @@
+# docs/paths/common-set-up.yaml
+# REST endpoint: GET /api/set-up/categories
+# Source: src/app/api/(common)/set-up/categories/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are reached via
+# server actions (categories/actions.ts) — they are NOT
+# exposed as REST routes here.
+
+/api/set-up/categories:
+  get:
+    summary: List top-level categories (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      **top-level** categories (i.e., those with
+      `parentCategoryId = null`) with the total row
+      count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            categories: Category[],
+            count: number,
+          },
+          message: "",
+          error: ""
+        }
+        ```
+
+      Filters (from `defaultQuerySchema`, interpreted
+      by the repository's `buildWhereQuery`):
+        - `search` — case-insensitive substring match
+          against `name`.
+        - `start` / `end` — accepted by the Zod
+          schema but **NOT** applied by the
+          repository (the `buildWhereQuery` only
+          honors `search`, the `start` / `end` keys
+          are silently dropped).
+        - **Implicit filter**: `parentCategoryId =
+          null` is always added to the `where`
+          clause — so this endpoint never returns
+          sub-categories.
+
+      Repository ordering: `createdAt: desc`.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` but no
+      `permissions` array, so any authenticated
+      user can read the full list.
+
+      Source:
+      `src/app/api/(common)/set-up/categories/route.ts:8-24`.
+    tags:
+      - Common / Set Up / Categories
+    operationId: rest_common_set_up_categories_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of top-level categories.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-set-up.yaml#/GetCategoriesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — the route
+    declares only `auth: { required: true }`, no
+    `permissions` array. Any authenticated user can
+    read the full list of categories.
+  - **`start` / `end` filters are silently
+    dropped** — the Zod schema is
+    `defaultQuerySchema` (which has `start` /
+    `end`), but the repository's `buildWhereQuery`
+    only handles `query.search`
+    (categories-repository.ts:115-128). The
+    `start` / `end` keys are accepted by Zod and
+    silently dropped.
+  - **Top-level only** — the repository always
+    pins `where.parentCategoryId = null`, so this
+    endpoint never returns sub-categories. The
+    sub-categories tree is reachable through the
+    service's `findExistingSubCategoryInCategory`
+    helper, used in `deleteCategory` to detect
+    rows that still have children
+    (categories-service.ts:65-70) — but not
+    exposed via any REST endpoint.
+  - **`name` is not `@unique`** — unlike the
+    other `common-*` lookups (anesthesia-type,
+    bill-types, clinic, department, hospital-info,
+    payment-method, role, etc., all of which
+    declare `name @unique`), the `Category`
+    model declares plain `String name`. Duplicate
+    enforcement is application-layer only via
+    `findExistingCategoryName` (case-insensitive
+    equality). A direct DB insert could bypass
+    the check.
+  - **Write path uses server actions, not REST** —
+    `createCategory` / `updateCategory` /
+    `deleteCategory` are reached via
+    `categories/actions.ts` server actions. The
+    REST surface is read-only.
+  - **Delete uses 404 for "not found", 400 for
+    "Category is in use"** — the
+    `deleteCategory` service does
+    `findExistingCategoryId` → 404, then
+    `findExistingSubCategoryInCategory` → 409 with
+    the message "Can't Delete! This category has
+    sub categories" (categories-service.ts:65-70),
+    then the repository's `deleteCategory`
+    catches FK violations and re-throws as
+    `AppError("Category is in use and cannot be
+    deleted", 400)`
+    (categories-repository.ts:99-113). The 400
+    on FK violation is inconsistent with the 409
+    used by [[common-bill-types]] and
+    [[common-service-category]].
+  - **Update uses 404 for "not found", 400 for
+    "name already exists"** — the
+    `updateCategory` service throws
+    `AppError("Category not found", 404)` and
+    `AppError("Category Name already exists",
+    400)` (categories-service.ts:42, 50). The 400
+    on duplicate-name is inconsistent with the 409
+    standard.
+  - **Update-name shadowed variable** — the
+    `updateCategory` method declares
+    `const existingCategory = ...findExistingCategoryId(...)`
+    and then declares
+    `const existingCategory = ...findExistingCategoryName(...)`
+    inside the `if (existingCategory.name !==
+    payload.name)` block
+    (categories-service.ts:38-49). The inner
+    `const` shadows the outer one. Not a runtime
+    bug (the outer `existingCategory` is still
+    referenced at the `if` check), but it's a
+    readability hazard — refactor risk.
+  - **`createdBy` / `updatedBy` use the canonical
+    3-field `Publisher` projection** — clean
+    pattern; same as
+    [[common-anesthesia-type]],
+    [[common-bill-types]],
+    [[common-operation-type]], etc.

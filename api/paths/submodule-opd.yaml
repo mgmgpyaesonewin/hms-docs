@@ -1,0 +1,127 @@
+# docs/paths/submodule-opd.yaml
+# REST endpoint: GET /api/submodules/opd/module-check
+#
+# Source: src/app/api/submodules/opd/module-check/route.ts
+#
+# Sibling of `submodule-appointment` — a "module provisioned" check
+# for the OPD submodule (which is a private git submodule — see
+# project memory at `project_submodules.md`). Same handler shape
+# as the appointment probe, with the directory and env flag swapped.
+
+/api/submodules/opd/module-check:
+  get:
+    summary: Check that the OPD submodule is provisioned
+    description: |
+      Public probe (no auth required). Used by the dashboard to
+      detect whether the private OPD submodule has been cloned and
+      is enabled.
+
+      The handler returns 200 with `{ success: true, ... }` only if
+      **both** checks pass:
+        1. `process.env.NEXT_PUBLIC_OPD_MODULE_ENABLED` is not
+           strictly equal to `"false"` (any other value —
+           including undefined — is treated as "enabled" by the
+           env string check).
+        2. The filesystem directory
+           `<cwd>/src/app/(dashboard)/opd` exists and contains at
+           least one file (or a non-empty sub-folder). This is
+           checked by recursively walking the directory with
+           `readDirRecursive` (src/lib/dir-utils.ts:17-35) and
+           then checking every entry with `hasEmptyDir`
+           (src/lib/dir-utils.ts:37-50), which returns `true` only
+           if every entry is a folder whose children are themselves
+           empty folders (a fully hollow tree).
+
+      On any failure, returns HTTP 404 with the same envelope shape
+      and a `message` describing the failure. Note that the
+      filesystem walk is **synchronous** (`fs.readdirSync` /
+      `fs.statSync`) and runs on the request thread — acceptable
+      for a health probe but not for hot paths.
+
+      Response envelope shape (both success and failure):
+        ```
+        { success: boolean; result: null; message: string }
+        ```
+      This is the project's standard REST response envelope. `result`
+      is always `null` for this endpoint.
+
+      Source: `src/app/api/submodules/opd/module-check/route.ts:5-45`.
+    tags:
+      - Submodules
+    operationId: submodule_opd_module_check
+    security: []
+    responses:
+      "200":
+        description: |
+          Module is enabled (env flag) **and** provisioned on disk
+          (non-empty directory). Response uses the project standard
+          REST envelope with `result: null`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/submodule-opd.yaml#/ModuleCheckResponse
+            examples:
+              ok:
+                summary: Module is enabled and provisioned
+                value:
+                  success: true
+                  result: null
+                  message: "OPD Service Module exist"
+      "404":
+        description: |
+          Module is **not** available. The `message` field
+          distinguishes the failure mode:
+            - "OPD Service Module is not enabled" — env flag is
+              explicitly disabled.
+            - "OPD directory is empty or missing" — env is enabled
+              but the directory is hollow or absent (most often:
+              the submodule is not initialised — see project
+              memory `project_submodules.md`).
+            - "OPD Service Module not available" — fallback for
+              non-`Error` thrown values (should not occur in
+              practice; preserved for defensiveness).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/submodule-opd.yaml#/ModuleCheckResponse
+            examples:
+              disabled:
+                summary: Env flag is "false"
+                value:
+                  success: false
+                  result: null
+                  message: "OPD Service Module is not enabled"
+              missing:
+                summary: Submodule not initialised (hollow dir)
+                value:
+                  success: false
+                  result: null
+                  message: "OPD directory is empty or missing"
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - All findings mirror `submodule-appointment` (sibling probe with
+    the same handler shape). Re-listed for completeness:
+      1. **No auth required** — endpoint is publicly reachable. Leaks
+         whether the OPD submodule is initialised (via env flag and
+         dir-walk) and the filesystem path
+         `src/app/(dashboard)/opd`.
+      2. **HTTP 404 used as a generic "not available" status** —
+         the handler returns 404 for every failure mode (env
+         disabled, dir missing, fallback), not just
+         resource-not-found semantics. Clients should branch on
+         `success` / `message`, not on the status code alone.
+      3. **Synchronous filesystem I/O on the request thread** —
+         `fs.readdirSync` / `fs.statSync` walk the OPD tree
+         synchronously. Acceptable for a rare probe; not for hot
+         paths.
+      4. **Loose env flag check** —
+         `NEXT_PUBLIC_OPD_MODULE_ENABLED === "false"` treats unset,
+         empty, "0", "no", and any non-`"false"` value as
+         "enabled". The flag is also exposed to the client
+         (`NEXT_PUBLIC_*`), so it ships in the browser bundle.
+      5. **`message` is human-readable English**, not a
+         machine-readable code. Clients should still branch on
+         `success` first.

@@ -1,0 +1,177 @@
+# docs/paths/trpc-items.yaml
+# tRPC router: items (src/lib/trpc/routers/items.ts)
+# **Read-only** tRPC surface over the `Item` model — only 2
+# procedures: `getItems` (paginated, searchable) and `getById`.
+# Both use `authProcedure` (no `authorizeProcedure`). The full
+# CRUD surface is reached via:
+#   - REST: src/app/api/(common)/items/route.ts +
+#     src/app/api/(common)/items/[id]/route.ts (documented as the
+#     `common-items` sub-area).
+#   - server actions: src/app/(dashboard)/common/items/features/actions.ts
+#     (out of scope for OpenAPI).
+# See the security notes at the bottom.
+x-trpc-source: src/lib/trpc/routers/items.ts
+x-trpc-router: items
+
+/api/trpc/items.getItems:
+  post:
+    summary: List items (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of items
+      with the post-filter, pre-pagination total.
+
+      Response shape:
+        ```
+        { items: Item[], totalCount: number }
+        ```
+
+      Each `Item.taxValue` is coerced from `Prisma.Decimal` to
+      `number` on the read path. The full side-relation tree
+      is included: `category`, `subCategory`, `supplier`,
+      `unit`, `createdBy`, `updatedBy`,
+      `itemUsedByDepartment`, `sellingPriceGroup`.
+
+      Search filter (from `getItemsSchema`):
+        - `search` — case-insensitive **startsWith** match
+          against `name`, `itemId`, and `generic` (union).
+          **Not `contains`** — different from
+          `trpc-suppliers.getSuppliers`.
+        - `categoryId` — filter to a single category.
+        - `subCategoryId` — filter to a single sub-category.
+        - `groupId` — filter to a single selling-price-group.
+          **Note**: the input field is `groupId` but the
+          repository maps it to `sellingPriceGroupId` in the
+          Prisma `where` clause.
+        - `status` — `ACTIVE` | `INACTIVE` (the storage
+          enum, NOT a boolean).
+        - `allergy` — `ALLERGIC` | `NON_ALLERGIC`.
+        - `start` / `end` — `createdAt` window
+          (`gte: start`, `lte: end` — **inclusive** upper
+          bound, different from `trpc-suppliers` which uses
+          `lt`).
+
+      Source: `src/lib/trpc/routers/items.ts:17-19`.
+    tags:
+      - Items
+    operationId: trpc_items_getItems
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-items.yaml#/GetItemsInput
+    responses:
+      "200":
+        description: Paginated list of items.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-items.yaml#/GetItemsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/items.getById:
+  post:
+    summary: Get an item by id
+    description: |
+      Authenticated query. Returns the item (with the full
+      side-relation tree) or `null` if not found.
+
+      **Input shape is a bare string** — the router does
+      `authProcedure.input(z.string())` with no object
+      wrapper. Clients send a JSON-encoded string as the
+      request body, not an object.
+
+      The `taxValue` is coerced from `Prisma.Decimal` to
+      `number` on the read path.
+
+      Returns `null` if the id is unknown (no tRPC throw /
+      404 envelope). The repository calls
+      `prisma.item.findFirst({ where: { id } })` and returns
+      `null` if the result is null (no 404).
+
+      Source: `src/lib/trpc/routers/items.ts:21-25`.
+    tags:
+      - Items
+    operationId: trpc_items_getById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: |
+              Item id. No UUID refinement at the router layer
+              (`z.string()`).
+    responses:
+      "200":
+        description: The item, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-items.yaml#/Item
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to both procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **Both** procedures use `authProcedure` (not
+    `authorizeProcedure`). Any authenticated user can read
+    items. Item data is not particularly sensitive (no PII)
+    but the full inventory is exposed to any logged-in user.
+  - **Search uses `startsWith`, not `contains`** — the
+    repository's `findItemsAndCount` builds the search clause
+    with `name: { startsWith: query.search, mode: "insensitive" }`
+    for all three searched fields (`name`, `itemId`, `generic`).
+    This is different from `trpc-suppliers.getSuppliers` which
+    uses `contains`. The two routers in the same setup area
+    have inconsistent search semantics — worth flagging.
+  - **Inclusive `end` date** — the repository uses
+    `lte: query.end` (inclusive), not `lt` (exclusive). This is
+    different from `trpc-suppliers.getSuppliers` which uses
+    `lt`. Two routers, two date-window semantics.
+  - **Decimal coercion** — `Item.taxValue` is read as
+    `Prisma.Decimal` and coerced via `Number(item.taxValue)`.
+    Lossy for high-precision tax rates; clients that need
+    exact decimals should re-fetch.
+  - **Module-level singleton service** — `itemsService = new
+    ItemsService(new ItemsRepository(prisma), new
+    StockRepository(prisma))` is constructed at module scope
+    (items.ts:11-14) and shared across all calls. This is the
+    **only** tRPC router in the documented set so far that uses
+    a module-level singleton (other routers create a fresh
+    service on every call). The `StockRepository` is wired in
+    even though the current read methods do not use it — the
+    service's `updateItem` does use
+    `stockRepository.getTotalStockQtyAcrossAllStores(id)` for
+    the unit-change guard, but the write methods are not
+    exposed on this tRPC router.
+  - **No `getTotalCount` companion endpoint** — unlike other
+    Setup routers (which split list and count into separate
+    procedures), `itemsRouter` has no
+    `items.getTotalItemsCount`. Clients that need the
+    unfiltered total can compute it as
+    `getItems({ page: 1, limit: 0 })` (the repository's
+    `take: query.limit > 0 ? query.limit : undefined` makes
+    `limit: 0` return all rows, but it's an N+1 cost).
+  - **Only 2 procedures on the tRPC surface** — the manifest
+    estimate of "~8" was a placeholder. The full CRUD surface
+    (create / update / delete) is reached via the REST
+    `common-items` sub-area and `next-safe-action` server
+    actions. The tRPC router is read-only.

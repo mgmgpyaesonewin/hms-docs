@@ -1,0 +1,65 @@
+[Unit]
+Description=YCare HMS — Summary Service (Inbox Worker)
+Documentation=https://internal.example.com/docs/summary-service
+# Worker depends on Postgres. If Redis is down, the worker continues
+# processing events (the publish path is Postgres-only); the Redis HINCRBY
+# calls log warnings and the next read repopulates the affected buckets
+# via cache-aside.
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=ycare-summary
+Group=ycare-summary
+
+# Same binary as the API, different --mode flag.
+ExecStart=/usr/bin/node /opt/ycare-summary/dist/index.js --mode=worker
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Environment
+EnvironmentFile=/etc/ycare-summary/env
+
+# Resource limits (worker is steady-state; can be tighter than the API)
+LimitNOFILE=65536
+MemoryMax=256M
+CPUQuota=50%
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+# Read-only paths
+ReadOnlyPaths=/opt/ycare-summary
+ReadOnlyPaths=/etc/ycare-summary
+
+# Writable paths
+RuntimeDirectory=ycare-summary
+RuntimeDirectoryMode=0750
+StateDirectory=ycare-summary
+StateDirectoryMode=0750
+
+# Logging
+StandardOutput=append:/var/log/ycare-summary/worker.log
+StandardError=append:/var/log/ycare-summary/worker.error.log
+
+[Install]
+WantedBy=multi-user.target

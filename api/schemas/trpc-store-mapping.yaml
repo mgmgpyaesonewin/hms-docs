@@ -1,0 +1,323 @@
+# docs/schemas/trpc-store-mapping.yaml
+# Schemas for the tRPC `storeMapping` router
+# (src/lib/trpc/routers/store-mapping.ts). CRUD over the
+# `StoreMapping` model — the user × store join that drives
+# per-user store switching.
+#
+# Architectural note: the list / by-id / switch-stores endpoints
+# return rows rooted at the `User` model (with `mappedStores[]` as
+# a side relation), not the `StoreMapping` model itself. The
+# router file lives under `routers/store-mapping.ts` but the
+# implementation is user-centric. The router also instantiates a
+# fresh `StoreMappingService` on **every** call — the module-level
+# singleton `storeMappingService` is exported but unused.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateStoreMappingInput:
+  type: object
+  description: |
+    Input for `storeMapping.createStoreMapping`. Zod schema
+    `createStoreMappingSchema` in
+    `src/app/(dashboard)/shared/pharmacy/schemas/store/create-store-mapping-schema.ts`.
+  required:
+    - userId
+    - storeId
+  properties:
+    userId:
+      type: string
+      description: |
+        User id (FK to `User`). No UUID refinement at the router
+        layer. The service checks for an existing
+        `StoreMapping.userId` row before creating — a 409 is raised
+        if one already exists (see the misleading naming note in
+        the path file's x-security-note).
+    storeId:
+      type: array
+      minItems: 1
+      description: |
+        List of store ids to map the user to. The repository
+        `prisma.$transaction`s one `StoreMapping.create` per id.
+        Note this is `string[]` — not `z.array(z.string().uuid())`
+        (no per-element UUID refinement).
+      items:
+        type: string
+
+UpdateStoreMappingInput:
+  type: object
+  description: |
+    Input for `storeMapping.updateStoreMapping`. Zod schema
+    `updateStoreMappingSchema` in
+    `src/app/(dashboard)/shared/pharmacy/schemas/store/update-store-mapping-schema.ts`.
+
+    Note: the schema requires `userId` and `storeId` (no `id`).
+    The route resolves the user to update by `userId` (which is the
+    **primary key for the row's `userId` column**, not a separate
+    row id).
+  required:
+    - userId
+    - storeId
+  properties:
+    userId:
+      type: string
+      minLength: 1
+    storeId:
+      type: array
+      minItems: 1
+      items:
+        type: string
+
+DeleteStoreMappingInput:
+  type: object
+  description: |
+    Input for `storeMapping.deleteStoreMapping`. The router does
+    `verifyPasswordProcedure.input(z.object({ id: z.string() }))`.
+
+    **Naming mismatch**: the input field is `id`, but the service
+    uses it as the `userId` (it calls
+    `prisma.storeMapping.deleteMany({ where: { userId: input.id } })`).
+    The field is renamed at the call site — see the x-security-note
+    in the path file.
+  required:
+    - id
+  properties:
+    id:
+      type: string
+      description: |
+        The user's id (passed as `userId` in the Prisma where
+        clause). No UUID refinement.
+
+# =============================================================================
+# Response / output schemas
+# =============================================================================
+
+GetStoreMappingsResponse:
+  type: object
+  description: |
+    Response shape of `storeMapping.getStoreMappings`. Service
+    signature (store-mapping-repository.ts:13-14):
+    `Promise<{ data: StoreMapping[]; count: number }>`.
+
+    Each row in `data` is a **user** (not a `StoreMapping` row) with
+    the side relation `mappedStores[]` populated. The router's
+    `buildWhereQuery` filters to users with `mappedStores: { some: {} }`
+    (only users that have at least one store mapping).
+
+    The `count` is the post-filter, pre-pagination total of
+    `prisma.user.count({ where })`.
+  required:
+    - data
+    - count
+  properties:
+    data:
+      type: array
+      items:
+        $ref: ./trpc-store-mapping.yaml#/UserWithMappedStores
+    count:
+      type: integer
+      minimum: 0
+
+GetTotalStoreMappingsCountResponse:
+  type: object
+  description: |
+    Response shape of `storeMapping.storeMappingTotalCounts`. The
+    service calls
+    `prisma.storeMapping.groupBy({ by: ["userId"] })` — the result
+    is a **list of grouped records**, NOT a single count integer.
+
+    The router forwards the raw `groupBy` result, so the response
+    body is
+    `Array<{ userId: string }>` — the array length is the
+    "number of distinct users with a mapping". The total is
+    derivable client-side as `result.length`.
+
+    This is a **silent contract difference** vs every other
+    `*TotalCounts` tRPC procedure documented so far (which return
+    a `{ count: number }` or a bare integer).
+  required:
+    - userId
+  properties:
+    userId:
+      type: string
+      format: uuid
+      description: |
+        One entry per user that has at least one
+        `StoreMapping.userId` row.
+
+UserWithMappedStores:
+  type: object
+  description: |
+    Read shape of a user (with the side relation `mappedStores[]`).
+    Used by `getStoreMappings`, `getStoreMappingById`, and
+    `getSwitchStores` (the last one with a reduced `select`).
+
+    Note: this is **not** the `User` model from `trpc-users`. The
+    select list comes from `store-mapping-repository.ts:18-57` —
+    the user is a **partial projection** with only
+    `id`, `fullName`, `username`, `mappedStores`, and
+    `_count.mappedStores`. No `email`, `role`, `department`, etc.
+  required:
+    - id
+    - fullName
+    - username
+    - mappedStores
+    - _count
+  properties:
+    id:
+      type: string
+      format: uuid
+    fullName:
+      type: string
+    username:
+      type: string
+    mappedStores:
+      type: array
+      description: |
+        `StoreMapping` rows for this user, ordered by `updatedAt`
+        desc. Each entry embeds `createdBy` / `updatedBy`
+        (id/fullName/username), the joined `store: { id, name }`,
+        and the row's own `updatedAt`.
+      items:
+        $ref: ./trpc-store-mapping.yaml#/MappedStoreEntry
+    _count:
+      type: object
+      description: |
+        Prisma `_count` aggregate — `mappedStores` is the row
+        count of `StoreMapping` for this user.
+      required:
+        - mappedStores
+      properties:
+        mappedStores:
+          type: integer
+          minimum: 0
+
+UserWithMappedStoresById:
+  allOf:
+    - $ref: ./trpc-store-mapping.yaml#/UserWithMappedStores
+    - type: object
+      description: |
+        Variant of `UserWithMappedStores` returned by
+        `storeMapping.getStoreMappingById`. Same shape — documented
+        separately for future divergence (e.g. if by-id adds
+        `email` to the projection).
+      properties: {}
+
+MappedStoreEntry:
+  type: object
+  description: |
+    A `StoreMapping` row as projected by the repository's
+    `select` (store-mapping-repository.ts:24-50). Does NOT
+    include the row's own `id` or `userId` / `storeId` columns
+    directly — they are only reachable via the parent
+    `User.mappedStores` and the joined `store.id`.
+  required:
+    - createdBy
+    - store
+    - updatedAt
+  properties:
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    store:
+      type: object
+      description: Joined `Store` row.
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    updatedAt:
+      type: string
+      format: date-time
+
+SwitchStoresResponse:
+  type: object
+  description: |
+    Response shape of `storeMapping.getSwitchStores`. The
+    repository's select is a **reduced** version of
+    `UserWithMappedStores` — no `createdBy` / `updatedBy` on the
+    `mappedStores[]` entries, no `updatedAt`, no `_count`.
+
+    The endpoint is meant for the "switch store" dropdown in the
+    client shell — it surfaces just the user's id, full name, and
+    the mapped stores.
+  required:
+    - id
+    - fullName
+    - mappedStores
+  properties:
+    id:
+      type: string
+      format: uuid
+    fullName:
+      type: string
+    mappedStores:
+      type: array
+      items:
+        type: object
+        required:
+          - store
+        properties:
+          store:
+            type: object
+            required:
+              - id
+              - name
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+
+CreatedStoreMappingRow:
+  type: object
+  description: |
+    The bare `StoreMapping` row returned by `createStoreMapping`
+    and `updateStoreMapping` (one row per `storeId` in the input).
+    The repository's `prisma.storeMapping.create` is called with
+    no `select` / `include`, so the response is the **bare Prisma
+    record**.
+
+    Note that this is the **wire** shape — the `MappedStoreEntry`
+    shape (used by `getStoreMappings` etc.) is a different
+    projection that omits the row's own id / userId / storeId and
+    joins `store: { id, name }` instead.
+  required:
+    - id
+    - userId
+    - storeId
+    - createdById
+    - updatedById
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    userId:
+      type: string
+      format: uuid
+    storeId:
+      type: string
+      format: uuid
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

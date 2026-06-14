@@ -1,0 +1,872 @@
+# docs/schemas/endo.yaml
+# OpenAPI component schemas for the `endo` (Endoscopy)
+# module's REST surface (`src/app/api/(endo)/`).
+#
+# Backed by:
+#   - `EndoService` (proxy-bill template with
+#     `department = ENDO`, `pharmacyBillInvoicePrefix =
+#     "ENDO"`)
+#   - `EndoRequestService` (the "request" layer that
+#     becomes a proxy bill at billing time)
+#   - `EndoReportService` (the patient-facing report
+#     attached to a `ProxyBillRequestLink`)
+#
+# The endo module re-uses the shared `ProxyBill` shape
+# from `proxy-bill.type.ts` — that surface (with service
+# bill, procedure bill, pharmacy bill, payment status,
+# etc.) is documented elsewhere under
+# `cathlab.yaml` / `hd.yaml` / `ot.yaml` / `pharmacy.yaml`.
+# This file only documents the endo-specific payloads
+# (EndoRequest, EndoReport, the picker lists, the
+# infection-screening display, and the create-report
+# request shape).
+
+# =============================================================================
+# Generic envelope
+# =============================================================================
+
+EmrResponse:
+  type: object
+  description: |
+    The standard REST envelope used by every endpoint in
+    this module. See
+    `src/utils/api-handler.ts::enhancedApiHandler`.
+  properties:
+    success: { type: boolean }
+    result: {}
+    message: { type: string }
+    error:
+      oneOf:
+        - type: object
+          nullable: true
+        - type: string
+          nullable: true
+  required: [success, result, message, error]
+
+# =============================================================================
+# Endo proxy-bill list / detail
+# =============================================================================
+#
+# The endo module reuses the shared `ProxyBill` shape.
+# The endo-specific bit is the filter and the
+# `pharmacyBillInvoicePrefix = "ENDO"` and
+# `departmentType: DepartmentEnum.ENDO` columns.
+# Documented here as opaque objects — the full ProxyBill
+# shape is part of the `proxy-bill` module docs.
+
+GetEndoListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        proxyBills:
+          type: array
+          items: { $ref: "#/EndoProxyBill" }
+          description: |
+            `ProxyBill[]` (full shape, see
+            `proxy-bill.type.ts::ProxyBillValidatorType`).
+            Always filtered to
+            `departmentType: DepartmentEnum.ENDO`.
+        count:
+          type: integer
+          description: Total matching rows (post-filter, pre-pagination).
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetEndoByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/EndoProxyBill"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoProxyBill:
+  type: object
+  description: |
+    Alias for the shared `ProxyBill` (see
+    `proxy-bill.type.ts`). Endo-specific bindings:
+      - `departmentType: "ENDO"`
+      - The IPD daily bill prefix is `ENDO/...` (set by
+        `EndoService.pharmacyBillInvoicePrefix`).
+  properties:
+    id: { type: string, format: uuid }
+    invoiceNo: { type: string }
+    patientId: { type: string, format: uuid }
+    date: { type: string, format: date-time }
+    departmentType: { type: string, enum: [ENDO] }
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+    patientGroup: { type: string }
+    billTypeId: { type: string, format: uuid }
+    storeId: { type: string, format: uuid }
+    admissionId:
+      type: string
+      format: uuid
+      nullable: true
+    appointmentId:
+      type: string
+      format: uuid
+      nullable: true
+    endoRequestId:
+      type: string
+      format: uuid
+      nullable: true
+      description: |
+        Set when the bill was created from an
+        `EndoRequest` (see
+        `EndoService.createEndoProxyBill`).
+    paymentStatus:
+      type: string
+      enum: [PAID, UNPAID, CANCELLED, PARTIALLY_PAID]
+    subTotal: { type: number }
+    totalAmount: { type: number }
+    discountAmount: { type: number }
+    discountPercentage: { type: number }
+    taxAmount: { type: number }
+    taxPercentage: { type: number }
+    remark: { type: string, nullable: true }
+    change: { type: number }
+    isConsignment: { type: boolean }
+    displayFOCField: { type: boolean }
+    patient: { $ref: "./common-patients.yaml#/Patient" }
+    billType:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    store:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    appointment:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string }
+        OPDBilling:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              invoiceNo: { type: string }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    serviceBill:
+      type: object
+      nullable: true
+      description: |
+        `ProxyBillServiceBillType` (see
+        `proxy-bill.type.ts`). Each `serviceBillItem`
+        carries `service`, optional `doctor`, `amount`,
+        `priceType`, `isTeamFee`, etc.
+    procedureBill:
+      type: object
+      nullable: true
+      description: |
+        `ProxyBillProcedureBillType` — list of
+        `procedureBillItem` rows with `procedure` and
+        optional `doctor`.
+    servicePackageBill:
+      type: object
+      nullable: true
+      description: |
+        `ProxyBillServicePackageBillType` — list of
+        `servicePackageBillItem` rows.
+    pharmacySale:
+      type: object
+      nullable: true
+      description: |
+        The full `PharmacySale` with `items[]` (each
+        item carrying `stock`, `focQty`, `qty`, `price`,
+        etc.).
+    ipdDailyBill:
+      type: object
+      nullable: true
+      description: |
+        The IPD daily-bill link (only set for
+        IPD endo bills). Carries `admission.admissionId`
+        and `admission.discharges.isFinalBillPaid`.
+    proxyBillRequestLink:
+      type: object
+      nullable: true
+      description: |
+        The endo-side junction (only set on bills
+        generated from an `EndoRequest`). The
+        `endoReport` field (if any) is the active report
+        attached to this bill.
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+# =============================================================================
+# Endo proxy-bill activity log
+# =============================================================================
+
+GetEndoActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/EndoProxyBillActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoProxyBillActivityLog:
+  type: object
+  description: |
+    Activity-log entry for a proxy-bill write event
+    (create, update, status change, etc.). Mirrors the
+    `ProxyBillActivityLogType` from
+    `proxy-bill.type.ts`.
+  properties:
+    id: { type: string, format: uuid }
+    entity: { type: string, example: "ProxyBill" }
+    entityId: { type: string, format: uuid }
+    action: { type: string, example: "Update" }
+    description: { type: string }
+    remark: { type: string, nullable: true }
+    userId: { type: string, format: uuid }
+    user:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    timestamp: { type: string, format: date-time }
+
+# =============================================================================
+# Endo Report
+# =============================================================================
+#
+# `EndoReport` is the clinical writeup that gets attached
+# to a `ProxyBillRequestLink`. There is exactly one
+# `EndoReport` per active (non-deleted) endo
+# `ProxyBillRequestLink`. Status state machine:
+# `ENTERED → DELIVERED`. A report can only be marked
+# `DELIVERED` once the linked proxy bill is paid (see
+# `EndoReportService.changeEndoReportStatus`).
+
+GetEndoReportByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/EndoReport"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetEndoReportByEndoRequestIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/EndoReport"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+CreateEndoReportRequest:
+  type: object
+  description: |
+    Request body for `POST /api/endo/report`. Mirrors
+    `createEndoReportSchema` in
+    `shared/endo/schemas/endo-report.schema.ts`.
+  required: [proxyBillId]
+  properties:
+    proxyBillId:
+      type: string
+      format: uuid
+      description: |
+        The id of the (non-deleted, `requestType: ENDO`)
+        `ProxyBill` whose `ProxyBillRequestLink` will
+        own the new report. The repository throws a
+        plain `Error` (not a typed `AppError`) if no
+        such link exists.
+    templateId:
+      type: string
+      format: uuid
+      nullable: true
+      description: Optional report-template id.
+    result:
+      type: string
+      description: |
+        Optional text/template result. The
+        `validateExclusiveReportEntry` guard enforces
+        that you set EITHER `result`/`templateId` OR
+        `attachmentUrls` (not both, and not neither).
+    attachmentUrls:
+      type: array
+      maxItems: 1
+      items: { type: string, format: uri }
+      default: []
+      description: |
+        Optional file attachment — at most ONE url.
+        S3 URLs restricted to the bucket in
+        `next.config.ts`.
+
+CreateEndoReportResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/EndoReport" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoReport:
+  type: object
+  description: |
+    Mirrors `EndoReportWithRelations` from
+    `endo-report.type.ts` (built from
+    `endoReportValidator` in
+    `endo-report.repository.ts`). Note that
+    `proxyBillRequestLink` is the full junction with
+    `proxyBill` + `endoRequest` (with referral doctor,
+    surgeons, anesthetists), so this object is large.
+  properties:
+    id: { type: string, format: uuid }
+    proxyBillRequestLinkId: { type: string, format: uuid }
+    templateId: { type: string, format: uuid, nullable: true }
+    result: { type: string, nullable: true }
+    attachments:
+      type: array
+      items: { type: string, format: uri }
+    status:
+      type: string
+      enum: [ENTERED, DELIVERED]
+    isDeleted: { type: boolean }
+    deletedById: { type: string, format: uuid, nullable: true }
+    deletedRemark: { type: string, nullable: true }
+    createdById: { type: string, format: uuid }
+    updatedById: { type: string, format: uuid }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    template:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    proxyBillRequestLink:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        proxyBillId: { type: string, format: uuid }
+        endoRequestId: { type: string, format: uuid }
+        requestType: { type: string, enum: [ENDO] }
+        isDeleted: { type: boolean }
+        proxyBill:
+          $ref: "#/EndoProxyBill"
+        endoRequest:
+          $ref: "#/EndoRequest"
+
+# =============================================================================
+# Endo Request
+# =============================================================================
+#
+# The "request" layer above the proxy bill. Captures
+# operation details (date, time, type), surgical team,
+# vitals, and the infection-screening serology.
+# Mirrors `EndoRequestWithRelations` from
+# `endo-request.type.ts`.
+
+EndoRequest:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    requestId:
+      type: string
+      description: |
+        Human-friendly monthly-reset id (e.g.
+        `ERID-202606-0007`). Generated via
+        `generateMonthlyResetId("ERID", ...)`.
+    module:
+      type: string
+      enum: [OPD, IPD, ED]
+      description: |
+        `EndoRequestModule`. Defaults to `OPD`. For
+        emergency patients, the service rewrites this
+        to `ED` automatically (see
+        `EndoRequestService.createEndoRequest`).
+    patientId: { type: string, format: uuid }
+    admissionId: { type: string, format: uuid, nullable: true }
+    appointmentId: { type: string, format: uuid, nullable: true }
+    appointmentTypeId: { type: string, format: uuid, nullable: true }
+    referralType:
+      type: string
+      enum: [REFERRALIN, REFERRALOUT]
+    referralOutType:
+      type: string
+      enum: [DOCTOR, CLINIC]
+      nullable: true
+    referralDoctorId: { type: string, format: uuid, nullable: true }
+    referralClinicId: { type: string, format: uuid, nullable: true }
+    operationDetails: { type: string }
+    operationDate: { type: string, format: date-time }
+    operationTime:
+      type: string
+      format: date-time
+      description: |
+        Combined `operationDate` + time-of-day. The
+        service merges them via
+        `combineDateWithTime` in the local timezone.
+    operationTypeId: { type: string }
+    anesthesiaTypeId: { type: string }
+    urgency:
+      type: string
+      enum: [EMERGENCY, URGENT, NORMAL, ELECTIVE]
+    isBloodRequired: { type: boolean }
+    bloodRequiredRemark: { type: string, nullable: true }
+    lastMeal: { type: string, nullable: true }
+    drugAllergy: { type: string, nullable: true }
+    status:
+      type: string
+      enum: [REQUESTED, APPROVED, COMPLETED, CANCELLED]
+    hasServicesAdded: { type: boolean }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, format: uuid, nullable: true }
+    # Vital signs
+    bloodPressureDateTime: { type: string, format: date-time, nullable: true }
+    systolicBloodPressure: { type: integer, nullable: true }
+    diastolicBloodPressure: { type: integer, nullable: true }
+    bodyMeasurementUnit:
+      type: string
+      enum: [METRIC, IMPERIAL]
+      nullable: true
+    weight: { type: number, nullable: true }
+    height: { type: number, nullable: true }
+    bodyTemperatureUnit:
+      type: string
+      enum: [CELSIUS, FAHRENHEIT]
+      nullable: true
+    bodyTemperature: { type: number, nullable: true }
+    bodyTemperatureDateTime: { type: string, format: date-time, nullable: true }
+    spO2: { type: integer, nullable: true }
+    spO2DateTime: { type: string, format: date-time, nullable: true }
+    heartRate: { type: integer, nullable: true }
+    heartRateDateTime: { type: string, format: date-time, nullable: true }
+    respiratoryRate: { type: number, nullable: true }
+    respiratoryRateDateTime: { type: string, format: date-time, nullable: true }
+    # Serology (infection screening)
+    hbAg: { type: string, nullable: true }
+    hcv: { type: string, nullable: true }
+    hiv: { type: string, nullable: true }
+    vdrl: { type: string, nullable: true }
+    otherScreening: { type: string, nullable: true }
+    bloodType:
+      type: string
+      enum: [A_POSITIVE, A_NEGATIVE, B_POSITIVE, B_NEGATIVE, AB_POSITIVE, AB_NEGATIVE, O_POSITIVE, O_NEGATIVE]
+      nullable: true
+    bleedingTimeMin: { type: integer, nullable: true }
+    bleedingTimeSec: { type: integer, nullable: true }
+    clottingTimeMin: { type: integer, nullable: true }
+    clottingTimeSec: { type: integer, nullable: true }
+    remark: { type: string, nullable: true }
+    createdById: { type: string, format: uuid }
+    updatedById: { type: string, format: uuid }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    patient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        patientId: { type: string }
+        dateofBirth: { type: string, format: date-time }
+        gender: { type: string }
+        patientType:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, DAYCARE]
+        guardianName: { type: string, nullable: true }
+    admission:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        admissionId: { type: string }
+    appointment:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string }
+    appointmentType:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        name: { type: string }
+    referralDoctor:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        doctorId: { type: string }
+        title: { type: string }
+        specialization:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+    referralClinic:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    operationType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+    anesthesiaType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+    endoRequestSurgeons:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          surgeonId: { type: string, format: uuid }
+          surgeon:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              doctorId: { type: string }
+              title: { type: string }
+              specialization:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+              user:
+                type: object
+                properties:
+                  fullName: { type: string }
+    endoRequestAnesthetists:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          anesthetistId: { type: string, format: uuid }
+          anesthetist:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              doctorId: { type: string }
+              title: { type: string }
+              user:
+                type: object
+                properties:
+                  fullName: { type: string }
+              specialization:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+    endoRequestAssistantDoctors:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          assistantDoctorId: { type: string, format: uuid }
+          assistantDoctor:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              doctorId: { type: string }
+              title: { type: string }
+              user:
+                type: object
+                properties:
+                  fullName: { type: string }
+              specialization:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+    endoRequestAssistantNurses:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          assistantNurseId: { type: string, format: uuid }
+          assistantNurse:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              fullName: { type: string }
+    proxyBillRequestLinks:
+      type: array
+      description: |
+        Active (`isDeleted: false`) endo links from
+        this request to proxy bills. Each link is
+        augmented with the corresponding `endoReport`
+        (also only `status: ENTERED`, `isDeleted:
+        false`).
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          proxyBillId: { type: string, format: uuid }
+          endoRequestId: { type: string, format: uuid }
+          requestType: { type: string, enum: [ENDO] }
+          isDeleted: { type: boolean }
+          endoReport:
+            type: object
+            nullable: true
+            properties:
+              id: { type: string, format: uuid }
+              status: { type: string, enum: [ENTERED, DELIVERED] }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+
+GetEndoRequestListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        endoRequests:
+          type: array
+          items: { $ref: "#/EndoRequest" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetEndoRequestByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/EndoRequest"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# =============================================================================
+# IPD endo requests for proxy
+# =============================================================================
+
+GetEndoRequestsForProxyResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/EndoRequestForProxy" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoRequestForProxy:
+  type: object
+  description: |
+    Tiny label/value picker shape returned by
+    `EndoService.getBillableIpdEndoRequestsForProxy`.
+    The list maps each `EndoRequest.id` to a
+    `requestId` display string (or `"Unknown Request ID"`
+    when the request id is null).
+  properties:
+    id:
+      type: string
+      format: uuid
+      description: EndoRequest id.
+    label:
+      type: string
+      description: |
+        `requestId` (e.g. `ERID-202606-0007`) or
+        `"Unknown Request ID"`.
+
+# =============================================================================
+# Infection screening display
+# =============================================================================
+#
+# Derived from the request's serology fields via
+# `getInfectionScreeningDisplay` (see
+# `src/utils/infection-screening.ts`). The util maps
+# `hbAg`, `hcv`, `hiv`, `vdrl`, `otherScreening` to
+# `"Positive" | "Negative" | "Pending"`.
+
+GetEndoInfectionScreeningResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/EndoInfectionScreening" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoInfectionScreening:
+  type: object
+  description: |
+    Returned by `EndoRequestService.getInfectionScreening`
+    and `EndoService.getInfectionScreening`. If the
+    request id is not found, all four fields are
+    `false` / `null`.
+  properties:
+    hasApprovedRequest:
+      type: boolean
+      description: |
+        `true` when the request exists (the method
+        doesn't filter by `status`, so any
+        `EndoRequest` with the given id returns
+        `true`).
+    endoRequestId:
+      type: string
+      format: uuid
+      nullable: true
+    displayLabel:
+      type: string
+      enum: [Positive, Negative, Pending]
+      nullable: true
+    isPositiveAlert:
+      type: boolean
+      description: |
+        Convenience: `displayLabel === "Positive"`.
+
+# =============================================================================
+# Appointments for endo (single patient)
+# =============================================================================
+
+GetAppointmentsForEndoResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/EndoAppointment" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoAppointment:
+  type: object
+  description: |
+    An `Appointment` (full row) plus the related
+    `ProxyBill[]` and `appointmentType` rows. Returned
+    by `EndoRepository.getAppointmentsForEndo`.
+  properties:
+    id: { type: string, format: uuid }
+    appointmentId: { type: string }
+    appointmentDate: { type: string, format: date-time }
+    status: { type: string }
+    patientId: { type: string, format: uuid }
+    doctorId: { type: string, format: uuid, nullable: true }
+    ProxyBill:
+      type: array
+      items: { $ref: "#/EndoProxyBill" }
+    appointmentType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+
+# =============================================================================
+# Patients for endo
+# =============================================================================
+
+GetPatientsForEndoResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        patients:
+          type: array
+          items: { $ref: "#/EndoPatient" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+EndoPatient:
+  type: object
+  description: |
+    Full `Patient` row plus the
+    `appointments` filtered to `CONFIRMED` with an
+    `APPROVED` `endoRequest`. Returned by
+    `EndoRepository.getPatientsForEndo`.
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string }
+    patientId: { type: string }
+    phoneNo: { type: string, nullable: true }
+    gender: { type: string, nullable: true }
+    dateofBirth: { type: string, format: date-time, nullable: true }
+    guardianName: { type: string, nullable: true }
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+    patientGroup: { type: string }
+    appointments:
+      type: array
+      description: |
+        Filtered: `status: CONFIRMED` AND
+        `endoRequest.status: APPROVED`.
+      items: { $ref: "#/EndoAppointment" }

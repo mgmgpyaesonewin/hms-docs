@@ -1,0 +1,355 @@
+# docs/paths/trpc-payment-methods.yaml
+# tRPC router: paymentMethods (src/lib/trpc/routers/payment-methods.ts)
+# CRUD over the `PaymentMethod` model. All six procedures use
+# `authProcedure` (not `verifyPasswordProcedure`, not `authorizeProcedure`).
+x-trpc-source: src/lib/trpc/routers/payment-methods.ts
+x-trpc-router: paymentMethods
+
+/api/trpc/paymentMethods.getPaymentMethods:
+  post:
+    summary: List payment methods (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of payment methods
+      with the total row count.
+
+      Response shape:
+        ```
+        { paymentMethods: PaymentMethod[], count: number }
+        ```
+      (Field named `paymentMethods`, **not** `data`.)
+
+      Filters (from `defaultQuerySchema`):
+        - `search` — case-insensitive substring match against `name`
+          (per `buildWhereQuery` at
+          payment-methods-repository.ts:94-105).
+
+      The repository orders by `createdAt: desc`.
+
+      Note: unlike `units.getUnits`, the repository's take-clause
+      conditional is slightly different — `take` is only set when
+      `query.limit > 0` (rather than the `=== 0 ? undefined : take`
+      pattern used in `units`). With `limit: 0` the call returns all
+      matching rows.
+
+      Service: `PaymentMethodsService.getPaymentMethods`. Source:
+      `src/lib/trpc/routers/payment-methods.ts:13-23`.
+    tags:
+      - Payment Methods
+    operationId: trpc_paymentMethods_getPaymentMethods
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of payment methods.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-payment-methods.yaml#/GetPaymentMethodsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/paymentMethods.getPaymentMethodById:
+  post:
+    summary: Get a payment method by id
+    description: |
+      Authenticated query. Returns the payment method with the given
+      `id`. The router input is `z.string()` (a bare id string), not
+      `{ id }` — this differs from `units.getUnitById` which uses
+      `validateIdSchema`. Source:
+      `src/lib/trpc/routers/payment-methods.ts:25-36`.
+    tags:
+      - Payment Methods
+    operationId: trpc_paymentMethods_getPaymentMethodById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Payment method id. Schema is `z.string()` (no UUID refinement, no object wrapper).
+    responses:
+      "200":
+        description: The payment method (full shape with `createdBy` and `updatedBy`). **May be `null` if not found** — the service does not 404 on miss.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-payment-methods.yaml#/PaymentMethod
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/paymentMethods.getPaymentMethodsTotalCount:
+  post:
+    summary: Get total payment-method count
+    description: |
+      Authenticated query. Returns the count of all payment methods
+      (`prisma.paymentMethod.count()` with no filter). Source:
+      `src/lib/trpc/routers/payment-methods.ts:38-47`.
+    tags:
+      - Payment Methods
+    operationId: trpc_paymentMethods_getPaymentMethodsTotalCount
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total payment-method count.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-payment-methods.yaml#/GetPaymentMethodsTotalCountResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/paymentMethods.createPaymentMethod:
+  post:
+    summary: Create a new payment method
+    description: |
+      Authenticated mutation. Creates a new PaymentMethod.
+
+      Validation failures:
+        - Empty `name` → 400
+          (Zod `min(1, "Payment method name is required.")`).
+        - A payment method with the same `name` already exists
+          (`findPaymentMethodByName` — case-insensitive equality) →
+          400 with the error message **"Payment method name already exits"**
+          (note: typo "exits" instead of "exists" — preserved verbatim
+          from payment-methods-service.ts:21). The same typo is
+          **not** present in `updatePaymentMethod`'s "name already
+          exists" error.
+
+      Side effects:
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/payment-method")` (singular
+          — note the path inconsistency; `units`/`departments`/
+          `categories` use the plural form).
+        - Logs the creation via `activityLogger`
+          (description: "Created Payment Method", action: "Create",
+          entity: "Payment Method", entityId: result.id).
+
+      Response **does** include `createdBy` and `updatedBy` — the
+      repository uses `include: { createdBy: true, updatedBy: true }`.
+
+      Service: `PaymentMethodsService.createPaymentMethod`. Source:
+      `src/lib/trpc/routers/payment-methods.ts:49-63`.
+    tags:
+      - Payment Methods
+    operationId: trpc_paymentMethods_createPaymentMethod
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-payment-methods.yaml#/CreatePaymentMethodInput
+    responses:
+      "200":
+        description: Payment method created. Full shape with `createdBy` and `updatedBy`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-payment-methods.yaml#/PaymentMethod
+      "400":
+        description: Validation failure (empty name, or name collision — error message has typo "exits").
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/paymentMethods.updatePaymentMethod:
+  post:
+    summary: Update a payment method
+    description: |
+      Authenticated mutation. Updates the `name` of the payment method
+      identified by `id`.
+
+      Validation:
+        - Payment method must exist (else 404, `AppError("Payment method not found", 404)`).
+        - If `name` is changing, the new `name` must not collide with
+          another existing payment method → 400
+          (`AppError("Payment method name already exists", 400)` —
+          note the corrected spelling here, vs. the typo in
+          `createPaymentMethod`).
+
+      Side effects:
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/payment-method")`.
+        - Logs the update via `activityLogger` (description: "Updated Payment Method",
+          action: "Update", entity: "Payment Method", entityId: result.id).
+
+      Response **does** include `createdBy` and `updatedBy`.
+
+      Service: `PaymentMethodsService.updatePaymentMethod`. Source:
+      `src/lib/trpc/routers/payment-methods.ts:65-80`.
+    tags:
+      - Payment Methods
+    operationId: trpc_paymentMethods_updatePaymentMethod
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-payment-methods.yaml#/UpdatePaymentMethodInput
+    responses:
+      "200":
+        description: Updated payment method. Full shape with `createdBy` and `updatedBy`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-payment-methods.yaml#/PaymentMethod
+      "400":
+        description: New name collides with an existing payment method.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Payment method not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/paymentMethods.deletePaymentMethod:
+  post:
+    summary: Delete a payment method
+    description: |
+      Authenticated mutation. Deletes the payment method identified by
+      `id`. Returns the deleted row (not a `{ message }` envelope).
+
+      Validation:
+        - Payment method must exist (else 404).
+        - The payment method must not be referenced by any of:
+            - `DefaultSetting.paymentMethodId` (the system-wide default)
+            - `SupplierPaymentInfo.paymentMethodId` (supplier payment metadata)
+            - `OPDBilling.paymentMethodId` (any OPD billing record)
+
+          All three checks run in a single
+          `prisma.$transaction([...])` for atomicity
+          (payment-methods-service.ts:96-100). If any reference
+          exists → 400
+          (`AppError("Cannot delete this payment method because it is being used in other records", 400)`).
+
+      Side effects:
+        - Calls `revalidatePath("/set-up/payment-method")`.
+        - Logs the deletion via `activityLogger` (description: "Deleted Payment Method",
+          action: "Delete", entity: "Payment Method", entityId: result.id).
+
+      Response is the **full** `PaymentMethod` row (the repository's
+      `prisma.paymentMethod.delete` returns the deleted row, the
+      service forwards it, and the router returns it directly). This
+      differs from `units.deleteUnitById`, which returns `void` and
+      is wrapped in a `{ message }` envelope at the router.
+
+      Service: `PaymentMethodsService.deletePaymentMethod`. Source:
+      `src/lib/trpc/routers/payment-methods.ts:82-94`.
+    tags:
+      - Payment Methods
+    operationId: trpc_paymentMethods_deletePaymentMethod
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Payment method id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: Deleted payment method (full shape, not a message envelope).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-payment-methods.yaml#/PaymentMethod
+      "400":
+        description: Payment method is referenced by DefaultSetting, SupplierPaymentInfo, or OPDBilling.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Payment method not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all six procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - All six procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can manage payment methods. Consistent with
+    the rest of the Setup routers.
+  - **No TS type/runtime mismatch** — like `trpc-units`, the
+    `payment-methods-repository.ts` uses
+    `include: { createdBy: true, updatedBy: true }` consistently
+    across all six Prisma calls. There is no Bare/Full split.
+  - **Activity logging is complete** for all three mutating
+    operations (create, update, delete). No half-finished call sites.
+  - **Three cross-module FK checks** on delete (in a single
+    `prisma.$transaction`): `DefaultSetting`, `SupplierPaymentInfo`,
+    `OPDBilling`. This is the richest set of delete-validations in
+    the Setup routers documented so far.
+  - **Inconsistencies flagged**:
+      1. `getPaymentMethodById` and `deletePaymentMethod` accept
+         `z.string()` (bare id), while `updatePaymentMethod` and
+         `units.getUnitById` use `validateIdSchema` (`{ id }`). The
+         client must match the router's expected shape per-procedure.
+      2. `createPaymentMethod` error message: **"Payment method name
+         already exits"** (typo: "exits" instead of "exists").
+         `updatePaymentMethod` correctly says "exists".
+      3. The revalidation path is singular: `/set-up/payment-method`
+         (the resource IS logically singular, but other setup
+         resources use the plural form, e.g. `/set-up/units`).
+      4. `getPaymentMethodById` does NOT 404 on miss — the service
+         returns the Prisma result (which may be `null`) directly.
+         By contrast `units.getUnitById` and `updatePaymentMethod` do
+         throw 404. This is a **silent contract difference** for
+         clients — they'll receive `{ result: { data: null } }` for
+         a missing id rather than a 404 envelope.
+      5. `getPaymentMethods` repo uses a `limit > 0` conditional for
+         the `take` clause (returns all rows on `limit: 0`), vs.
+         `units.getUnits` which uses `limit === 0 ? undefined : take`.
+         The effective behaviour is the same (omit `take` for
+         unlimited) but the source style is inconsistent.

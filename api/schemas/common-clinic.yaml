@@ -1,0 +1,224 @@
+# docs/schemas/common-clinic.yaml
+# Schemas for the common-clinic sub-area of the
+# `common` REST module. Two endpoints:
+#   GET  /api/clinic
+#   GET  /api/clinic/[id]
+# Source: src/app/api/(common)/clinic/route.ts
+# Source: src/app/api/(common)/clinic/[id]/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetClinicsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        The route uses `apiHandler` with manual
+        `validateSearchParams(getClinicsSchema, ...)`.
+        The schema is
+        `baseQuerySchema.merge({ status: z.string().
+        optional()}).transform(transformPaginationSchema)`,
+        so the post-transform shape is
+        `{ page, limit, offset, search?, start?, end?,
+        status? }`. The repository's
+        `findClinicsAndCount` interprets:
+          - `search` — case-insensitive substring
+            match against `clinicId`, `name`, `email`,
+            or `phoneNo` (4-branch `OR`).
+          - `status` — stringly-typed boolean. The
+            repository maps
+            `query.status === "ACTIVE"` to
+            `where.isActive = true`. Any other value
+            is treated the same as "no filter on
+            isActive" (same pattern as
+            [[common-anesthesia-type]],
+            [[common-bill-types]],
+            [[common-operation-type]]).
+          - `start` / `end` — `createdAt` range
+            (`gte` / `lte`).
+        Repository ordering: `createdAt: desc`.
+      properties:
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: |
+            Stringly-typed boolean — the repository
+            maps `status === "ACTIVE"` to
+            `isActive: true`. The literal string
+            `"INACTIVE"` is treated the same as any
+            other non-`"ACTIVE"` value (i.e. no
+            `isActive: false` filter is applied). The
+            OpenAPI `enum: [ACTIVE, INACTIVE]` is
+            documentation-only.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetClinicsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/clinic`. The
+    repository returns
+    `Promise<{ clinics: Clinic[]; totalCount: number }>`
+    (clinic.repository.ts:13-61) and the route wraps
+    it in
+    `{ success: true, result, error: "" }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [clinics, totalCount]
+      properties:
+        clinics:
+          type: array
+          items:
+            $ref: ./common-clinic.yaml#/Clinic
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetClinicByIdResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/clinic/[id]`. The
+    route uses `enhancedApiHandler` and the service
+    helper `getClinicById` returns the row from
+    `prisma.clinic.findUnique` (or `null`).
+
+    The repository's `getClinicById` uses
+    `include: { createdBy: true, updatedBy: true }`
+    (full `User` row, not the canonical 3-field
+    `Publisher` projection). Same leak pattern as
+    [[common-anesthesia-type]],
+    [[common-operation-type]],
+    [[common-bill-types]],
+    [[common-payment-methods]],
+    [[common-specialization]].
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-clinic.yaml#/Clinic
+        - type: "null"
+    message:
+      type: string
+      example: ""
+    error:
+      type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Clinic:
+  type: object
+  description: |
+    Canonical clinic shape. TS type `Clinic` from
+    `src/app/(dashboard)/common/clinic/features/types/index.ts:1-21`.
+
+    Maps to the Prisma `Clinic` model
+    (prisma/schema.prisma). Three `@unique` columns:
+    `clinicId` (business identifier, auto-generated
+    as `CID-NNN` via `generateId3Digits`), `name`,
+    `email` (the `String?` email is also `@unique` —
+    a NULL is allowed but two non-NULL emails cannot
+    collide).
+
+    The list endpoint's repository uses
+    `include: { createdBy: { select: { id, fullName,
+    username } }, updatedBy: { select: { id, fullName,
+    username } } }` — the canonical 3-field
+    `Publisher` projection. The
+    `getClinicById` helper uses
+    `include: { createdBy: true, updatedBy: true }`
+    (full `User` row, see security notes).
+
+    `isActive` defaults to `false` at the DB level
+    (notably NOT `true` — see security notes).
+  required:
+    - id
+    - clinicId
+    - name
+    - phoneNo
+    - address
+    - isActive
+    - createdBy
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    clinicId:
+      type: string
+      description: |
+        Business identifier, `@unique`. Auto-generated
+        by the service as `CID-NNN` (3-digit
+        zero-pad) via `generateId3Digits("CID-",
+        lastClinic?.clinicId)`
+        (clinic.repository.ts:70-77). The repository
+        uses `orderBy: { clinicId: "desc" }` for the
+        "last" lookup — this is a **string**
+        descending sort on the business id, which
+        happens to be zero-padded so it sorts
+        chronologically for the first 999 rows.
+        First clinic is `CID-001`.
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-name
+        check enforced by the service via
+        `getClinicByName` (case-insensitive equality).
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: |
+        `@unique` in the Prisma model (`String?`).
+        See model comment.
+    phoneNo:
+      type: string
+      description: |
+        Not `@unique` in the Prisma model — only
+        `clinicId`, `name`, and `email` carry
+        uniqueness constraints. The repository's
+        search filter matches `phoneNo` substring.
+    address:
+      type: string
+    isActive:
+      type: boolean
+      description: |
+        Default `false` at the DB level (somewhat
+        surprising — newly created clinics start
+        inactive; the caller is expected to set
+        `isActive: true` explicitly to make a clinic
+        visible to the appointment / request
+        flows). Filterable via the `status` query
+        param.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

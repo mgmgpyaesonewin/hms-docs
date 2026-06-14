@@ -1,0 +1,554 @@
+# docs/paths/appointment.yaml
+# REST endpoints: appointment module
+# (src/app/api/(appointment)/)
+#
+# All endpoints are read-only. The module exposes:
+#   - GET /api/appointments                       — paginated list
+#   - GET /api/appointments/upcoming              — paginated upcoming
+#   - GET /api/appointments/{id}                  — list by patient id
+#   - GET /api/appointment-type                   — paginated list
+#   - GET /api/doctor-time-slot                   — paginated list
+#   - GET /api/doctor-time-slot/{id}              — schedules by doctor id
+#   - GET /api/doctor-time-slot/booking-slots     — booking-eligible slots
+#
+# All endpoints use `enhancedApiHandler` with
+# `auth: { required: true }`. **No RBAC permissions are declared** —
+# the gates are session presence only. Worth confirming against
+# the team's intent for these data sets.
+#
+# Response envelope is the project standard REST shape:
+#   { success: boolean; result: <data>; message: string; error?: string | null }
+# Different handlers emit slightly different extra-field values
+# ("", null). Treat them as equivalent.
+
+/api/appointments:
+  get:
+    summary: List appointments (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of appointments
+      with the total row count.
+
+      Response shape:
+        ```
+        { appointments: Appointment[]; totalCount: number }
+        ```
+      (Field named `appointments` + `totalCount`.)
+
+      Filters (from `getAppointmentsSchema`):
+        - `search`, `start`, `end` — from `defaultQuerySchema`.
+        - `doctorId` (UUID), `patientId` (UUID), `appointmentTypeId`
+          (UUID) — exact match.
+        - `date` — single date; the service filters to that
+          calendar day in the org timezone.
+        - `gender`, `status` — enum filters.
+        - `isUpcoming` — when `true`, the service excludes
+          CANCELLED and COMPLETED statuses.
+        - `appointmentCategory` — `CONSULTATION` | `OTHERS`.
+        - `module` — matches against `appointmentType.modules`
+          (string-array contains).
+        - `isFollowUp` — string enum `TRUE` | `FALSE`.
+        - `patientClassification` — `NEW_PATIENT` | `OLD_PATIENT`.
+        - `referralDoctor` / `referralClinic` (UUID).
+        - `isConsignment` — string `"true"` maps to `true`; any
+          other value (including undefined) is treated as
+          falsy/undefined.
+
+      Source:
+      `src/app/api/(appointment)/appointments/route.ts:6-19`.
+    tags:
+      - Appointments
+    operationId: rest_appointments_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: doctorId
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: date
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: patientId
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: appointmentTypeId
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: gender
+        schema:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+      - in: query
+        name: status
+        schema:
+          $ref: ../schemas/appointment.yaml#/AppointmentStatus
+      - in: query
+        name: isUpcoming
+        schema:
+          type: boolean
+      - in: query
+        name: appointmentCategory
+        schema:
+          $ref: ../schemas/appointment.yaml#/AppointmentCategory
+      - in: query
+        name: module
+        schema:
+          type: string
+      - in: query
+        name: isFollowUp
+        schema:
+          type: string
+          enum: [TRUE, FALSE]
+      - in: query
+        name: patientClassification
+        schema:
+          $ref: ../schemas/appointment.yaml#/PatientClassification
+      - in: query
+        name: referralDoctor
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: referralClinic
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: isConsignment
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Paginated list of appointments.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetAppointmentsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/appointments/upcoming:
+  get:
+    summary: List upcoming appointments (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of upcoming
+      appointments with the total row count.
+
+      Response shape:
+        ```
+        { appointments: Appointment[]; totalCount: number }
+        ```
+
+      Filters are a **subset** of `getAppointmentsSchema`:
+        - `search`, `start`, `end` — from `defaultQuerySchema`.
+        - `doctorId`, `date`.
+        - `isUpcoming` — defaults to **`true`** here (vs `false`
+          on the regular list).
+
+      Internally the handler calls the same
+      `appointmentService.getAppointments` as the regular list
+      endpoint, so the actual filter application depends on
+      `isUpcoming` being truthy (the service filters out
+      CANCELLED / COMPLETED).
+
+      Source:
+      `src/app/api/(appointment)/appointments/upcoming/route.ts:6-20`.
+    tags:
+      - Appointments
+    operationId: rest_appointments_upcoming
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: doctorId
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: date
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: isUpcoming
+        schema:
+          type: boolean
+    responses:
+      "200":
+        description: Paginated list of upcoming appointments.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetAppointmentsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/appointments/{id}:
+  get:
+    summary: List appointments for a patient
+    description: |
+      Authenticated query. Returns the appointments for a
+      **patient** (not for an appointment id — the path
+      segment is misnamed).
+
+      The handler is NOT wrapped in `enhancedApiHandler` — it
+      uses the simpler `apiHandler` wrapper. No validation, no
+      session-required flag, no `auth.permissions` — but the
+      session is still checked internally by the service/repo
+      layer (Prisma queries will return empty for unknown ids
+      rather than 401).
+
+      **Path-param semantics**: `{id}` is a patient id, not an
+      appointment id. The handler calls
+      `appointmentService.getAppointmentsByPatientId(id)`. The
+      route path segment is named `id` for compatibility with
+      the dynamic-segment convention.
+
+      The list MAY be empty (`[]`) — the route does not 404 on
+      a missing patient.
+
+      Source:
+      `src/app/api/(appointment)/appointments/[id]/route.ts:7-17`.
+    tags:
+      - Appointments
+    operationId: rest_appointments_byPatient
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: Patient id (NOT appointment id).
+    responses:
+      "200":
+        description: |
+          The patient's appointments. Empty array if the patient
+          has no appointments.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetAppointmentsByPatientIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/appointment-type:
+  get:
+    summary: List appointment types (paginated)
+    description: |
+      Authenticated query. Returns a paginated list of appointment
+      types with the total row count.
+
+      Response shape:
+        ```
+        { appointmentTypes: AppointmentType[]; count: number }
+        ```
+      Note: the field is named `count` here (not `totalCount`)
+      — inconsistent with the appointment repository (which
+      uses `totalCount`).
+
+      Filters: standard `defaultQuerySchema` only (`search`,
+      `start`, `end`, `page`, `limit`). No module-specific
+      filters.
+
+      Source:
+      `src/app/api/(appointment)/appointment-type/route.ts:6-17`.
+    tags:
+      - Appointment Types
+    operationId: rest_appointment_type_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of appointment types.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetAppointmentTypesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/doctor-time-slot:
+  get:
+    summary: List doctor schedules (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of doctor
+      schedules with the total distinct-doctor count.
+
+      Response shape:
+        ```
+        { doctorSchedules: DoctorTimeSlot[]; totalCount: number }
+        ```
+      (Field named `doctorSchedules`, not `data` or `timeslots`.
+      `totalCount` is a distinct-doctor count from
+      `groupBy({ by: ["doctorId"] })` — see
+      doctor-time-slot.repository.ts:151-156.)
+
+      Filters (from `getDoctorTimeSlotsSchema`):
+        - `search`, `start`, `end` — from `defaultQuerySchema`.
+          `start`/`end` filter on `createdAt` when both are
+          provided.
+        - `doctorId`, `scheduleId` (UUID), `dayOfWeek` (string),
+          `startTime`, `endTime` (datetime).
+
+      The repository merges duplicate doctor rows via
+      `mergeDuplicate` (line 149) and flattens
+      `doctor.specialization` from a relation to a string.
+
+      Source:
+      `src/app/api/(appointment)/doctor-time-slot/route.ts:6-17`.
+    tags:
+      - Doctor Time Slots
+    operationId: rest_doctor_time_slot_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: doctorId
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: scheduleId
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: dayOfWeek
+        schema:
+          type: string
+      - in: query
+        name: startTime
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: endTime
+        schema:
+          type: string
+          format: date-time
+    responses:
+      "200":
+        description: Paginated list of doctor schedules.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetDoctorTimeSlotsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/doctor-time-slot/{id}:
+  get:
+    summary: Get schedules for a doctor
+    description: |
+      Authenticated query. Returns the schedule for a single
+      **doctor** (not a schedule id — the path segment is
+      misnamed, like `/api/appointments/{id}`).
+
+      The handler calls
+      `doctorTimeSlotService.findDoctorSchedulesByDoctorId(id)`,
+      which calls `prisma.doctor.findUnique({ where: { id } })`
+      in the repository. So the id must be a valid **doctor**
+      id, not a schedule id.
+
+      Returns `null` if the doctor doesn't exist (the service
+      does not 404 on miss).
+
+      Source:
+      `src/app/api/(appointment)/doctor-time-slot/[id]/route.ts:5-22`.
+    tags:
+      - Doctor Time Slots
+    operationId: rest_doctor_time_slot_byDoctor
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: Doctor id (NOT schedule id).
+    responses:
+      "200":
+        description: |
+          The doctor's schedule, or `null` if the doctor doesn't
+          exist.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetDoctorTimeSlotsByDoctorIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/doctor-time-slot/booking-slots:
+  get:
+    summary: Get booking-eligible timeslots for a doctor on a date
+    description: |
+      Authenticated query. Returns the timeslots for a doctor on
+      a specific date, annotated with occupancy.
+
+      The service composes the response by:
+        1. Fetching the doctor's recurring weekly timeslots for
+           the day-of-week of `date`.
+        2. Fetching the doctor's occupied appointments on
+           `date`.
+        3. Mapping each timeslot to a `TimeslotForBooking` with
+           `isOccupied: boolean` and the optional `appointment`
+           + `patient` if occupied.
+
+      Validation:
+        - Both `doctorId` and `date` are **required** — the
+          service throws
+          `AppError("Doctor ID or Date is missing", 400)`
+          otherwise.
+        - Doctor must exist — `AppError("Doctor not found", 404)`
+          otherwise.
+
+      The `doctor` is the **same** object on every entry of
+      the response (the doctor from the `doctorId` query param).
+      `patient` is populated only when `isOccupied` is true.
+
+      Source:
+      `src/app/api/(appointment)/doctor-time-slot/booking-slots/route.ts:6-18`.
+    tags:
+      - Doctor Time Slots
+    operationId: rest_doctor_time_slot_booking
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: doctorId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: date
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: dayOfWeek
+        schema:
+          $ref: ../schemas/appointment.yaml#/WeekDay
+    responses:
+      "200":
+        description: Booking-eligible timeslots for the doctor on the date.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/appointment.yaml#/GetTimeslotsForBookingResponse
+      "400":
+        description: Missing `doctorId` or `date`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Doctor not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all seven endpoints above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — all seven endpoints use
+    `auth: { required: true }` with no `permissions` array. The
+    gates are session presence only. Worth confirming against
+    the team's intent: appointment data includes patient PII
+    (name, phone, gender, DOB) and doctor info, so RBAC gating
+    may be appropriate.
+  - **Two path segments are misnamed**: `/api/appointments/{id}`
+    and `/api/doctor-time-slot/{id}` both use the segment name
+    `id` for a different entity (patient id, doctor id). The
+    endpoints still work because the handler dispatches to the
+    right service, but clients have to know the semantic from
+    the route handler, not the path.
+  - **Three different "extra" envelope field shapes** are used
+    across the seven endpoints — `{ success, result, message }`,
+    `{ success, result, message, error: null }`, and
+    `{ success, result, message, error: "" }`. The error field
+    is always empty / null on success; only the error handler in
+    `apiHandler` (`src/utils/api-handler.ts:38-46`) populates it
+    meaningfully. Treat as equivalent.
+  - **Inconsistent field naming across repositories**:
+      - `appointment-types` returns `count` (not `totalCount`).
+      - `appointments` and `doctor-time-slot` return `totalCount`.
+      - `doctor-time-slot` `totalCount` is a **distinct** doctor
+        count (from `groupBy`), not a row count.
+  - **TS type / runtime mismatch on `Appointment.appointmentType.modules`**:
+    the TS type declares the projection as
+    `Pick<AppointmentType, "id"|"name"|"createdAt"|"updatedAt"|"modules">`
+    (appointment.types.ts:90-93), but the Prisma `include` in
+    `appointmentValidator` selects only
+    `id`, `name`, `createdAt`, `updatedAt` (no `modules`).
+  - **The `getAppointmentsByPatientId` repo method has no
+    explicit return-type annotation** — clients cannot rely on
+    the response shape from TypeScript alone.
+  - **`flattenDoctorSpecialization`** runs after the
+    `appointmentValidator` Prisma include selects the
+    `doctor.specialization` relation. The TS type
+    `Appointment.doctor.specialization: string` is the
+    post-flattening contract; the raw Prisma row is a
+    relation object.
+  - **Write operations (book / edit / status) are NOT exposed
+    as REST routes** — they live on the service but are
+    reached via server actions / tRPC (not part of this
+    documentation set). The REST module is read-only.
+  - **`getTimeslotsForBooking` requires both `doctorId` and
+    `date` as query params** (not body) — the `doctorId`/`date`
+    check happens server-side and returns 400, but a client
+    that hits the endpoint without these will get a 400 from
+    the service rather than a Zod 400 (the Zod schema has
+    them as `.optional()`).

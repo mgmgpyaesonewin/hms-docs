@@ -1,0 +1,338 @@
+# docs/paths/trpc-units.yaml
+# tRPC router: units (src/lib/trpc/routers/units.ts)
+# CRUD over the `Unit` model. All six procedures use `authProcedure`
+# (not `verifyPasswordProcedure`, not `authorizeProcedure`).
+x-trpc-source: src/lib/trpc/routers/units.ts
+x-trpc-router: units
+
+/api/trpc/units.createUnit:
+  post:
+    summary: Create a new unit
+    description: |
+      Authenticated mutation. Creates a new Unit.
+
+      Validation failures:
+        - Empty `name` or `abbreviation` → 400.
+        - A unit with the same `name` already exists
+          (`getUnitByName` — case-insensitive contains-match) → 400
+          (`AppError("Unit with name <name> already exists", 400)`).
+        - A unit with the same `abbreviation` already exists
+          (`getUnitByAbbreviation` — case-insensitive equality) → 400
+          (`AppError("Unit with abbreviation <abbr> already exists", 400)`).
+
+      Side effects:
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/units")`.
+        - Logs the creation via `activityLogger`
+          (description: "Created Unit", action: "Create",
+          entity: "Unit", entityId: result.id).
+
+      Response **does** include `createdBy` and `updatedBy` — unlike
+      the categories/sub-categories modules, the repository's
+      `createUnit` uses `include: { createdBy: true, updatedBy: true }`.
+
+      Service: `UnitService.createUnit`. Source:
+      `src/lib/trpc/routers/units.ts:11-20`.
+    tags:
+      - Units
+    operationId: trpc_units_createUnit
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-units.yaml#/CreateUnitInput
+    responses:
+      "200":
+        description: Unit created. Full shape with `createdBy` and `updatedBy`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-units.yaml#/Unit
+      "400":
+        description: Validation failure (empty name/abbreviation, or name/abbreviation collision).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/units.getUnits:
+  post:
+    summary: List units (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of units with the
+      total row count.
+
+      Response shape:
+        ```
+        { units: Unit[], count: number }
+        ```
+      (Field named `units`, **not** `data`.)
+
+      Filters (from `defaultQuerySchema`):
+        - `search` — case-insensitive substring match against
+          `name` **or** `abbreviation` (per
+          `buildWhereFilter` at unit-repository.ts:143-164).
+
+      The repository orders by `createdAt: desc`.
+
+      Service: `UnitService.getUnits`. Source:
+      `src/lib/trpc/routers/units.ts:22-30`.
+    tags:
+      - Units
+    operationId: trpc_units_getUnits
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of units.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-units.yaml#/GetUnitsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/units.getUnitTotalCount:
+  post:
+    summary: Get total unit count
+    description: |
+      Authenticated query. Returns the count of all units
+      (`prisma.unit.count()` with no filter). Source:
+      `src/lib/trpc/routers/units.ts:32-37`.
+    tags:
+      - Units
+    operationId: trpc_units_getUnitTotalCount
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total unit count.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-units.yaml#/GetUnitTotalCountResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/units.getUnitById:
+  post:
+    summary: Get a unit by id
+    description: |
+      Authenticated query. Returns the unit with the given `id`.
+
+      Validation:
+        - Unit must exist (else 404, `AppError("Unit not found", 404)`).
+
+      Note: the service calls `getUnitById` **twice**
+      (unit-service.ts:64, 68) — likely an oversight (the second call
+      is dead code on the error path) but has no behavioral effect.
+      The repository includes `createdBy` and `updatedBy`.
+
+      Service: `UnitService.getUnitById`. Source:
+      `src/lib/trpc/routers/units.ts:39-47`.
+    tags:
+      - Units
+    operationId: trpc_units_getUnitById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-units.yaml#/UnitIdInput
+    responses:
+      "200":
+        description: The unit. Full shape with `createdBy` and `updatedBy`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-units.yaml#/Unit
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Unit not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/units.updateUnitById:
+  post:
+    summary: Update a unit
+    description: |
+      Authenticated mutation. Updates the `name` and `abbreviation` of
+      the unit identified by `id`.
+
+      Validation:
+        - Unit must exist (else 404).
+        - If `name` is changing, the new `name` must not collide with
+          another existing unit → 400
+          (`AppError("Unit with same name already exists", 400)`).
+        - If `abbreviation` is changing, the new `abbreviation` must
+          not collide with another existing unit → 400
+          (`AppError("Unit with same abbreviation already exists", 400)`).
+
+      Side effects:
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/units")`.
+        - Logs the update via `activityLogger` (description: "Updated Unit",
+          action: "Update", entity: "Unit", entityId: unitId).
+
+      Response **does** include `createdBy` and `updatedBy` (repository
+      uses `include: { createdBy: true, updatedBy: true }`).
+
+      Service: `UnitService.updateUnitById`. Source:
+      `src/lib/trpc/routers/units.ts:49-61`.
+    tags:
+      - Units
+    operationId: trpc_units_updateUnitById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-units.yaml#/UpdateUnitByIdInput
+    responses:
+      "200":
+        description: Updated unit. Full shape with `createdBy` and `updatedBy`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-units.yaml#/Unit
+      "400":
+        description: New name or abbreviation collides with an existing unit.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Unit not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/units.deleteUnitById:
+  post:
+    summary: Delete a unit
+    description: |
+      Authenticated mutation. Deletes the unit identified by `id`.
+
+      Validation:
+        - Unit must exist (else 404).
+        - The unit must not be referenced by any `Item`
+          (`prisma.item.findFirst({ where: { unitId: id } })`).
+          If any item references it → 400
+          (`AppError("User can't delete this unit", 400)`).
+
+      Side effects:
+        - Calls `revalidatePath("/set-up/units")`.
+        - Logs the deletion via `activityLogger` (description: "Deleted Unit",
+          action: "Delete", entity: "Unit", entityId: id).
+
+      Response is a static message envelope (the repository returns
+      `void` from `delete`, wrapped by the router).
+
+      Service: `UnitService.deleteUnitById`. Source:
+      `src/lib/trpc/routers/units.ts:63-72`.
+    tags:
+      - Units
+    operationId: trpc_units_deleteUnitById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-units.yaml#/UnitIdInput
+    responses:
+      "200":
+        description: Static success message.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-units.yaml#/DeleteUnitResponse
+      "400":
+        description: Unit is referenced by an item.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Unit not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all six procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - All six procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can manage units. Consistent with the rest
+    of the Setup routers.
+  - **No TS type/runtime mismatch** — unlike `trpc-departments`,
+    `trpc-stores`, `trpc-categories`, and `trpc-sub-categories`, the
+    `units` repository consistently uses
+    `include: { createdBy: true, updatedBy: true }` on every Prisma
+    call (create / getMany / getByAbbrev / getById / getByName / update).
+    There is no Bare/Full split for this module. The only operation
+    that does not return a `Unit` is `deleteUnitById` (returns `void`,
+    wrapped as `{ message }` at the router).
+  - **Activity logging is complete** for all three mutating operations
+    (create, update, delete). None of the half-finished call sites
+    seen in `trpc-categories` appear here.
+  - **Idempotency / dead code** — `UnitService.getUnitById` calls
+    `unitRepository.getUnitById` twice in a row (unit-service.ts:64, 68).
+    The second call is on the success path; the first is on the
+    existence check. No behavioral effect, just wasted DB round-trips.
+  - **Inconsistent uniqueness semantics** — `getUnitByName` uses
+    case-insensitive *contains* (so a unit named "Test" would match
+    a new unit named "Test 2" on uniqueness check), while
+    `getUnitByAbbreviation` uses case-insensitive *equality*. Not
+    necessarily a bug for a single user typing in the form, but
+    means the same column behaves differently for the two checks.

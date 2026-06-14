@@ -1,0 +1,371 @@
+# docs/schemas/trpc-items.yaml
+# Schemas for the tRPC `items` router
+# (src/lib/trpc/routers/items.ts). **Read-only** tRPC surface over
+# the `Item` model — the full CRUD surface is reached via the REST
+# routes under `src/app/api/(common)/items/*` (documented as the
+# `common-items` sub-area) and via `next-safe-action` server
+# actions invoked from RSC.
+#
+# This tRPC router exposes only 2 procedures:
+#   - `items.getItems` — paginated, searchable list.
+#   - `items.getById` — single item by id.
+#
+# Both use `authProcedure` (no `authorizeProcedure`).
+#
+# Re-uses the shared `Publisher` projection for `createdBy` /
+# `updatedBy` (selecting `id`/`fullName`/`username`).
+#
+# Cross-module references:
+#   - `Item.category` and `Item.subCategory` reference the
+#     `Category` shape owned by `trpc-categories` /
+#     `trpc-sub-categories`.
+#   - `Item.supplier` references the `Supplier` shape owned by
+#     `trpc-suppliers` (Pick: id/companyName).
+#   - `Item.unit` references the `Unit` shape owned by
+#     `trpc-units` (Pick: id/name/abbreviation).
+#   - `Item.sellingPriceGroup` references the `SellingPriceGroup`
+#     shape from the Prisma client (the tRPC `selling-price-groups`
+#     router is not yet documented; this is a thin pass-through).
+#   - `Item.itemUsedByDepartment` references the `Department`
+#     shape owned by `trpc-departments` (Pick: id/name).
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetItemsInput:
+  type: object
+  description: |
+    Input for `items.getItems`. The Zod schema `getItemsSchema` is
+    built from
+    `z.object({ ... }).merge(baseQuerySchema).transform(transformPaginationSchema)`.
+
+    The `transform` adds `offset: (page - 1) * limit` to the
+    shape — the effective input is
+    `{ categoryId?, subCategoryId?, groupId?, status?, allergy?,
+    search?, start?, end?, page, limit, offset }`.
+  required:
+    - page
+    - limit
+    - offset
+  properties:
+    categoryId:
+      type: string
+      format: uuid
+      description: Filter to items in this category.
+    subCategoryId:
+      type: string
+      format: uuid
+      description: Filter to items in this sub-category.
+    groupId:
+      type: string
+      format: uuid
+      description: |
+        Filter to items in this selling-price-group. **Note** the
+        input field is `groupId` but the repository maps it to
+        `sellingPriceGroupId` in the Prisma `where` clause — the
+        input shape uses the user-friendly name.
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+      description: Filter by item `status` (the storage form is
+        the enum string, not a boolean).
+    allergy:
+      type: string
+      enum: [ALLERGIC, NON_ALLERGIC]
+      description: |
+        Filter by allergy status. The enum value is
+        `NON_ALLERGIC` (with the underscore — preserves the
+        source `illergyStatus` typo in the wire shape).
+    search:
+      type: string
+      description: |
+        Case-insensitive **startsWith** match (not `contains`) —
+        the repository uses `startsWith` for `name`, `itemId`,
+        and `generic`. **Note this is different from
+        `trpc-suppliers.getSuppliers`** which uses `contains`.
+    start:
+      type: string
+      format: date-time
+      description: Inclusive lower bound for `createdAt`.
+    end:
+      type: string
+      format: date-time
+      description: |
+        Inclusive upper bound for `createdAt`. **Note** the
+        repository uses `lte: query.end` (inclusive), not `lt`
+        — this is different from `trpc-suppliers.getSuppliers`
+        which uses `lt` (exclusive).
+    page:
+      type: integer
+      minimum: 1
+      default: 1
+    limit:
+      type: integer
+      minimum: 0
+      default: 10
+    offset:
+      type: integer
+      minimum: 0
+
+GetItemByIdInput:
+  type: object
+  description: |
+    Input for `items.getById`. The router does
+    `authProcedure.input(z.string())` — a raw string with no
+    object wrapper. The Zod schema is just `z.string()`.
+  required:
+    - id
+  properties: {}
+  x-input-shape: |
+    The router does NOT use an object input — it uses a bare
+    string. The OpenAPI `requestBody` documents this as a
+    top-level `type: string` schema (not an object).
+
+# =============================================================================
+# Response / output schemas
+# =============================================================================
+
+GetItemsResponse:
+  type: object
+  description: |
+    Response shape of `items.getItems`. Service signature
+    (items-repository.ts:14-16):
+    `Promise<{ items: Item[]; totalCount: number }>`.
+
+    Each `Item.taxValue` is coerced from `Prisma.Decimal` to a JS
+    `number` via `Number(item.taxValue)` (line 97). The other
+    fields are left as-is (the Prisma `DateTime` is serialised to
+    an ISO string over JSON).
+  required:
+    - items
+    - totalCount
+  properties:
+    items:
+      type: array
+      items:
+        $ref: ./trpc-items.yaml#/Item
+    totalCount:
+      type: integer
+      minimum: 0
+
+Item:
+  type: object
+  description: |
+    Canonical item shape. TS type `Item` from
+    `src/app/(dashboard)/common/items/features/types/index.ts:22-58`.
+
+    The read methods (`getItems`, `getById`) populate the full
+    side-relation tree: `category`, `subCategory`, `supplier`,
+    `unit`, `createdBy`, `updatedBy`, `itemUsedByDepartment`,
+    `sellingPriceGroup` — but with the `Pick<>` shapes shown
+    below (not the full related models).
+
+    The write methods (`createItem`, `updateItem`, `deleteItem`
+    on the service) call Prisma without `include` — they return
+    the bare row. **However, the write methods are not exposed
+    on this tRPC router** — they are reached via the REST
+    `/api/(common)/items/*` surface and the
+    `next-safe-action` server actions under
+    `common/items/features/actions.ts`.
+  required:
+    - id
+    - itemId
+    - name
+    - generic
+    - unitId
+    - unit
+    - categoryId
+    - category
+    - taxValue
+    - status
+    - allergy
+    - minQty
+    - maxQty
+    - storageLocation
+    - storageMethod
+    - createdBy
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    itemId:
+      type: string
+      description: |
+        Human-friendly item id (e.g. `ITEM-00001`). Generated
+        client-side by `generateCustomId("ITEM-", lastItem?.itemId)`.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    updatedAt:
+      type: string
+      format: date-time
+    name:
+      type: string
+      description: |
+        Unique (case-insensitive). Checked on create / update via
+        `itemsRepository.findDuplicateItem`.
+    generic:
+      type: string
+      description: Generic name (drug generic, etc.).
+    unitId:
+      type: string
+      format: uuid
+    unit:
+      type: object
+      description: |
+        Joined `Unit` row. Projection — `id`, `name`, `abbreviation`.
+      required:
+        - id
+        - name
+        - abbreviation
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        abbreviation:
+          type: string
+    categoryId:
+      type: string
+      format: uuid
+    category:
+      type: object
+      description: Joined `Category` row. Projection — `id`, `name`.
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    subCategoryId:
+      type: string
+      format: uuid
+      nullable: true
+    subCategory:
+      type: object
+      nullable: true
+      description: |
+        Joined sub-`Category` row (when
+        `subCategoryId` is set). Projection — `id`, `name`.
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    itemType:
+      type: string
+      nullable: true
+      description: |
+        `ItemType` enum. Stored as a string in the DB
+        (e.g. `TABLET`, `INJECTION`). The Prisma column is
+        `String?` — the enum is enforced at the application
+        level.
+    manufactureName:
+      type: string
+      nullable: true
+    taxValue:
+      type: number
+      minimum: 0
+      description: |
+        Coerced from `Prisma.Decimal` to `number` on the read
+        path. Lossy for high-precision tax rates — clients that
+        need exact decimals should re-fetch from the underlying
+        REST surface or DB.
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    allergy:
+      type: string
+      enum: [ALLERGIC, NON_ALLERGIC]
+    minQty:
+      type: number
+    maxQty:
+      type: number
+    reorderQty:
+      type: number
+      nullable: true
+    sellingPriceGroupId:
+      type: string
+      format: uuid
+      nullable: true
+    sellingPriceGroup:
+      type: object
+      nullable: true
+      description: |
+        Joined `SellingPriceGroup` row (when
+        `sellingPriceGroupId` is set). **No Pick — the full
+        Prisma model is included** (`include: { sellingPriceGroup:
+        true }` in the repository). The `SellingPriceGroup` tRPC
+        router is not yet documented; this is a thin
+        pass-through.
+    supplierId:
+      type: string
+      format: uuid
+      nullable: true
+    supplier:
+      type: object
+      nullable: true
+      description: Joined `Supplier` row. Projection — `id`, `companyName`.
+      required:
+        - id
+        - companyName
+      properties:
+        id:
+          type: string
+          format: uuid
+        companyName:
+          type: string
+    storageLocation:
+      type: string
+    storageMethod:
+      type: string
+    warrantyPeriod:
+      type: string
+      nullable: true
+    lastMaintainDate:
+      type: string
+      format: date-time
+      nullable: true
+    nextMaintenanceDate:
+      type: string
+      format: date-time
+      nullable: true
+    itemUsedByDepartmentId:
+      type: string
+      format: uuid
+      nullable: true
+    itemUsedByDepartment:
+      type: object
+      nullable: true
+      description: Joined `Department` row. Projection — `id`, `name`.
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    serialNumber:
+      type: string
+      nullable: true
+    brandName:
+      type: string
+      nullable: true

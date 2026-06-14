@@ -1,0 +1,346 @@
+# docs/paths/emr-ipd.yaml
+# IPD-EMR REST surface under
+# `src/app/api/(emr)/(ipd)/`. 7
+# read-only endpoints — list, detail
+# per specialty (ipd-emr,
+# cathlab-ipd-emr, endo-ipd-emr),
+# plus a clinical-document activity
+# log.
+#
+# The IPD-EMR subtree uses its own
+# `IPDEmrService` class (NOT
+# `OPDEmrService`). The service is
+# constructed with different configs
+# to produce `ipdEmrService`,
+# `cathLabIpdEmrService`, and
+# `endoIpdEmrService`. The IPD-EMR
+# list schema
+# (`getIpdEmrSchema`) differs from
+# the OPD list schema — it adds an
+# optional `moduleType` filter
+# (`HD` / `ENDO` / `OT`).
+#
+# All 7 routes use `enhancedApiHandler`
+# with `auth: { required: true }` only
+# — no RBAC. All 7 are GET-only and
+# return
+# `{ success: true, result, message:
+# "", error: null }`.
+
+# =============================================================================
+# IPD-EMR main sub-tree
+# =============================================================================
+#
+# Service: `ipdEmrService` (an
+# `IPDEmrService` configured with
+# `moduleType: "HD"`,
+# `serviceLabel: "HD"` — note the
+# default-config trap; see notes).
+#
+# The `moduleType` filter on the
+# list query schema accepts only
+# `HD | ENDO | OT` (NOT
+# `CATHLAB`). The cathlab variant
+# is exposed via a separate
+# `/cathlab-ipd-emr` path.
+
+/api/ipd-emr:
+  get:
+    operationId: getIpdEmrList
+    summary: IPD-EMR list
+    description: |
+      Returns the paginated list of
+      IPD-EMR rows, optionally
+      filtered by `moduleType`
+      (`HD | ENDO | OT`). Service: `IPDEmrService
+      .getIpdEmrs` (on the
+      `ipdEmrService` instance) →
+      `IPDEmrRepository.findIpdEmrs`.
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      The default config of
+      `ipdEmrService` is
+      `moduleType: "HD"`,
+      `serviceLabel: "HD"`. The
+      `moduleType` query param lets
+      callers switch to ENDO or OT.
+      There's no "CATHLAB" enum
+      value on the list schema —
+      cathlab is exposed via a
+      separate `/cathlab-ipd-emr`
+      path with its own service.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: moduleType
+        required: false
+        schema:
+          type: string
+          enum: [HD, ENDO, OT]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetIpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ipd-emr/{id}:
+  get:
+    operationId: getIpdEmrById
+    summary: IPD-EMR detail
+    description: |
+      Returns a single IPD-EMR row,
+      optionally filtered by
+      `moduleType` (a free-form
+      `IPDEmrModuleType` enum read
+      from the `moduleType` query
+      parameter). Service: `IPDEmrService
+      .getIpdEmrById` (on the
+      `ipdEmrService` instance) →
+      `IPDEmrRepository.findIpdEmrById`.
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - in: query
+        name: moduleType
+        required: false
+        schema: { type: string }
+        description: |
+          Optional `IPDEmrModuleType`
+          filter. The route handler
+          reads it via
+          `_req.nextUrl.searchParams.get
+          ("moduleType")` and casts it
+          to the union type — a
+          malformed value is passed
+          through unchecked.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetIpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# IPD clinical-document activity log
+# =============================================================================
+
+/api/ipd-emr/clinical-documents/{id}/activities:
+  get:
+    operationId: getIpdEmrClinicalDocumentActivities
+    summary: IPD clinical-document activity log
+    description: |
+      Returns the activity-log entries
+      for a single IPD-EMR clinical
+      document. Service: `IPDEmrService
+      .getIpdEmrClinicalDocumentActivities`
+      (on the `ipdEmrService` instance)
+      → `IpdEmrClinicalDocumentRepository
+      .getClinicalDocumentActivities`.
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: IPD clinical-document id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`. Result is
+          the list of activity-log rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetEmrClinicalDocumentActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# CATHLAB-IPD-EMR sub-tree
+# =============================================================================
+#
+# Service: `cathLabIpdEmrService` (an
+# `IPDEmrService` configured with
+# `moduleType: "CATH_LAB"`,
+# `serviceLabel: "CATH_LAB"`).
+
+/api/cathlab-ipd-emr:
+  get:
+    operationId: getCathlabIpdEmrList
+    summary: CATHLAB-IPD-EMR list
+    description: |
+      Returns the paginated list of
+      Cathlab IPD-EMR rows. Service: `IPDEmrService
+      .getIpdEmrs` (on the
+      `cathLabIpdEmrService` instance).
+      Note that this endpoint still
+      uses the `getIpdEmrSchema` which
+      only accepts `moduleType: HD |
+      ENDO | OT` — the `CATHLAB` value
+      is NOT a valid filter input
+      here; the cathlab filter is
+      baked into the service config.
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetIpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/cathlab-ipd-emr/{id}:
+  get:
+    operationId: getCathlabIpdEmrById
+    summary: CATHLAB-IPD-EMR detail
+    description: |
+      Returns a single Cathlab IPD-EMR
+      row. Service: `IPDEmrService
+      .getIpdEmrById` (on the
+      `cathLabIpdEmrService` instance).
+
+      **Difference vs `/ipd-emr/{id}`:**
+      this route does NOT accept a
+      `moduleType` query param — the
+      cathlab config is fixed.
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetIpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# ENDO-IPD-EMR sub-tree
+# =============================================================================
+#
+# Service: `endoIpdEmrService` (an
+# `IPDEmrService` configured with
+# `moduleType: "ENDO"`,
+# `serviceLabel: "ENDO"`).
+
+/api/endo-ipd-emr:
+  get:
+    operationId: getEndoIpdEmrList
+    summary: ENDO-IPD-EMR list
+    description: |
+      Returns the paginated list of
+      ENDO (Endoscopy) IPD-EMR rows.
+      Service: `IPDEmrService
+      .getIpdEmrs` (on the
+      `endoIpdEmrService` instance).
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetIpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo-ipd-emr/{id}:
+  get:
+    operationId: getEndoIpdEmrById
+    summary: ENDO-IPD-EMR detail
+    description: |
+      Returns a single ENDO-IPD-EMR
+      row. Service: `IPDEmrService
+      .getIpdEmrById` (on the
+      `endoIpdEmrService` instance).
+    tags: [IPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetIpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

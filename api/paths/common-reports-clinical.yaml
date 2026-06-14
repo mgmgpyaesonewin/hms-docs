@@ -1,0 +1,754 @@
+# docs/paths/common-reports-clinical.yaml
+# Clinical & appointment-related report endpoints of
+# the `common` REST module. 10 endpoints covering
+# appointment analytics, follow-up, referral, and
+# under-care-doctor views. Source files under
+# src/app/api/(common)/reports/{appointments-by-*,
+# follow-up-patients, referral-report, under-care-doctor}/.
+# All are GET-only, all require an authenticated
+# session, none declare explicit RBAC permissions.
+
+# =============================================================================
+# Appointments by doctor
+# =============================================================================
+
+/api/reports/appointments-by-doctor:
+  get:
+    operationId: getAppointmentsByDoctorReport
+    summary: Doctor appointment-count summary
+    description: |
+      Returns one row per doctor with
+      `totalAppointments`, `booked`, `confirmed`,
+      `completed`, `cancelled` counts, plus
+      `specialization` and `department`. PII is
+      limited to doctor name + department.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Uses bare `apiHandler` with manual
+      `verifyApiAuth()`. **No `permissions`
+      declared** — any authenticated user can pull
+      the cross-doctor appointment summary. Worth
+      gating behind a "View Reports" action.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: specialization
+        schema: { type: string }
+      - in: query
+        name: department
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+          `result` is whatever
+          `appointmentByDoctorReportService.getReport`
+          returns; the schema file
+          `get-appointment-by-doctor-reports.schema.ts`
+          defines the row shape as
+          `appointmentsByDoctorReportSchema`
+          (id, doctorId, doctorName, specialization,
+          department, totalAppointments, booked,
+          confirmed, completed, cancelled).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetAppointmentsByDoctorResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/appointments-by-doctor/{id}:
+  get:
+    operationId: getAppointmentsByDoctorDoctorInfo
+    summary: Doctor info card for the report
+    description: |
+      Returns the doctor info row
+      (id, title, doctorId, user.fullName, …) used
+      to header the report. Wraps
+      `appointmentByDoctorReportService.getDoctorInfo(id)`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `enhancedApiHandler` with
+      `auth: { required: true }` only. No
+      permissions array.
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "",
+          message: "" }`. Result is the `Doctor`
+          row (or `null`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetDoctorInfoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/appointments-by-doctor/{id}/patient:
+  get:
+    operationId: getAppointmentsByDoctorPatientList
+    summary: Patient-level rows for a doctor
+    description: |
+      Returns the patient-level appointment
+      rows for the given doctor id, with
+      patientType/patientGroup/region/township/status
+      filters.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: patientType
+        schema: { type: string }
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: appointmentType
+        schema: { type: string }
+      - in: query
+        name: region
+        schema: { type: string }
+      - in: query
+        name: township
+        schema: { type: string }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+            - BOOKED
+            - CONFIRMED
+            - CANCELLED
+            - COMPLETED
+            - PENDING
+            - RESCHEDULED
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "",
+          message: "" }`. Row shape per
+          `appointmentsByDoctorPatientSchema`
+          (patientId, name, patientType,
+          patientGroup, township, region,
+          appointmentType, appointmentStatus,
+          appointmentDate, start). **PII-heavy**
+          (patient name, patient id, region /
+          township).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetAppointmentsByDoctorPatientResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/appointments-by-doctor/export:
+  get:
+    operationId: exportAppointmentsByDoctor
+    summary: Export appointment rows by doctor
+    description: |
+      Returns one row per appointment, with both
+      doctor-side and patient-side identifiers
+      (id, doctorId, doctorName, patientId,
+      patientName, township, region,
+      appointmentType, appointmentDate, startTime,
+      status). Despite the name "export", the
+      response is JSON — the client renders the
+      CSV. The schema is
+      `appointmentsByDoctorReportExportSchema`
+      (all string fields are nullable).
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+      **PII exposure**: full patient name + id +
+      township + region + appointment timestamp
+      per row.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: specialization
+        schema: { type: string }
+      - in: query
+        name: department
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+          `result` is an array of export rows
+          (PII-heavy).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetAppointmentsByDoctorExportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/appointments-by-specialization:
+  get:
+    operationId: getAppointmentsBySpecializationReport
+    summary: Appointment count aggregated by specialization
+    description: |
+      Returns one row per specialization with
+      `totalAppointments`, `booked`, `confirmed`,
+      `completed`, `cancelled` counts. The service
+      coerces the integer aggregates with
+      `z.coerce.number()` — string inputs from
+      raw SQL are tolerated.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+      No RBAC.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: specialization
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+          Row shape per
+          `appointmentsBySpecializationReportSchema`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetAppointmentsBySpecializationResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Follow-up patients
+# =============================================================================
+
+/api/reports/follow-up-patients:
+  get:
+    operationId: getFollowUpPatients
+    summary: Follow-up patient list
+    description: |
+      Returns one row per upcoming follow-up
+      appointment, with **heavy PII**: patient
+      name, patient id, phone_no, age, gender,
+      doctor name + id, specialization,
+      appointment type id + name, status,
+      createdAt + createdByName. Row shape per
+      `followUpPatientSchema`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `enhancedApiHandler` with
+      `auth: { required: true }` only. PII
+      includes phone number. The `age` field is
+      typed `z.coerce.date()` in the schema —
+      **runtime shape is a Date, not a number**
+      (the service likely sends a `DATE` literal
+      from raw SQL).
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: specialization
+        schema: { type: string }
+      - in: query
+        name: appointmentTypeId
+        schema: { type: string }
+      - in: query
+        name: gender
+        schema:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+      - in: query
+        name: appointmentStatus
+        schema:
+          type: string
+          enum: [BOOKED, CONFIRMED, CANCELLED, COMPLETED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetFollowUpPatientsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Referral report
+# =============================================================================
+
+/api/reports/referral-report/clinic:
+  get:
+    operationId: getReferralClinicSummary
+    summary: Clinic-level referral summary
+    description: |
+      Returns one row per referring clinic with
+      `clinicId`, `clinicName`, `clinicType`
+      (hard-coded to `"OUT_SERVICE"` by the
+      schema's `.transform`), `totalPatients`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`. Row shape per
+          `referralClinicSummarySchema`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetReferralClinicSummaryResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/clinic/{id}:
+  get:
+    operationId: getReferralClinicDetail
+    summary: Patient detail for a clinic
+    description: |
+      Returns the patient rows for a single
+      referring clinic, with `patientType`,
+      `patientGroup`, `referralDate`, optional
+      `appointmentType`. Row shape per
+      `referralDetailSchema`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+      **PII-heavy**: patient name, id, group,
+      type, referral date.
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetReferralClinicDetailResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/clinic/{id}/clinic-info:
+  get:
+    operationId: getReferralClinicInfo
+    summary: Clinic info card for the report
+    description: |
+      Wraps
+      `referralReportService.getClinicInfo(id, query)`
+      — returns the clinic row (id, name, …).
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/clinic/{id}/patient:
+  get:
+    operationId: getReferralClinicPatientList
+    summary: Patients referred by a clinic (alias of detail)
+    description: |
+      **Likely duplicate of the parent
+      `/referral-report/clinic/{id}` route.** Both
+      call
+      `referralReportService.getClinicDetailReport(id, query)`
+      with the same input shape. Only difference
+      is the response envelope:
+      `error: ""` here vs `error: ""` there.
+      Worth confirming with the team whether both
+      paths are needed.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetReferralClinicDetailResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/doctor:
+  get:
+    operationId: getReferralDoctorSummary
+    summary: Doctor-level referral summary
+    description: |
+      Returns one row per referring doctor with
+      `doctorId`, `doctorName`, `doctorType`,
+      `totalPatients`. Row shape per
+      `referralDoctorSummarySchema`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetReferralDoctorSummaryResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/doctor/{id}:
+  get:
+    operationId: getReferralDoctorDetail
+    summary: Patient detail for a doctor
+    description: |
+      Returns the patient rows referred by a
+      given doctor. Same shape as
+      `/referral-report/clinic/{id}`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetReferralClinicDetailResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/doctor/{id}/doctor-info:
+  get:
+    operationId: getReferralDoctorInfo
+    summary: Doctor info card for the report
+    description: |
+      Wraps
+      `referralReportService.getDoctorInfo(id, query)`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetDoctorInfoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/referral-report/doctor/{id}/patient:
+  get:
+    operationId: getReferralDoctorPatientList
+    summary: Patients referred by a doctor (alias of detail)
+    description: |
+      **Likely duplicate of
+      `/referral-report/doctor/{id}`.** Both
+      call
+      `referralReportService.getDoctorDetailReport(id, query)`.
+      Worth confirming.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: referralType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetReferralClinicDetailResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Under-care doctor
+# =============================================================================
+
+/api/reports/under-care-doctor:
+  get:
+    operationId: getUnderCareDoctorSummary
+    summary: Doctor-level under-care patient count
+    description: |
+      Returns one row per doctor with
+      `doctorId`, `doctorName`, `totalPatients`.
+      Row shape per `underCareDoctorReportSchema`.
+      Filters: `start`, `end` (date range).
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetUnderCareDoctorSummaryResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/under-care-doctor/{id}:
+  get:
+    operationId: getUnderCareDoctorInfo
+    summary: Doctor info card for the report
+    description: |
+      Wraps
+      `underCareDoctorReportService.getDoctorInfo(id)`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "",
+          message: "" }`. Result is the `Doctor`
+          row (or `null`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetDoctorInfoResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/under-care-doctor/{id}/admissions:
+  get:
+    operationId: getUnderCareDoctorAdmissions
+    summary: Admissions list for a doctor
+    description: |
+      Returns the admission rows currently
+      under the doctor's care, with patient
+      group, room name, room type, floor name,
+      building name. **PII-heavy**: patient name,
+      patient id, db id, admission id, admission
+      timestamp. Row shape per
+      `underCareDoctorAdmissionSchema`.
+    tags: [Reports - Clinical]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: buildingId
+        schema: { type: string }
+      - in: query
+        name: floorId
+        schema: { type: string }
+      - in: query
+        name: wardId
+        schema: { type: string }
+      - in: query
+        name: roomTypeId
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "",
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetUnderCareDoctorAdmissionsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

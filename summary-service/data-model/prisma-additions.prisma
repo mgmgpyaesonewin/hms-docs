@@ -1,0 +1,157 @@
+// =============================================================================
+// Summary Service — Prisma model additions
+// =============================================================================
+// Add these models to the HMS `prisma/schema.prisma`.
+// The Summary Service uses its own Prisma client (in a separate package) that
+// imports the same schema, so the HMS team owns the schema file.
+// =============================================================================
+
+
+// -----------------------------------------------------------------------------
+// 0. EventOutbox
+// -----------------------------------------------------------------------------
+// HMS-owned table. The HMS writes a row to this table in the SAME transaction
+// as the opd_billings insert; the Summary Service worker polls it.
+// See ADR 0001.
+// -----------------------------------------------------------------------------
+
+model EventOutbox {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  eventType       String    @map("event_type")
+  aggregateId     String    @map("aggregate_id") @db.Uuid
+  payload         Json      @map("payload") @db.JsonB
+
+  status          String    @default("PENDING") @map("status")
+  attemptCount    Int       @default(0) @map("attempt_count")
+  nextAttemptAt   DateTime  @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+
+  lockedBy        String?   @map("locked_by")
+  lockedAt        DateTime? @map("locked_at") @db.Timestamptz(6)
+  lastError       String?   @map("last_error")
+
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  @@index([nextAttemptAt], name: "idx_outbox_pending", where: "status = 'PENDING'")
+  @@index([tenantId, createdAt(sort: Desc)], name: "idx_outbox_tenant_created")
+  @@index([status], name: "idx_outbox_status")
+  @@index([aggregateId], name: "idx_outbox_aggregate")
+  @@map("event_outbox")
+}
+
+
+// -----------------------------------------------------------------------------
+// 1. ConsultationFeesInvoice
+// -----------------------------------------------------------------------------
+// Summary-Service-owned table. Created by the worker from an outbox event.
+// -----------------------------------------------------------------------------
+
+model ConsultationFeesInvoice {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  eventId           String    @unique @map("event_id") @db.Uuid
+  opdInvoiceId      String    @map("opd_invoice_id") @db.Uuid
+
+  // Foreign keys
+  patientId         String    @map("patient_id") @db.Uuid
+  doctorId          String    @map("doctor_id") @db.Uuid
+  counterId         String    @map("counter_id") @db.Uuid
+
+  // Denormalized display fields.
+  // invoiceNo is the parent (OPD/IPD) patient-direct invoice number.
+  // The CFI itself has no separate invoice number; v1 parent is always OPD.
+  invoiceNo         String    @map("invoice_no")
+  patientName       String    @map("patient_name")
+  doctorName        String    @map("doctor_name")
+  counterName       String    @map("counter_name")
+
+  // Amounts
+  amount            Decimal   @map("amount") @db.Decimal(12, 2)
+  adjustment        Decimal   @default(0) @map("adjustment") @db.Decimal(12, 2)
+  payoutAmount      Decimal   @map("payout_amount") @db.Decimal(12, 2)
+
+  // Status + optimistic locking
+  status            String    @default("UNPAID") @map("status")
+  version           Int       @default(1) @map("version")
+
+  // Dates
+  billingDate       DateTime  @map("billing_date") @db.Timestamptz(6)
+  paidAt            DateTime? @map("paid_at") @db.Timestamptz(6)
+  voidedAt          DateTime? @map("voided_at") @db.Timestamptz(6)
+
+  // Audit
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdById       String    @map("created_by_id") @db.Uuid
+  updatedById       String    @map("updated_by_id") @db.Uuid
+
+  // Relations
+  statusChanges     ConsultationFeesInvoiceStatusChange[]
+  adjustments       ConsultationFeesInvoiceAdjustment[]
+
+  // Indexes
+  @@unique([tenantId, opdInvoiceId], name: "uq_cfi_tenant_opd_invoice")
+  @@index([tenantId, billingDate(sort: Desc)], name: "idx_cfi_tenant_billing_date")
+  @@index([tenantId, counterId, billingDate(sort: Desc)], name: "idx_cfi_tenant_counter_date")
+  @@index([tenantId, doctorId, billingDate(sort: Desc)], name: "idx_cfi_tenant_doctor_date")
+  @@index([tenantId, status], name: "idx_cfi_tenant_status")
+  @@index([tenantId, paidAt(sort: Desc)], name: "idx_cfi_tenant_paid_at", where: "paid_at IS NOT NULL")
+  @@map("consultation_fees_invoices")
+}
+
+model ConsultationFeesInvoiceStatusChange {
+  id                      String    @id @default(uuid(7)) @db.Uuid
+  invoiceId               String    @map("invoice_id") @db.Uuid
+  fromStatus              String?   @map("from_status")
+  toStatus                String    @map("to_status")
+  changedAt               DateTime  @default(now()) @map("changed_at") @db.Timestamptz(6)
+  changedById             String    @map("changed_by_id") @db.Uuid
+  reason                  String?
+  invoiceVersionAtChange  Int       @map("invoice_version_at_change")
+
+  invoice                 ConsultationFeesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, changedAt(sort: Desc)], name: "idx_sc_invoice_changed_at")
+  @@map("consultation_fees_invoice_status_changes")
+}
+
+model ConsultationFeesInvoiceAdjustment {
+  id                      String    @id @default(uuid(7)) @db.Uuid
+  invoiceId               String    @map("invoice_id") @db.Uuid
+  previousAmount          Decimal   @map("previous_amount") @db.Decimal(12, 2)
+  newAmount               Decimal   @map("new_amount") @db.Decimal(12, 2)
+  reason                  String
+  changedAt               DateTime  @default(now()) @map("changed_at") @db.Timestamptz(6)
+  changedById             String    @map("changed_by_id") @db.Uuid
+  invoiceVersionAtChange  Int       @map("invoice_version_at_change")
+
+  invoice                 ConsultationFeesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, changedAt(sort: Desc)], name: "idx_adj_invoice_changed_at")
+  @@map("consultation_fees_invoice_adjustments")
+}
+
+
+// =============================================================================
+// Notes for the HMS team
+// =============================================================================
+// 1. Run `npx prisma migrate dev --name add_event_outbox_and_cfi` to generate
+//    the migration. The migration must add the CHECK constraints manually
+//    (Prisma doesn't have first-class CHECK support); see data-model/schema.sql
+//    for the full DDL.
+// 2. The `pg_trgm` extension and the GIN trigram index on `lower(invoice_no)`
+//    must be added manually in the same migration. See data-model/schema.sql.
+//    Prisma's `@@index` doesn't support the gin_trgm_ops operator class, so
+//    this index can't be expressed in schema.prisma. Doctor name is not
+//    searchable; the existing `idx_cfi_tenant_doctor_date` btree on
+//    (tenant_id, doctor_id, billing_date DESC) covers the doctorId filter.
+// 3. No changes to existing HMS models. The Summary Service READS from
+//    opd_billings, opd_billing_services, services, patients, doctors, stores,
+//    users — all existing models.
+// 4. The HMS code change is at the OPD billing insertion site. Inside the
+//    existing transaction (the one that inserts into opd_billings), add a
+//    second insert into event_outbox. See ADR 0001 for the exact change.
+//    The HMS does NOT need a new client library — it uses the existing
+//    Prisma client to insert the outbox row.
+// =============================================================================

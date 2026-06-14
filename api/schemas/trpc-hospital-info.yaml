@@ -1,0 +1,190 @@
+# docs/schemas/trpc-hospital-info.yaml
+# Schemas for the tRPC `hospitalInfo` router
+# (src/lib/trpc/routers/hospital-info.ts). **Singleton config
+# surface** — there is no `getHospitalInfoList` / `getAll`. The
+# `HospitalInfo` Prisma model is treated as a single global row.
+# The router has 2 procedures: `getHospitalInfoById` and
+# `createHospitalInfo`. Both use `authProcedure` (no
+# `authorizeProcedure`).
+#
+# Architectural note: the `createHospitalInfo` procedure is
+# actually an **upsert**. The service checks for an existing row
+# via `hospitalInfoRepository.findOne` and:
+#   - If none exists: creates the row + phone numbers.
+#   - If one exists: deletes all existing `phoneNos` for the
+#     hospital and re-creates them, then updates the parent row
+#     in a single `prisma.$transaction` (full-replacement
+#     pattern).
+#
+# Re-uses the shared `Publisher` projection if any publisher
+# fields are added in the future — currently no `createdBy` /
+# `updatedBy` exists on this model.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateHospitalInfoInput:
+  type: object
+  description: |
+    Input for `hospitalInfo.createHospitalInfo`. Zod schema
+    `createHospitalInfoSchema` in
+    `src/app/(dashboard)/common/hospital-info/features/schemas/create-hospital-info.ts`.
+
+    The service interprets this as **upsert** — the same input
+    creates the row if none exists, or updates the existing row
+    if one does (with full-replacement of the child `phoneNos`
+    table).
+  required:
+    - name
+    - phoneNos
+    - address
+    - email
+  properties:
+    name:
+      type: string
+      minLength: 1
+      description: Required. Hospital display name.
+    phoneNos:
+      type: object
+      description: |
+        Two-level phone-number object. `primary` is required;
+        `additional` is an optional array. The service normalises
+        this to the `HospitalPhoneNumber` table rows
+        (`type: "primary" | "additional"`).
+      required:
+        - primary
+      properties:
+        primary:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: Required. Primary phone number.
+        additional:
+          type: array
+          description: |
+            Optional list of additional phone numbers. Each entry
+            becomes a `HospitalPhoneNumber` row with
+            `type: "additional"`.
+          items:
+            type: string
+    address:
+      type: string
+      minLength: 1
+      description: Required. Hospital address.
+    email:
+      type: string
+      format: email
+      description: |
+        Required. Must be a valid email. The Zod schema uses
+        `z.string().email()` (with no extra custom message), so
+        the default Zod error message is returned on failure.
+    footer:
+      type: string
+      description: |
+        Optional. The service normalises missing values to `null`
+        on the update path (via
+        `data.footer ?? null`).
+    logoUrl:
+      type: string
+      description: |
+        Optional. The service normalises missing values to `null`
+        on the update path. On the create path the value is
+        passed through as-is.
+
+# =============================================================================
+# Response / output schemas
+# =============================================================================
+
+GetHospitalInfoByIdResponse:
+  type: object
+  description: |
+    Response shape of `hospitalInfo.getHospitalInfoById`. Service
+    signature (hospital-info-repository.ts:6):
+    `Promise<HospitalInfo | null>`.
+
+    Returns the **first** `HospitalInfo` row (no `where` filter
+    beyond `findFirst`'s implicit order). The full `phoneNos[]`
+    relation is included.
+
+    Returns `null` if no row exists (no tRPC throw / 404 envelope).
+  oneOf:
+    - $ref: ./trpc-hospital-info.yaml#/HospitalInfo
+    - type: "null"
+
+HospitalInfo:
+  type: object
+  description: |
+    Canonical hospital-info shape. TS type `HospitalInfo` from
+    `src/app/(dashboard)/common/hospital-info/features/types/index.ts:1-9`.
+
+    Maps to the Prisma `HospitalInfo` model. **No
+    `createdBy` / `updatedBy` fields** — this model is a
+    singleton config row, not a user-managed entity. Activity
+    logging is also absent.
+  required:
+    - id
+    - name
+    - address
+    - email
+    - phoneNos
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    address:
+      type: string
+    email:
+      type: string
+      format: email
+    footer:
+      type: string
+      nullable: true
+    logoUrl:
+      type: string
+      nullable: true
+      description: |
+        S3 URL for the hospital logo. The service has a
+        commented-out S3-delete job
+        (`DELETE_HOSPITAL_INFO_LOGO_JOB`) that would clean up
+        the previous logo when this changes — see the path
+        file's x-implementation-note.
+    phoneNos:
+      type: array
+      description: |
+        List of `HospitalPhoneNumber` rows. Each entry has
+        `id`, `type` (`"primary"` | `"additional"`), `number`,
+        and `hospitalId` (FK back to the hospital).
+      items:
+        $ref: ./trpc-hospital-info.yaml#/HospitalPhoneNumber
+
+HospitalPhoneNumber:
+  type: object
+  description: |
+    Read shape of a `HospitalPhoneNumber` row. The Prisma model
+    has `id`, `type`, `number`, `hospitalId`, plus the standard
+    `createdAt` / `updatedAt` columns (not surfaced in the TS
+    type).
+  required:
+    - id
+    - type
+    - number
+    - hospitalId
+  properties:
+    id:
+      type: string
+      format: uuid
+    type:
+      type: string
+      enum: [primary, additional]
+      description: |
+        Application-level enum (not a Prisma `enum`). The values
+        are lowercase strings; the only allowed values are
+        `"primary"` and `"additional"`.
+    number:
+      type: string
+    hospitalId:
+      type: string
+      format: uuid

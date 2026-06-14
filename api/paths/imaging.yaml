@@ -1,0 +1,1191 @@
+# docs/paths/imaging.yaml
+# REST endpoints: imaging module under
+# `src/app/api/(imaging)/`. 28 read endpoints + 1
+# mutation (`DELETE /api/imaging-templates/{id}`).
+#
+# The imaging module is structured around 5 imaging
+# "types" (CT, ECG, ECHO, MRI, Ultrasound, X-Ray) — note
+# that's 6 distinct imaging modalities but 5 "-list"
+# trees (X-Ray is `x-ray-list`). Each type has the same
+# 4-endpoint shape:
+#   - GET /api/{type}-list                    (list)
+#   - GET /api/{type}-list/{id}               (detail)
+#   - GET /api/{type}-list/{id}/activities    (list-level activity log)
+#   - GET /api/{type}-service/{id}/activities (service-level activity log)
+#
+# Plus 2 type-specific extras:
+#   - GET /api/ct-service/{id}/add-on         (CT add-on billing summary)
+#   - GET /api/imaging                        (master imaging service, distinct from CT/ECG/...)
+#   - GET /api/imaging-templates              (templates, all 5 types)
+#   - GET /api/imaging-templates/{id}         (template detail)
+#   - DELETE /api/imaging-templates/{id}      (template delete)
+#
+# All routes use `enhancedApiHandler` with
+# `auth: { required: true }` and **no RBAC**. They all
+# return the standard
+# `{ success: true, result, message: "", error: null }`
+# envelope.
+#
+# Architecture:
+#   - Per-type `*Service` classes (`CTService`,
+#     `ECGService`, `ECHOService`, `MRIService`,
+#     `UltrasoundService`, `XRayService`) extend a
+#     common pattern and use the shared
+#     `imagingListValidator` from
+#     `repositories/imaging.repository.ts`. Each per-type
+#     `*ListValidator` is just an alias of the shared
+#     `imagingListValidator` (e.g. `ctListValidator =
+#     imagingListValidator`).
+#   - `ImagingTemplateService` + `ImagingTemplateRepository`
+#     handle the templates.
+#   - `ImagingService` is the master that groups
+#     `OPDBillingService` rows by their `ServiceCategoryModule`
+#     and dispatches to per-type creation strategies
+#     (see `strategies/imaging-strategy-registry.ts`).
+#   - `ImagingIPDService` handles the IPD side of
+#     status transitions (acknowledged /
+#     de-acknowledged / cancelled).
+#   - `CTAddOnBillingService` handles CT-specific
+#     add-on billing (the only imaging type with
+#     "add-on" support).
+
+# =============================================================================
+# Master imaging service
+# =============================================================================
+
+/api/imaging:
+  get:
+    operationId: getImagingService
+    summary: Master imaging service (delegated)
+    description: |
+      Master imaging service endpoint — used by the
+      imaging module's RSC hydration path. Service:
+      `ImagingService.getImagingService` →
+      `ImagingRepository.getImagingService`. Validation:
+      `defaultQuerySchema` (the bare pagination
+      schema). Delegates to the imaging strategies
+      registry to list imaging records across all
+      imaging types (CT, MRI, X-Ray, etc.).
+    tags: [Imaging]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+          Result is the strategy-dispatched list.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetImagingServiceResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Imaging templates
+# =============================================================================
+#
+# Templates are reusable report templates (Tiptap
+# documents) attached to an `ImagingType` (CT, ECG,
+# etc.). The list filters by `type` (default `CT`).
+# `getImagingTemplateById` throws 404 when not found
+# (the list and delete endpoints do not).
+
+/api/imaging-templates:
+  get:
+    operationId: getImagingTemplates
+    summary: List imaging templates
+    description: |
+      Authenticated query. Returns a paginated list of
+      `ImagingTemplate` rows. Service:
+      `ImagingTemplateService.getImagingTemplates` →
+      `ImagingTemplateRepository.getImagingTemplates`.
+      Validation: `getImagingTemplatesSchema`
+      (baseQuerySchema + `type: ImagingType` defaulting
+      to `CT`, plus standard pagination).
+
+      Filters: `type`, `search` (case-insensitive
+      substring match on `name` or `template`),
+      `start`/`end` (createdAt range).
+
+      Response shape: `{ templates, totalCount }`.
+    tags: [Imaging]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: type
+        required: false
+        schema:
+          type: string
+          enum: [CT, MRI, X_RAY, ULTRASOUND, ECHO, ECG]
+        description: |
+          `ImagingType` enum. Defaults to `CT` when
+          not set (or set to anything other than
+          `null`).
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null, message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetImagingTemplatesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/imaging-templates/{id}:
+  get:
+    operationId: getImagingTemplateById
+    summary: Imaging template detail
+    description: |
+      Returns a single `ImagingTemplate` by id. Service:
+      `ImagingTemplateService.getImagingTemplateById`
+      throws `AppError` 404 ("Imaging template not
+      found") when the id is unknown. The repository
+      uses `findUnique` (so the result includes the
+      full `template` content blob).
+    tags: [Imaging]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingTemplate id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null, message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetImagingTemplateByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Imaging template not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+  delete:
+    operationId: deleteImagingTemplate
+    summary: Delete an imaging template
+    description: |
+      Hard-deletes an `ImagingTemplate` by id. Service:
+      `ImagingTemplateService.deleteImagingTemplate`:
+        - throws `AppError` 404 when the template
+          doesn't exist (after a `findUnique`),
+        - otherwise calls
+          `ImagingTemplateRepository.deleteImagingTemplate`
+          which uses `dbPrisma.imagingTemplate.delete`
+          (NOT soft-delete — this is a hard delete).
+
+      The response body is
+      `{ success: true, message: "Imaging template
+      deleted successfully", error: null }` (no
+      `result` field).
+    tags: [Imaging]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      No RBAC. **Hard delete** (not soft-delete). No
+      batched delete — one id at a time.
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingTemplate id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, message: "Imaging template deleted successfully", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/DeleteImagingTemplateResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Imaging template not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# CT
+# =============================================================================
+
+/api/ct-list:
+  get:
+    operationId: getCTList
+    summary: CT list
+    description: |
+      Paginated list of CT `ImagingList` rows. Service:
+      `CTService.getCTList` → `CTRepository.getCTList`
+      (the per-type repo is a thin wrapper around the
+      shared `ImagingRepository`). Validation:
+      `getCTListSchema` (baseQuerySchema +
+      `patientGroup?`, `patientType?: OPD | IPD |
+      EMERGENCY` defaulting to `OPD`,
+      `status?: ImagingServiceStatus`, plus pagination).
+
+      Response shape: `{ ctLists, totalCount }` (or
+      similar — the repo returns the standard imaging
+      list envelope). Each item is a full
+      `ImagingList` row (per `imagingListValidator`)
+      with `referralDoctor`, `referralClinic`,
+      `opdBilling`, `ipdDailyBill`,
+      `imagingListNewBorn`, `services[]`,
+      `opdPackageBill`, and
+      `opdEmrImagingModuleJoints[]`.
+    tags: [CT]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+        description: Defaults to `OPD`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetCTListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ct-list/{id}:
+  get:
+    operationId: getCTDetails
+    summary: CT detail
+    description: |
+      Returns a single CT `ImagingList` by id. Service:
+      `CTService.getCTDetails` →
+      `CTRepository.getCTDetails`. The detail payload
+      is a `CTDetailsWithRelations` — the imaging list
+      shape with `opdBilling` made non-nullable (the
+      repo filters to `opdBilling: { not: null }` for
+      detail queries) and `services[].opdBillingService`
+      made non-nullable.
+    tags: [CT]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: CT ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetCTDetailsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ct-list/{id}/activities:
+  get:
+    operationId: getCTListActivities
+    summary: CT list activity log
+    description: |
+      Returns the activity-log entries for a CT
+      `ImagingList`. Service:
+      `CTService.getCTListActivities` →
+      `CTRepository.getCTListActivities`. Logs are
+      written via `activityLogger.log` from
+      `CTService` for create / result-add / status
+      change / etc.
+    tags: [CT]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: CT ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+          Result is a list of activity-log rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetCTListActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ct-service/{id}/activities:
+  get:
+    operationId: getCTServiceActivities
+    summary: CT service activity log
+    description: |
+      Returns the activity-log entries for a single
+      `ImagingService` row (a sub-row of an
+      `ImagingList`, one per service line). Service:
+      `CTService.getCTServiceActivities` →
+      `CTRepository.getCTServiceActivities`.
+    tags: [CT]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetCTServiceActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ct-service/{id}/add-on:
+  get:
+    operationId: getCTAddOn
+    summary: CT add-on billing summary
+    description: |
+      Returns the CT add-on billing summary for a
+      single `ImagingService` id. Service:
+      `CTService.getAddOn` →
+      `CTRepository.getAddOn`. The add-on
+      concept is CT-specific — it's a billable
+      add-on (additional services / pharmacy items)
+      that can be attached to a CT study.
+    tags: [CT]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      CT is the only imaging type with an add-on
+      surface (the route does not have ECG/ECHO/MRI/
+      Ultrasound/X-Ray siblings).
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetCTAddOnResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# ECG
+# =============================================================================
+
+/api/ecg-list:
+  get:
+    operationId: getECGList
+    summary: ECG list
+    description: |
+      Paginated list of ECG `ImagingList` rows.
+      Service: `ECGService.getECGList` →
+      `ECGRepository.getECGList`. Validation:
+      `getECGListSchema` — identical to CT (and
+      MRI/ECHO/Ultrasound/X-Ray). See the CT entry
+      for the full filter list.
+    tags: [ECG]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+        description: Defaults to `OPD`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECGListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ecg-list/{id}:
+  get:
+    operationId: getECGDetails
+    summary: ECG detail
+    description: |
+      Returns a single ECG `ImagingList` by id.
+      Service: `ECGService.getECGDetails` →
+      `ECGRepository.getECGDetails`.
+    tags: [ECG]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ECG ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECGDetailsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ecg-list/{id}/activities:
+  get:
+    operationId: getECGListActivities
+    summary: ECG list activity log
+    description: |
+      Returns the activity-log entries for an ECG
+      `ImagingList`. Service:
+      `ECGService.getECGListActivities` →
+      `ECGRepository.getECGListActivities`.
+    tags: [ECG]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ECG ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECGListActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ecg-service/{id}/activities:
+  get:
+    operationId: getECGServiceActivities
+    summary: ECG service activity log
+    description: |
+      Returns the activity-log entries for a single
+      `ImagingService` row. Service:
+      `ECGService.getECGServiceActivities` →
+      `ECGRepository.getECGServiceActivities`.
+    tags: [ECG]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECGServiceActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# ECHO
+# =============================================================================
+
+/api/echo-list:
+  get:
+    operationId: getECHOList
+    summary: ECHO list
+    description: |
+      Paginated list of ECHO `ImagingList` rows.
+      Service: `ECHOService.getECHOList` →
+      `ECHORepository.getECHOList`. Validation:
+      `getECHOListSchema` — identical to CT.
+    tags: [ECHO]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+        description: Defaults to `OPD`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECHOListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/echo-list/{id}:
+  get:
+    operationId: getECHODetails
+    summary: ECHO detail
+    description: |
+      Returns a single ECHO `ImagingList` by id.
+      Service: `ECHOService.getECHODetails` →
+      `ECHORepository.getECHODetails`.
+    tags: [ECHO]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ECHO ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECHODetailsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/echo-list/{id}/activities:
+  get:
+    operationId: getECHOListActivities
+    summary: ECHO list activity log
+    description: |
+      Returns the activity-log entries for an ECHO
+      `ImagingList`. Service:
+      `ECHOService.getECHOListActivities` →
+      `ECHORepository.getECHOListActivities`.
+    tags: [ECHO]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ECHO ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECHOListActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/echo-service/{id}/activities:
+  get:
+    operationId: getECHOServiceActivities
+    summary: ECHO service activity log
+    description: |
+      Returns the activity-log entries for a single
+      `ImagingService` row. Service:
+      `ECHOService.getECHOServiceActivities` →
+      `ECHORepository.getECHOServiceActivities`.
+    tags: [ECHO]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetECHOServiceActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# MRI
+# =============================================================================
+
+/api/mri-list:
+  get:
+    operationId: getMRIList
+    summary: MRI list
+    description: |
+      Paginated list of MRI `ImagingList` rows.
+      Service: `MRIService.getMRIList` →
+      `MRIRepository.getMRIList`. Validation:
+      `getMRIListSchema` — identical to CT.
+    tags: [MRI]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+        description: Defaults to `OPD`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetMRIListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/mri-list/{id}:
+  get:
+    operationId: getMRIDetails
+    summary: MRI detail
+    description: |
+      Returns a single MRI `ImagingList` by id.
+      Service: `MRIService.getMRIDetails` →
+      `MRIRepository.getMRIDetails`.
+    tags: [MRI]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: MRI ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetMRIDetailsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/mri-list/{id}/activities:
+  get:
+    operationId: getMRIListActivities
+    summary: MRI list activity log
+    description: |
+      Returns the activity-log entries for an MRI
+      `ImagingList`. Service:
+      `MRIService.getMRIListActivities` →
+      `MRIRepository.getMRIListActivities`.
+    tags: [MRI]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: MRI ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetMRIListActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/mri-service/{id}/activities:
+  get:
+    operationId: getMRIServiceActivities
+    summary: MRI service activity log
+    description: |
+      Returns the activity-log entries for a single
+      `ImagingService` row. Service:
+      `MRIService.getMRIServiceActivities` →
+      `MRIRepository.getMRIServiceActivities`.
+    tags: [MRI]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetMRIServiceActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Ultrasound
+# =============================================================================
+
+/api/ultrasound-list:
+  get:
+    operationId: getUltrasoundList
+    summary: Ultrasound list
+    description: |
+      Paginated list of Ultrasound `ImagingList` rows.
+      Service: `UltrasoundService.getUltrasoundList` →
+      `UltrasoundRepository.getUltrasoundList`.
+      Validation: `getUltrasoundListSchema` — identical
+      to CT.
+    tags: [Ultrasound]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+        description: Defaults to `OPD`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetUltrasoundListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ultrasound-list/{id}:
+  get:
+    operationId: getUltrasoundDetails
+    summary: Ultrasound detail
+    description: |
+      Returns a single Ultrasound `ImagingList` by id.
+      Service: `UltrasoundService.getUltrasoundDetails` →
+      `UltrasoundRepository.getUltrasoundDetails`.
+    tags: [Ultrasound]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: Ultrasound ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetUltrasoundDetailsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ultrasound-list/{id}/activities:
+  get:
+    operationId: getUltrasoundListActivities
+    summary: Ultrasound list activity log
+    description: |
+      Returns the activity-log entries for an
+      Ultrasound `ImagingList`. Service:
+      `UltrasoundService.getUltrasoundListActivities`
+      → `UltrasoundRepository.getUltrasoundListActivities`.
+    tags: [Ultrasound]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: Ultrasound ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetUltrasoundListActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ultrasound-service/{id}/activities:
+  get:
+    operationId: getUltrasoundServiceActivities
+    summary: Ultrasound service activity log
+    description: |
+      Returns the activity-log entries for a single
+      `ImagingService` row. Service:
+      `UltrasoundService.getUltrasoundServiceActivities`
+      → `UltrasoundRepository.getUltrasoundServiceActivities`.
+    tags: [Ultrasound]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetUltrasoundServiceActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# X-Ray
+# =============================================================================
+
+/api/x-ray-list:
+  get:
+    operationId: getXRayList
+    summary: X-Ray list
+    description: |
+      Paginated list of X-Ray `ImagingList` rows.
+      Service: `XRayService.getXRayList` →
+      `XRayRepository.getXRayList`. Validation:
+      `getXRayListSchema` — identical to CT.
+    tags: [X-Ray]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+        description: Defaults to `OPD`.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [PENDING, ACKNOWLEDGED, DE_ACKNOWLEDGED, CANCELLED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetXRayListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/x-ray-list/{id}:
+  get:
+    operationId: getXRayDetails
+    summary: X-Ray detail
+    description: |
+      Returns a single X-Ray `ImagingList` by id.
+      Service: `XRayService.getXRayDetails` →
+      `XRayRepository.getXRayDetails`.
+    tags: [X-Ray]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: X-Ray ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetXRayDetailsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/x-ray-list/{id}/activities:
+  get:
+    operationId: getXRayListActivities
+    summary: X-Ray list activity log
+    description: |
+      Returns the activity-log entries for an X-Ray
+      `ImagingList`. Service:
+      `XRayService.getXRayListActivities` →
+      `XRayRepository.getXRayListActivities`.
+    tags: [X-Ray]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: X-Ray ImagingList id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetXRayListActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/x-ray-service/{id}/activities:
+  get:
+    operationId: getXRayServiceActivities
+    summary: X-Ray service activity log
+    description: |
+      Returns the activity-log entries for a single
+      `ImagingService` row. Service:
+      `XRayService.getXRayServiceActivities` →
+      `XRayRepository.getXRayServiceActivities`.
+    tags: [X-Ray]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ImagingService id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/imaging.yaml#/GetXRayServiceActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

@@ -1,0 +1,490 @@
+# docs/schemas/common-patients.yaml
+# Schemas for the common-patients sub-area of
+# the `common` REST module. Three endpoints:
+#   GET /api/patients
+#   GET /api/patients/[id]
+#   GET /api/patients/info
+# Source: src/app/api/(common)/patients/route.ts
+# Source: src/app/api/(common)/patients/[id]/route.ts
+# Source: src/app/api/(common)/patients/info/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetPatientsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        The route uses `apiHandler` with manual
+        `validateSearchParams(getPatientsSchema, ...)`.
+        The schema is
+        `baseGetPatientsSchema.merge(baseQuerySchema).transform(transformPaginationSchema)`.
+        `baseGetPatientsSchema` adds
+        `includePatientId`, `hasAdmission`,
+        `patientType`, `patientTypes`,
+        `patientGroup`, `region`, `township`,
+        `checkHasPendingBills`,
+        `hasNewBornRecord`, `currentAdmissionId`.
+      properties:
+        includePatientId:
+          type: string
+        hasAdmission:
+          type: boolean
+        patientType:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER]
+        patientTypes:
+          type: array
+          items:
+            type: string
+            enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER]
+        patientGroup:
+          type: string
+          enum: [LOCAL, FOREIGNER, INSURANCE, GOVERNMENT]
+        region:
+          type: string
+        township:
+          type: string
+        checkHasPendingBills:
+          type: boolean
+        hasNewBornRecord:
+          type: boolean
+        currentAdmissionId:
+          type: string
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetPatientsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/patients`. The
+    repository returns
+    `Promise<{ patients: Patient[]; totalCount: number }>`
+    (patients-repository.ts:100-242) and the
+    route wraps it in
+    `{ success: true, result, error: "" }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [patients, totalCount]
+      properties:
+        patients:
+          type: array
+          items:
+            $ref: ./common-patients.yaml#/Patient
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetPatientByIdResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/patients/[id]`.
+    The repository's `getPatientById` returns
+    the patient row (or `null`); the route
+    wraps it in
+    `{ success: true, result, error: "" }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-patients.yaml#/Patient
+        - type: "null"
+
+GetPatientInfoResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/patients/info`.
+    The repository returns a
+    `Pick<Patient, "id" | "name" | "phoneNo" |
+    "patientGroup"> & { totalSaleAmount: number }`
+    from a raw SQL query. The route wraps it in
+    `{ success: true, result, error: "" }`.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-patients.yaml#/PatientInfo
+        - type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Patient:
+  type: object
+  description: |
+    Canonical patient shape. TS type `Patient`
+    from
+    `src/app/(dashboard)/common/patients/features/types/index.ts:41-152`.
+
+    Maps to the Prisma `Patient` model
+    (prisma/schema.prisma). The list endpoint
+    uses a `patientValidator` (Prisma
+    `validator<Prisma.PatientDefaultArgs>()(
+    {...})`) that includes:
+      - `patientServices` (id, serviceId,
+        patientId, service.name,
+        service.status,
+        service.includeInRegistration).
+      - `Referral` (full row, all columns).
+      - `CathLabRequest` (id-only).
+      - `admissionDeposit` — filtered to
+        `isCancelled: false`, projected to
+        `{ id, admissionId, depositInvoiceNo,
+        actualDepositAmount,
+        remainingDepositAmount,
+        preDepositAmount, preDepositAt,
+        isDepositClose, isCancelled }`. Note:
+        the projection includes `isCancelled`
+        even though the `where` filter is
+        `isCancelled: false` — so the column
+        is always `false` in the response.
+      - `Admission` (id, admissionId, status).
+      - `childernBorn` (full row; **typo
+        in the Prisma relation name**
+        `childernBorn` instead of
+        `childrenBorn`).
+      - `createdBy` / `updatedBy` —
+        canonical 3-field `Publisher`
+        projection (id, fullName, username).
+
+    The `[id]` endpoint's `getPatientById`
+    uses a different include set (no
+    `CathLabRequest`, no
+    `admissionDeposit`, but does include
+    `roomLogs` (id-only), `newBornRecord`
+    (deeply nested), `_count` for
+    `Admission` (active only),
+    `pharmacySales` (pending only),
+    `ProxyBill` (unpaid only), and the
+    `createdBy` / `updatedBy` is
+    **2-field** (id, fullName — no
+    `username`)).
+
+    Post-processing
+    `flattenPatientsData` (line 607-632)
+    sets:
+      - `referralDoctor` — most recent
+        `Referral.doctorId` (or "").
+      - `referralClinic` — most recent
+        `Referral.clinicId` (or "").
+      - `hasPendingBills` — derived from
+        `_count.pharmacySales > 0 ||
+        _count.ProxyBill > 0`.
+
+    PII surface — name, phoneNo, email
+    (`@unique`), guardianName, address,
+    region, township, nrcNo, nrcType,
+    nrcTownship, nrcState, passPort,
+    emergencyPhoneNo, nextToKin,
+    relationship, drugallergy,
+    additionalInformation. All exposed
+    on every list response row.
+  required:
+    - id
+    - createdAt
+    - updatedAt
+    - name
+    - phoneNo
+    - patientId
+    - patientType
+    - patientGroup
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    patientId:
+      type: string
+      description: |
+        Business id, `@unique`. Sequential
+        `PN-NNNNNN` (6-digit zero-pad) via
+        `generatePatientId("PN",
+        lastPatient?.patientId)`. The "last"
+        lookup uses
+        `orderBy: { patientId: "desc" }` —
+        a string sort on the business id.
+    name:
+      type: string
+    phoneNo:
+      type: string
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER]
+    patientGroup:
+      type: string
+      enum: [LOCAL, FOREIGNER, INSURANCE, GOVERNMENT]
+      description: |
+        Default `LOCAL` at the DB level.
+    dateofBirth:
+      type: string
+      format: date-time
+      nullable: true
+    gender:
+      type: string
+      enum: [MALE, FEMALE, OTHER]
+      description: |
+        Default `OTHER` at the DB level.
+        Uses the application-level
+        `patientGenders` enum
+        (MALE/FEMALE/OTHER).
+    guardianName:
+      type: string
+      description: |
+        Default `""` at the DB level.
+    occupation:
+      type: string
+      nullable: true
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: |
+        `@unique` (nullable in Prisma).
+        Exposed by the search filter.
+    address:
+      type: string
+      nullable: true
+    region:
+      type: string
+      nullable: true
+      description: |
+        The `createPatient` repository
+        uppercases this on insert:
+        `region: data.region.toUpperCase()`.
+    township:
+      type: string
+      nullable: true
+    stateCode:
+      type: string
+      nullable: true
+    nrcNo:
+      type: string
+      nullable: true
+    nrcType:
+      type: string
+      nullable: true
+    nrcTownship:
+      type: string
+      nullable: true
+    nrcState:
+      type: string
+      nullable: true
+    passPort:
+      type: string
+      nullable: true
+    emergencyPhoneNo:
+      type: string
+      nullable: true
+    nextToKin:
+      type: string
+      nullable: true
+    relationship:
+      type: string
+      nullable: true
+    drugallergy:
+      type: string
+      nullable: true
+    bloodType:
+      type: string
+      nullable: true
+      description: |
+        Application-level `bloodType` enum
+        (A_POS, A_NEG, ..., O_NEG, None).
+        The Prisma model uses a
+        `BloodType` Prisma enum.
+    referralType:
+      type: string
+      nullable: true
+      enum: [REFERRALIN, REFERRALOUT]
+    referralDoctor:
+      type: string
+      nullable: true
+      description: |
+        **Derived** in the response: the
+        most recent `Referral.doctorId` (or
+        `null`). Not a direct column on the
+        `Patient` model.
+    referralClinic:
+      type: string
+      nullable: true
+      description: |
+        **Derived** in the response: the
+        most recent `Referral.clinicId` (or
+        `null`).
+    additionalInformation:
+      type: string
+      nullable: true
+    patientIdentity:
+      type: string
+      nullable: true
+      description: |
+        `PatientIdentity` Prisma enum
+        (e.g., "NRC", "PASSPORT").
+    isOldPatient:
+      type: boolean
+      description: |
+        Default `false` at the DB level.
+    appointmentTypeId:
+      type: string
+      nullable: true
+      description: |
+        Stored on the `Patient` row at
+        create time (from
+        `CreatePatientSchema.appointmentTypeId`),
+        but NOT included in the list / detail
+        response (the relations are not
+        joined).
+    patientServices:
+      type: array
+      items:
+        type: object
+        required: [id, serviceId, patientId, service]
+        properties:
+          id:
+            type: string
+          serviceId:
+            type: string
+          patientId:
+            type: string
+          service:
+            type: object
+            required: [name, status, includeInRegistration]
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+                enum: [ACTIVE, INACTIVE]
+              includeInRegistration:
+                type: boolean
+    Referral:
+      type: array
+      items:
+        type: object
+    CathLabRequest:
+      type: array
+      items:
+        type: object
+    admissionDeposit:
+      type: array
+      description: |
+        Filtered to `isCancelled: false`.
+        Includes the `isCancelled` column
+        even though the `where` filter
+        forces it to `false`.
+      items:
+        type: object
+    Admission:
+      type: array
+      items:
+        type: object
+    roomLogs:
+      type: array
+      description: |
+        Detail endpoint only. `id`-only
+        projection.
+      items:
+        type: object
+    childernBorn:
+      type: array
+      items:
+        type: object
+    hasPendingBills:
+      type: boolean
+      description: |
+        **Derived** in the response:
+        `_count.pharmacySales > 0 ||
+        _count.ProxyBill > 0`. Only set
+        when `checkHasPendingBills` is
+        requested (list) or always (detail
+        endpoint).
+    _count:
+      type: object
+      description: |
+        Counts of related rows. The list
+        endpoint scopes
+        `pharmacySales` to
+        `paymentStatus: PENDING, patientType:
+        OPD, departmentType: PHARMACY` and
+        `ProxyBill` to
+        `paymentStatus: UNPAID, patientType:
+        OPD`. The detail endpoint scopes
+        `Admission` to `status: ACTIVE`,
+        `pharmacySales` to `paymentStatus:
+        PENDING`, `ProxyBill` to
+        `paymentStatus: UNPAID`.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+PatientInfo:
+  type: object
+  description: |
+    Minimal patient projection returned by
+    `GET /api/patients/info`. From the raw SQL
+    query result
+    (patients-repository.ts:409-422): the
+    `id`, `name`, `phoneNo`, `patientGroup`
+    columns of the `Patient` row, plus the
+    `SUM(ps.total_amount)::int` aggregate as
+    `totalSaleAmount`.
+  required:
+    - id
+    - name
+    - phoneNo
+    - patientGroup
+    - totalSaleAmount
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    phoneNo:
+      type: string
+    patientGroup:
+      type: string
+      enum: [LOCAL, FOREIGNER, INSURANCE, GOVERNMENT]
+    totalSaleAmount:
+      type: integer
+      description: |
+        4-byte integer (`::int` cast in the
+        raw SQL). The `SUM` aggregates over
+        `pharmacy_sales.total_amount` for
+        rows where `status = 'APPROVED'` and
+        `patient_type <> 'IPD'`. Overflows
+        at 2^31.

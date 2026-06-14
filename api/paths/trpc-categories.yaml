@@ -1,0 +1,302 @@
+# docs/paths/trpc-categories.yaml
+# tRPC router: categories (src/lib/trpc/routers/categories.ts)
+# CRUD over the `Category` model. All five procedures use `authProcedure`
+# (not `verifyPasswordProcedure`, not `authorizeProcedure`).
+x-trpc-source: src/lib/trpc/routers/categories.ts
+x-trpc-router: categories
+
+/api/trpc/categories.getCategories:
+  post:
+    summary: List top-level categories (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of **top-level**
+      categories with the total row count.
+
+      Response shape:
+        ```
+        { categories: Category[], count: number }
+        ```
+      (Field named `categories`, **not** `data` — this differs from
+      `departments.getDepartments` and `stores.getStores`, which use
+      `data`.)
+
+      The repository's `buildWhereQuery` pins
+      `parentCategoryId: null` (categories-service.ts:117). Sub-categories
+      are managed by the separate `trpc-sub-categories` router and will
+      not appear in this response.
+
+      Filters (from `defaultQuerySchema`):
+        - `search` — case-insensitive substring match against `name`.
+
+      Service: `CategoriesService.getCategories`. Source:
+      `src/lib/trpc/routers/categories.ts:12-20`.
+    tags:
+      - Categories
+    operationId: trpc_categories_getCategories
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of top-level categories.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-categories.yaml#/GetCategoriesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/categories.getCategoryCounts:
+  post:
+    summary: Get top-level category count
+    description: |
+      Authenticated query. Returns the count of top-level categories
+      (`prisma.category.count({ where: { parentCategoryId: null } })`).
+      Source: `src/lib/trpc/routers/categories.ts:22-27`.
+    tags:
+      - Categories
+    operationId: trpc_categories_getCategoryCounts
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total top-level category count.
+        content:
+          application/json:
+            schema:
+              type: integer
+              minimum: 0
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/categories.createCategory:
+  post:
+    summary: Create a new category
+    description: |
+      Authenticated mutation. Creates a top-level category. The schema
+      has only `name` (no description, no parentCategoryId — the latter
+      would be set by the sub-categories router).
+
+      Side effects:
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/categories")`.
+        - Logs the creation via `activityLogger`
+          (description: ``Created Category `${name}` ``, action: "Create",
+          entity: "Category", entityId: result.id).
+
+      Validation failures:
+        - Empty `name` → 400.
+        - Category name already exists (case-insensitive) → 409
+          (`AppError("Category already exists", 409)`).
+
+      **Response does not populate `createdBy` / `updatedBy`**.
+
+      Service: `CategoriesService.createCategory`. Source:
+      `src/lib/trpc/routers/categories.ts:29-45`.
+    tags:
+      - Categories
+    operationId: trpc_categories_createCategory
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-categories.yaml#/CreateCategoryInput
+    responses:
+      "200":
+        description: Category created. **Response does not populate `createdBy` / `updatedBy`** — bare Prisma record.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-categories.yaml#/CategoryBare
+      "400":
+        description: Validation failure (empty name).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: Category name already exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/categories.updateCategory:
+  post:
+    summary: Update a category name
+    description: |
+      Authenticated mutation. Updates the `name` of the category
+      identified by `id`.
+
+      Validation:
+        - Category must exist (else 404).
+        - If `name` is changing, the new `name` must not collide with
+          another existing category → 400
+          (`AppError("Category Name already exists", 400)`).
+
+      Side effects:
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/categories")`.
+        - (Service does not call `activityLogger.log` for updates — see
+          `x-activity-log-note` below.)
+
+      **Response does not populate `createdBy` / `updatedBy`**.
+
+      Service: `CategoriesService.updateCategory`. Source:
+      `src/lib/trpc/routers/categories.ts:47-62`.
+    tags:
+      - Categories
+    operationId: trpc_categories_updateCategory
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-categories.yaml#/UpdateCategoryInput
+    responses:
+      "200":
+        description: Updated category. **Response does not populate `createdBy` / `updatedBy`**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-categories.yaml#/CategoryBare
+      "400":
+        description: New name collides with an existing category.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Category not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-activity-log-note: |
+      Unlike `createCategory` and `deleteCategory`, the `updateCategory`
+      service method does not call `activityLogger.log`. Updates to
+      categories are not recorded in the activity log. Probably a bug
+      or oversight — worth confirming.
+
+/api/trpc/categories.deleteCategory:
+  post:
+    summary: Delete a category
+    description: |
+      Authenticated mutation. Deletes the category identified by `id`.
+
+      Validation:
+        - Category must exist (else 404).
+        - Category must have **no sub-categories**
+          (`prisma.category.findFirst({ where: { parentCategoryId: id } })`).
+          If any exist → 409
+          (`AppError("Can't Delete! This category has sub categories", 409)`).
+        - Foreign-key references (e.g. items) block deletion with
+          `AppError("Category is in use and cannot be deleted", 400)`.
+
+      Side effects:
+        - Calls `revalidatePath("/set-up/categories")`.
+        - Logs the deletion via `activityLogger` — **but** the service
+          does not pass `entityId` to the log call, so the log line
+          may be incomplete. See `x-activity-log-note` below.
+
+      **Response does not populate `createdBy` / `updatedBy`**.
+
+      Service: `CategoriesService.deleteCategory`. Source:
+      `src/lib/trpc/routers/categories.ts:64-75`.
+    tags:
+      - Categories
+    operationId: trpc_categories_deleteCategory
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Category id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: Deleted category. **Response does not populate `createdBy` / `updatedBy`**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-categories.yaml#/CategoryBare
+      "400":
+        description: Category is in use (FK constraint).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Category not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: Category has sub-categories.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-activity-log-note: |
+      The `deleteCategory` service method calls
+        `activityLogger.log({ description: "Deleted Category", userId: undefined, action: "Delete" })`
+      (service.ts:65-70) — the `userId` is `undefined` and no
+      `entity` / `entityId` are passed. Looks like a half-finished call
+      site. The router does not pass `ctx.user.id` either. Worth
+      investigating.
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all five procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - All five procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can manage categories. This is consistent
+    with the rest of the Setup/User Management routers but is worth
+    confirming against the team's intent.
+  - **TS type/runtime mismatch on `createdBy` / `updatedBy`** — same
+    pattern as `trpc-departments` and `trpc-stores`. The write methods
+    all call Prisma without an `include` directive, returning bare
+    records. Documented as `CategoryBare`.
+  - `updateCategory` is the only mutating procedure in this module
+    that does **not** call `activityLogger.log`. The `deleteCategory`
+    call to `activityLogger.log` is missing `entityId` and passes
+    `undefined` as `userId` — likely a half-finished integration.

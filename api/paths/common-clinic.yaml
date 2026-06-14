@@ -1,0 +1,278 @@
+# docs/paths/common-clinic.yaml
+# REST endpoints:
+#   GET /api/clinic
+#   GET /api/clinic/[id]
+# Source: src/app/api/(common)/clinic/route.ts
+# Source: src/app/api/(common)/clinic/[id]/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions (clinic.actions.ts) — they are
+# NOT exposed as REST routes here.
+
+/api/clinic:
+  get:
+    summary: List clinics (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      clinics with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            clinics: Clinic[],
+            totalCount: number,
+          },
+          error: ""
+        }
+        ```
+
+      Filters (from `getClinicsSchema`, interpreted
+      by the repository's `findClinicsAndCount`):
+        - `search` — case-insensitive substring match
+          against `clinicId`, `name`, `email`, or
+          `phoneNo` (4-branch `OR`).
+        - `status` — stringly-typed boolean. The
+          repository maps
+          `query.status === "ACTIVE"` to
+          `where.isActive = true`. Any other value is
+          silently treated as "no filter".
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`).
+
+      Repository ordering: `createdAt: desc`.
+
+      Note on auth: this route uses the bare
+      `apiHandler` wrapper, **not**
+      `enhancedApiHandler`. Authentication is checked
+      manually via `verifyApiAuth()` at the start of
+      the handler. Same pattern as
+      [[common-anesthesia-type]],
+      [[common-bill-types]],
+      [[common-operation-type]],
+      [[common-specialization]].
+
+      Source:
+      `src/app/api/(common)/clinic/route.ts:12-27`.
+    tags:
+      - Common / Clinic
+    operationId: rest_common_clinic_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        description: |
+          Stringly-typed boolean. The repository maps
+          `status === "ACTIVE"` to `isActive: true`.
+          The literal string `"INACTIVE"` is treated
+          the same as any other non-`"ACTIVE"` value.
+    responses:
+      "200":
+        description: Paginated list of clinics.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-clinic.yaml#/GetClinicsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/clinic/{id}:
+  get:
+    summary: Get a clinic by id
+    description: |
+      Authenticated query. Returns a single clinic by
+      its primary key (UUID), or `null` if not found.
+
+      Path parameters:
+        - `id` — the clinic's primary key (UUID
+          string).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: Clinic | null,
+          message: "",
+          error: null
+        }
+        ```
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` (no `permissions`).
+      The handler signature is
+      `(_req, _, { params }: { params: Promise<{
+      id: string }> })` and the first line is
+      `const { id } = await params;` — **this
+      `params` declaration is real** (the route has
+      a `[id]` segment), unlike the
+      `await params` no-op in the
+      `common-anesthesia-type` / `-bill-types` /
+      `-operation-type` / `-specialization`
+      handlers.
+
+      Source:
+      `src/app/api/(common)/clinic/[id]/route.ts:9-25`.
+    tags:
+      - Common / Clinic
+    operationId: rest_common_clinic_get_by_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: The clinic's primary key (UUID).
+    responses:
+      "200":
+        description: The clinic, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-clinic.yaml#/GetClinicByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — both routes
+    declare only `auth: { required: true }`, no
+    `permissions` array. Any authenticated user can
+    read the full clinic list (PII: name, email,
+    phone, address) and the per-clinic detail.
+  - **Inconsistent response envelopes** — the list
+    endpoint emits
+    `{ success: true, result, error: "" }` (no
+    `message` field), while the detail endpoint
+    emits
+    `{ success: true, result, message: "", error: null }`.
+    Two endpoints under the same sub-area emit
+    different success shapes.
+  - **List route uses bare `apiHandler` with
+    `verifyApiAuth()`** — same pattern as
+    [[common-anesthesia-type]],
+    [[common-bill-types]],
+    [[common-operation-type]],
+    [[common-specialization]]. The detail route
+    uses `enhancedApiHandler`. This is the same
+    module, but the auth wiring is inconsistent
+    between list and detail.
+  - **Dead `params` declaration on the list
+    route** — the list handler's signature is
+    `(req, { params }: { params: Promise<{ id:
+    number }> })` and the first line is
+    `await params`, but the route file has no
+    `[id]` segment. The `params` object is always
+    empty `{}` and the `await` is a no-op. The
+    `id: number` type is also wrong (the Prisma id
+    is a UUID string). Same copy-paste leftover
+    pattern as the other bare-`apiHandler` common
+    lookups. The detail route's `params: Promise<{
+    id: string }>` is **legitimate** (the route has
+    a `[id]` segment) and is the one place this
+    pattern is correct.
+  - **`getClinicById` leaks the full `User` row** —
+    the repository helper uses
+    `include: { createdBy: true, updatedBy: true }`
+    (no `select` projection)
+    (clinic.repository.ts:118-126, 132-142). The
+    TS type asserts a 3-field `Publisher`-like
+    shape (`id, fullName, username`), but the
+    underlying Prisma response carries additional
+    columns including `password` (Argon2 hash),
+    `email`, and `status`. The list endpoint uses
+    the canonical 3-field projection; only the
+    detail endpoint leaks.
+  - **Write path uses server actions, not REST** —
+    `createClinic` / `updateClinic` /
+    `deleteClinic` are reached via
+    `clinic.actions.ts` server actions. The
+    repository's `deleteClinic` catches FK
+    violations via
+    `isForeignKeyConstraintViolationError` and
+    re-throws as
+    `AppError("Clinic is in use and cannot be
+    deleted", 400)` (clinic.repository.ts:105-116)
+    — status 400, not 409.
+  - **`isActive` defaults to `false`** — newly
+    created clinics start inactive. Callers are
+    expected to explicitly set `isActive: true`
+    to make a clinic visible. The default is
+    surprising and could lead to "I created a
+    clinic but it doesn't appear anywhere"
+    support tickets.
+  - **Service activity-log typo** — the
+    `updateClinic` activity log emits
+    `entity: "Clnic"` (without the `i`)
+    and `description: "Updated Clnic"`
+    (clinic.service.ts:79-83). Other branches of
+    the same service use `"Clinic"` correctly.
+  - **Service logger `context` typo** — the
+    service instantiates its child logger with
+    `context: "bill-type-service"`
+    (clinic.service.ts:11), a copy-paste leftover
+    from `BillTypeService`. Same typo as
+    [[common-operation-type]] and
+    [[common-specialization]]. The context string
+    is observable in Winston log output.
+  - **Subtle update-name race** — the service
+    `updateClinic` re-fetches the row by id then
+    re-fetches by name (two separate queries).
+    Between these queries, a concurrent request
+    could rename a different row to the target
+    name and the second query would surface a
+    stale "name exists" 409. Not covered by a
+    transaction; same pattern as
+    [[common-anesthesia-type]],
+    [[common-bill-types]],
+    [[common-operation-type]],
+    [[common-specialization]].
+  - **`getClinicsAndCount` uses the same `where`
+    for findMany and count** — the count is
+    correctly the filtered total (no
+    [[common-departments]]-style count bug).
+  - **`clinicId` is sequential and guessable** —
+    the auto-increment `CID-NNN` pattern. Not a
+    security boundary on its own, but the same
+    probe-by-duplicate pattern as
+    [[common-departments]],
+    [[common-roles]],
+    [[common-selling-price-groups]].
+  - **Update uses 400 for "not found"** — the
+    `updateClinic` service throws
+    `AppError("Clinic not found", 400)`
+    (clinic.service.ts:62). Inconsistent with
+    `updateRole` (which uses 404) and the
+    `updateCategory` 404 in
+    [[common-set-up]].
+  - **`createClinic` skips activity logging inside
+    a transaction** — the service's
+    `createClinic` accepts a `tx` parameter and
+    conditionally skips the
+    `activityLogger.log({ ... })` call when `tx`
+    is provided (clinic.service.ts:43-51) with a
+    comment "Only log activity if not in a
+    transaction (to avoid logging partial
+    imports)". Reasonable for bulk-import
+    scenarios, but worth knowing: a transaction
+    import path can result in zero activity log
+    rows for a successful create.

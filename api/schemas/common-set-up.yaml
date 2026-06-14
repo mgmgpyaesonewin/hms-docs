@@ -1,0 +1,129 @@
+# docs/schemas/common-set-up.yaml
+# Schemas for the common-set-up sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/set-up/categories
+# Source: src/app/api/(common)/set-up/categories/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetCategoriesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        defaultQuerySchema }` — no extra filters. The
+        repository's `buildWhereQuery` interprets
+        `query.search` (case-insensitive substring
+        match on `name`) but always pins
+        `where.parentCategoryId = null` — so this
+        endpoint only returns **top-level
+        categories**, never sub-categories
+        (categories-repository.ts:115-128). The
+        `start` / `end` date filters are accepted
+        by the base schema but are NOT applied by
+        this `buildWhereQuery` (the same silent-drop
+        pattern as
+        [[common-payment-methods]]).
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetCategoriesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/set-up/categories`. The
+    repository returns
+    `Promise<{ categories: Category[]; count: number }>`
+    (categories-repository.ts:12-50) and the route
+    wraps it in
+    `{ success: true, result, message: "", error: "" }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [categories, count]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: ./common-set-up.yaml#/Category
+        count:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Category:
+  type: object
+  description: |
+    Canonical category shape. TS type `Category` from
+    `src/app/(dashboard)/common/set-up/categories/features/type/index.ts:7-14`.
+
+    Maps to the Prisma `Category` model
+    (prisma/schema.prisma, @@map("categories")). The
+    list endpoint's repository uses
+    `include: { createdBy: { select: { id, fullName,
+    username } }, updatedBy: { select: { id, fullName,
+    username } } }` — the canonical 3-field
+    `Publisher` projection.
+
+    Notable: the `Category` model supports a
+    self-referential `parentCategoryId` (1:N to
+    sub-categories via `subCategories Category[]
+    @relation("ParentCategory")`). This endpoint
+    only returns top-level rows
+    (`where.parentCategoryId = null`); the
+    sub-categories tree is reachable through the
+    service's `findExistingSubCategoryInCategory`
+    helper, not via this REST endpoint.
+
+    The model's `name` is **not** `@unique` in the
+    Prisma schema (unusual for a lookup-style
+    table). Duplicate-name enforcement is
+    application-layer only via
+    `findExistingCategoryName` (case-insensitive
+    equality check, categories-service.ts:19-23).
+  required:
+    - id
+    - name
+    - createdBy
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        **Not** `@unique` in the Prisma model.
+        Duplicate-name check enforced by the service
+        via `findExistingCategoryName`
+        (case-insensitive equality). Inconsistent
+        with the other `common-*` lookups which all
+        declare `@unique` on `name`.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      oneOf:
+        - $ref: ./common.yaml#/Publisher
+        - type: "null"
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

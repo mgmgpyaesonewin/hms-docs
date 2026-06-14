@@ -1,0 +1,119 @@
+# docs/schemas/common.yaml
+# Cross-cutting schemas referenced by multiple modules. Be conservative —
+# add only types that are genuinely shared. Per-module types live in
+# schemas/<module>.yaml.
+
+ErrorEnvelope:
+  type: object
+  description: |
+    Generic error response shape. The project has two emitters:
+      - **REST** handlers in `src/app/api/**/route.ts` — use
+        `NextResponse.json(payload, { status })` with whatever payload the
+        handler chooses. Common shapes include `{ error: string }`,
+        `{ message: string }`, or AppError serialisations.
+      - **tRPC** — normalised by the `errorFormatter` in
+        `src/lib/trpc/trpc.ts` to `{ signature, message, httpStatus, code }`.
+
+    This envelope is the **union** of both conventions. Individual routes may
+    return only a subset of the fields below. `message` is the only one that
+    is reliably present.
+  required:
+    - message
+  properties:
+    message:
+      type: string
+      description: Human-readable error message. Always present.
+    error:
+      type: string
+      description: |
+        Shorter error string. Used by some REST handlers as an alternative to
+        `message` (e.g. `{ error: "Unauthorized" }`).
+    code:
+      type: string
+      description: |
+        Machine-readable error code. tRPC populates this with the
+        `TRPCError.code` (`UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, ...) or
+        `APP_ERROR` for `AppError` throws.
+    signature:
+      type: string
+      enum:
+        - AppError
+        - TRPCError
+        - UnknownError
+      description: tRPC error discriminator. Only present on tRPC responses (absent in REST).
+    httpStatus:
+      type: integer
+      description: |
+        Suggested HTTP status for tRPC errors. Mirrors `AppError.code`
+        (e.g. 401, 403, 404). Always 500 for `UnknownError`.
+    details:
+      type: object
+      additionalProperties: true
+      description: Optional contextual payload (e.g. field-level validation errors).
+
+PaginationQuery:
+  type: object
+  description: |
+    Generic pagination/filter input used by tRPC list procedures. Zod schema
+    `defaultQuerySchema` in `src/utils/pagination-utils.ts`. Wraps
+    `basePaginationSchema` and adds `search` / `start` / `end` filters; the
+    schema is `.transform()`-ed server-side to inject `offset = (page-1)*limit`.
+    The shape below is the **post-transform** input the procedure receives.
+  required:
+    - page
+    - limit
+    - offset
+  properties:
+    page:
+      type: integer
+      minimum: 1
+      maximum: 100000
+      default: 1
+      description: 1-indexed page number. Coerced from strings; defaults to 1 on invalid input.
+    limit:
+      type: integer
+      minimum: 0
+      maximum: 1000
+      default: 10
+      description: Items per page. Coerced; defaults to 10 on invalid input.
+    offset:
+      type: integer
+      minimum: 0
+      description: |
+        Computed server-side as `(page - 1) * limit`. Echoed back on the
+        transformed input. Clients may omit it on the request; the server
+        always recomputes it.
+    search:
+      type: string
+      description: Free-text search term (semantics depend on the procedure).
+    start:
+      type: string
+      format: date-time
+      description: Inclusive lower bound for date-range filters. Coerced from string.
+    end:
+      type: string
+      format: date-time
+      description: Inclusive upper bound for date-range filters. Coerced from string.
+
+Publisher:
+  type: object
+  description: |
+    Generic trimmed user projection used for `createdBy` / `updatedBy`
+    fields across the codebase. Shape: `{ id; fullName; username }`.
+
+    Defined locally in several feature folders (Department, Store, etc.)
+    with the same shape. Canonical location: `common.yaml#/Publisher`.
+    Future CRUD modules should reference this schema instead of
+    redefining `Publisher`.
+  required:
+    - id
+    - fullName
+    - username
+  properties:
+    id:
+      type: string
+      format: uuid
+    fullName:
+      type: string
+    username:
+      type: string

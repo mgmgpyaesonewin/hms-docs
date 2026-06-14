@@ -1,0 +1,228 @@
+# docs/paths/trpc-roles.yaml
+# tRPC router: roles (src/lib/trpc/routers/roles.ts)
+# Manages RBAC roles and their permissions. All five procedures require an
+# authenticated session; **none** use `authorizeProcedure`, so any logged-in
+# user can call them. See the security note at the bottom.
+x-trpc-source: src/lib/trpc/routers/roles.ts
+x-trpc-router: roles
+
+/api/trpc/roles.getRoles:
+  post:
+    summary: List roles (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of roles with the
+      total row count. Uses the shared `defaultQuerySchema`
+      (transformed → `PaginationQuery`).
+
+      Response shape:
+        ```
+        { roles: Role[], totalCount: number }
+        ```
+
+      Service: `RoleService.getRoles(input)`. Source:
+      `src/lib/trpc/routers/roles.ts:14-20`.
+    tags:
+      - Roles
+    operationId: trpc_roles_getRoles
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of roles.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-roles.yaml#/GetRolesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/roles.createRole:
+  post:
+    summary: Create a new role with permissions
+    description: |
+      Authenticated mutation. Creates a role with the given permission set.
+
+      Validation (`createRoleSchema` → `baseRoleFormSchema`):
+        - `name` — 2–30 chars, alphanumeric + spaces only, not all digits.
+        - `description` — optional, ≤ 500 chars.
+        - `permissions` — array of `{ action, subject }`, at least one entry.
+          Each pair is validated against the static `subjectConfigs` allow-list
+          via `isActionRestricted`; restricted pairs are rejected with
+          "Contains restricted permissions".
+
+      The created `User.id` (`ctx.user?.id`) is recorded as the role's
+      `createdById`. Service: `RoleService.createRole`.
+
+      Source: `src/lib/trpc/routers/roles.ts:21-26`.
+    tags:
+      - Roles
+    operationId: trpc_roles_createRole
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-roles.yaml#/CreateRoleInput
+    responses:
+      "200":
+        description: Role created.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-roles.yaml#/Role
+      "400":
+        description: Validation failure (bad name, empty permissions, or restricted action/subject pair).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/roles.getRoleById:
+  post:
+    summary: Get a role by id
+    description: |
+      Authenticated query. Returns a single `Role` (with `permissions` and
+      `createdBy` / `updatedBy` populated). Input is a raw string — the
+      router does **not** validate it as a UUID, so the service layer
+      decides how to handle malformed ids.
+
+      Service: `RoleService.getRoleById`. Source:
+      `src/lib/trpc/routers/roles.ts:27-30`.
+    tags:
+      - Roles
+    operationId: trpc_roles_getRoleById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Role id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: The role.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-roles.yaml#/Role
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Role not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/roles.updateRole:
+  post:
+    summary: Update a role and its permissions
+    description: |
+      Authenticated mutation. Replaces the role's mutable fields. The input
+      schema (`editRoleSchema`) requires `id` plus the same fields as
+      `createRoleSchema` (name, description, permissions).
+
+      Service: `RoleService.updateRole`. Source:
+      `src/lib/trpc/routers/roles.ts:31-36`.
+    tags:
+      - Roles
+    operationId: trpc_roles_updateRole
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-roles.yaml#/UpdateRoleInput
+    responses:
+      "200":
+        description: Updated role.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-roles.yaml#/Role
+      "400":
+        description: Validation failure.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/roles.deleteRole:
+  post:
+    summary: Delete a role by id
+    description: |
+      Authenticated mutation. Deletes the role whose id matches the input.
+      Input is a raw string (`z.string()`, no UUID refinement).
+
+      Service: `RoleService.deleteRole`. Source:
+      `src/lib/trpc/routers/roles.ts:37-42`.
+    tags:
+      - Roles
+    operationId: trpc_roles_deleteRole
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Role id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: The deleted role (echoed back).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-roles.yaml#/Role
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all five procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - Every procedure in this router uses `authProcedure` (not
+    `authorizeProcedure`). In practice, **any authenticated user can call
+    `roles.createRole`, `roles.updateRole`, and `roles.deleteRole`**, which
+    gives them full control over the RBAC model. This is almost certainly
+    intentional for an admin-only section, but it's worth confirming with
+    the team that an additional `authorizeProcedure` is not required.
+  - `getRoleById` and `deleteRole` accept raw strings with no UUID
+    validation; malformed ids are passed through to the service.

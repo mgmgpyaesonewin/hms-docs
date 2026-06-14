@@ -1,0 +1,251 @@
+# docs/paths/trpc-default-setting.yaml
+# tRPC router: defaultSetting (src/lib/trpc/routers/default-setting.ts)
+#
+# "Singleton settings" router. The application treats the
+# `DefaultSetting` Prisma model as a single config row (one row
+# total, in practice). The model itself does NOT have a global
+# unique constraint — but `storeId` is `@unique`, so at most one
+# `DefaultSetting` row exists per referenced Store.
+#
+# Three procedures only: getDefaultSetting, createDefaultSetting,
+# updateDefaultSetting. No `count`, no `delete`, no `getById`.
+x-trpc-source: src/lib/trpc/routers/default-setting.ts
+x-trpc-router: defaultSetting
+
+/api/trpc/defaultSetting.getDefaultSetting:
+  post:
+    summary: Get the singleton default-setting row
+    description: |
+      Authenticated query. Returns the first `DefaultSetting` row
+      (`prisma.defaultSetting.findFirst({...})` with no order or
+      filter — there should be exactly one in practice).
+
+      Response includes joined `paymentMethod: { id, name }` and
+      `store: { id, name }` partial projections. The `settings`
+      JSON blob is returned as-is.
+
+      Returns `null` if no row exists — the client should treat
+      this as "not yet configured" and prompt for a
+      `createDefaultSetting` call.
+
+      Source: `src/lib/trpc/routers/default-setting.ts:15-17`.
+    tags:
+      - Default Setting
+    operationId: trpc_defaultSetting_getDefaultSetting
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          The default-setting row (full shape with `paymentMethod`
+          and `store` partial projections) or `null` if no row
+          exists.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-default-setting.yaml#/DefaultSettingFull
+                - type: object
+                  nullable: true
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/defaultSetting.createDefaultSetting:
+  post:
+    summary: Create the singleton default-setting row
+    description: |
+      Authenticated mutation. Creates a new `DefaultSetting` row.
+      Intended as a one-time bootstrap (since the application
+      treats this as a singleton).
+
+      Validation failures:
+        - Missing `rounding` / `paymentMethodId` / `storeId` → 400
+          (Zod `required_error`).
+        - `expiredAlertDuration < 1` → 400
+          (Zod `min(1, "Expired Alert Duration is required")`).
+        - `paymentMethodId` / `storeId` do not reference existing
+          rows → Prisma FK violation (P2003), surfaced as a generic
+          error.
+        - `storeId` already referenced by another `DefaultSetting`
+          row → Prisma unique-constraint violation (P2002), surfaced
+          as a generic error (`storeId` is `@unique`).
+        - Calling `create` a second time when a row already exists
+          for the same `storeId` → P2002.
+
+      Side effects:
+        - Calls `revalidatePath("/default-setting")`.
+        - Logs the creation via `activityLogger`
+          (description: "Created Default Setting", action: "Create",
+          entity: "Default Setting", entityId: result.id).
+
+      **TS type / runtime mismatch on the wire**: the input has
+      `displayTaxField` and `displayFOCField` as top-level fields,
+      but the repository destructures them out and writes them
+      inside the `settings` JSON blob. The returned response is
+      the **bare** `DefaultSetting` row (no `paymentMethod` /
+      `store` joins). Use `DefaultSettingBare` for the response
+      schema.
+
+      Source: `src/lib/trpc/routers/default-setting.ts:19-29`.
+    tags:
+      - Default Setting
+    operationId: trpc_defaultSetting_createDefaultSetting
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-default-setting.yaml#/CreateDefaultSettingInput
+    responses:
+      "200":
+        description: |
+          Created row. **Bare shape** — `paymentMethod` and `store`
+          are not populated. `displayTaxField` / `displayFOCField`
+          are inside the `settings` JSON blob, not top-level.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-default-setting.yaml#/DefaultSettingBare
+      "400":
+        description: Validation failure (Zod error) or FK violation.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/defaultSetting.updateDefaultSetting:
+  post:
+    summary: Update the singleton default-setting row
+    description: |
+      Authenticated mutation. Updates the `DefaultSetting` row
+      identified by `id`. The schema is
+      `createDefaultSettingSchema.merge({ id })` — same fields as
+      create plus an `id`.
+
+      Validation failures (same set as create):
+        - Zod errors for missing fields / `expiredAlertDuration < 1`.
+        - Prisma FK violations if `paymentMethodId` / `storeId`
+          do not reference existing rows.
+        - Prisma unique-constraint violation if the new `storeId`
+          is already in use by another `DefaultSetting` row.
+        - Prisma "record not found" (P2025) if `id` does not match
+          an existing row.
+
+      Side effects:
+        - Calls `revalidatePath("/default-setting")`.
+        - Logs the update via `activityLogger` (description: "Updated Default Setting",
+          action: "Update", entity: "Default Setting", entityId: result.id).
+
+      **TS type / runtime mismatch on the wire**: same as
+      `createDefaultSetting` — the response is the **bare** row.
+      `displayTaxField` / `displayFOCField` are inside `settings`.
+
+      Source: `src/lib/trpc/routers/default-setting.ts:31-40`.
+    tags:
+      - Default Setting
+    operationId: trpc_defaultSetting_updateDefaultSetting
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-default-setting.yaml#/UpdateDefaultSettingInput
+    responses:
+      "200":
+        description: |
+          Updated row. **Bare shape** — `paymentMethod` and `store`
+          are not populated. `displayTaxField` / `displayFOCField`
+          are inside the `settings` JSON blob.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-default-setting.yaml#/DefaultSettingBare
+      "400":
+        description: Validation failure (Zod error), FK violation, or unique-constraint violation.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all three procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - All three procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can read or change the system-wide
+    default settings (the rounding rule, the default payment method,
+    the default store, the alert duration, the UI flags). The
+    default setting affects **every** downstream billing/alert
+    flow, so this is privileged access that should likely be
+    gated behind an `authorizeProcedure` for the
+    `manage_default_settings` action.
+  - **TS type / runtime mismatch on the wire**: the input has
+    `displayTaxField` and `displayFOCField` as top-level fields,
+    but the repository destructures them out and stores them
+    inside the `settings` JSON blob
+    (default-setting-repository.ts:38, 51). The returned row has
+    no top-level `displayTaxField` / `displayFOCField`. The TS
+    type `DefaultSetting` (`type/index.ts:9-31`) reflects the
+    **input** shape for these fields (a slight lie) — the
+    `Settings` interface in the same file is "for type casting
+    with returned data from api endpoint", not a faithful
+    description of the on-the-wire row.
+  - **Schema/state drift between Prisma and the application**:
+      - `billTypeId` and `billType` are in the Prisma model
+        (nullable, with FK) but **commented out** in both Zod
+        schemas and the TS types. Looks like an in-progress
+        feature.
+      - `version` is in the Prisma model (`String?`) but missing
+        from the TS type and Zod schema entirely.
+      - `createdById` / `updatedById` are NOT in the Prisma model.
+        Activity logging uses `ctx.user.id` for the log entry but
+        does not record it on the row. The schema is unique in
+        the application in this regard — every other audited
+        model has these columns.
+      - `settings` is `Json` (not nullable) in Prisma, but
+        `JsonValue | null` in the TS type.
+  - **No unique constraint to enforce singleton at the DB level**:
+    `storeId` is `@unique`, which means a single store can only
+    have one `DefaultSetting`, but multiple `DefaultSetting` rows
+    can exist if they reference different stores. The
+    `getDefaultSetting` query uses `findFirst` with no order, so
+    if multiple rows ever exist, the response is arbitrary. The
+    application-level intent is clearly a singleton.
+  - **FK constraints on `paymentMethod` and `store` use
+    `onDelete: Cascade`** — deleting a payment method or a store
+    will also delete the `DefaultSetting` row. This is why
+    `paymentMethods.deletePaymentMethod` checks
+    `DefaultSetting.paymentMethodId` before allowing the
+    delete (see `trpc-payment-methods`).
+  - **Module-level singleton service**: the router instantiates
+    `defaultDefaultRepository` and `defaultSettingService` at
+    module scope (default-setting.ts:9-12), a deviation from
+    other routers that instantiate inside each procedure.
+    Effect: a single service instance lives in module memory
+    for the process lifetime. Slightly more efficient (no
+    per-request allocation) but holds a reference to `prisma`
+    (which is the shared singleton — see `src/lib/db.ts` — so
+    no leak). Acceptable pattern.
+  - **Activity logging is complete** for both mutating
+    operations. No half-finished call sites (unlike
+    `trpc-categories`).

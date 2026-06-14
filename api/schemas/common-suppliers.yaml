@@ -1,0 +1,229 @@
+# docs/schemas/common-suppliers.yaml
+# Schemas for the common-suppliers sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/suppliers
+# Source: src/app/api/(common)/suppliers/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetSuppliersQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        querySupplierSchema }`. The schema accepts
+        `search`, `start`, `end`, `supplierType`
+        (native enum: `MANUFACTURER` / `DISTRIBUTOR`),
+        `status` (native enum: `ACTIVE` / `INACTIVE`),
+        plus the base pagination fields. Post-transform:
+        `{ page, limit, offset, search?, start?, end?,
+        supplierType?, status? }`.
+
+        The repository's `buildWhereFilter`
+        interprets all five:
+          - `search` — case-insensitive substring
+            match against `supplierId`,
+            `companyName`, `phoneNo`, or `email`
+            (4-branch `OR`,
+            supplier-repository.ts:207-222).
+          - `start` / `end` — `createdAt` range.
+            **Subtle inconsistency**: the bound is
+            `gte: query.start, lt: query.end` — the
+            end is `lt` (exclusive), not `lte`
+            (inclusive) as in
+            [[common-bill-types]] and
+            [[common-anesthesia-type]]. A
+            supplier created at exactly
+            `end` will be excluded from the
+            filtered count.
+          - `supplierType` — exact match.
+          - `status` — exact match.
+
+        Repository ordering: `createdAt: desc`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetSuppliersResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/suppliers`. The
+    repository returns
+    `Promise<{ suppliers: Supplier[]; count: number }>`
+    (supplier-repository.ts:32-68) and the route wraps
+    it in
+    `{ success: true, result, message: "", error: "" }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [suppliers, count]
+      properties:
+        suppliers:
+          type: array
+          items:
+            $ref: ./common-suppliers.yaml#/Supplier
+        count:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Supplier:
+  type: object
+  description: |
+    Canonical supplier shape. TS type `Supplier` from
+    `src/app/(dashboard)/common/set-up/suppliers/features/types/index.ts:26-49`.
+
+    Maps to the Prisma `Supplier` model
+    (prisma/schema.prisma). Three columns are
+    `@unique`: `companyName`, `phoneNo`, `email`
+    (the email column is `String?` but still has
+    `@unique` — a NULL is allowed because
+    Postgres treats NULLs as distinct in unique
+    constraints, but two non-NULL emails cannot
+    collide).
+
+    The list endpoint uses
+    `include: { createdBy: { select: { fullName:
+    true, username: true } }, updatedBy: { select: {
+    fullName: true, username: true } } }` — a
+    **2-field** projection (no `id`). This is
+    narrower than the canonical 3-field `Publisher`
+    (which includes `id`) and means the response
+    payload has no way to look up the creator /
+    updater by id without an extra round trip.
+
+    The list endpoint does **NOT** include the
+    `contactPersons` / `paymentInfos` child
+    relations — those are only included by
+    `getSupplierById` (the per-supplier detail
+    endpoint, also reached via the
+    `supplier-service`).
+  required:
+    - id
+    - supplierId
+    - companyName
+    - phoneNo
+    - supplierType
+    - status
+    - createdById
+    - createdBy
+    - updatedById
+    - updatedBy
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    supplierId:
+      type: string
+      description: |
+        Business identifier, `@unique`. Auto-generated
+        by the service as `SID-NNN...` via
+        `generateCustomId("SID", lastSupplier?.
+        supplierId)` (supplier-service.ts:37). The
+        exact format depends on
+        `generateCustomId`'s padding policy; first
+        supplier's id is `SID-001` (or similar).
+        The repository's search filter matches
+        against `supplierId` substring.
+    companyName:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-name
+        check enforced by the service via
+        `getSupplierByCompanyName`.
+    phoneNo:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-phone
+        check enforced by the service via
+        `getSupplierByPhoneNo`. The Prisma column is
+        unconstrained `String` — no format
+        validation, so a "phone number" can be
+        anything.
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: |
+        `@unique` in the Prisma model (`String?`).
+        The `String?` + `@unique` combo means a
+        supplier can omit email (`null`) and the
+        unique constraint is satisfied (Postgres
+        treats NULLs as distinct), but two
+        suppliers with the same non-null email
+        will fail the constraint.
+    address:
+      type: string
+      nullable: true
+    supplierType:
+      type: string
+      enum: [MANUFACTURER, DISTRIBUTOR]
+      description: |
+        Native enum. The create / update schemas use
+        `z.nativeEnum(supplierType)` (which is the
+        `as const` object `supplierType = {
+        MANUFACTURER: "MANUFACTURER", DISTRIBUTOR:
+        "DISTRIBUTOR" }`).
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+      description: |
+        Native enum. Default `ACTIVE` at the DB
+        level. The service's create / update paths
+        coerce a truthy `data.status` to
+        `supplierStatus.ACTIVE` and a falsy value
+        to `supplierStatus.INACTIVE` — the schema
+        only declares `z.boolean()` for the
+        incoming value, and the service decides
+        the string. A string `"INACTIVE"` would be
+        truthy and end up stored as `ACTIVE` — a
+        surprising coercion worth flagging.
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+    createdBy:
+      type: object
+      description: |
+        2-field projection (`fullName`, `username`).
+        **Does not include `id`**, unlike the
+        canonical 3-field `Publisher`.
+      required: [fullName, username]
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+    updatedBy:
+      type: object
+      required: [fullName, username]
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

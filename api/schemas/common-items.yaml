@@ -1,0 +1,366 @@
+# docs/schemas/common-items.yaml
+# Schemas for the common-items sub-area of the
+# `common` REST module. Two endpoints:
+#   GET  /api/items
+#   GET  /api/items/[id]
+# Source: src/app/api/(common)/items/route.ts
+# Source: src/app/api/(common)/items/[id]/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetItemsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getItemsSchema }`. The schema is
+        `z.object({ categoryId, subCategoryId,
+        groupId, status: z.nativeEnum(itemStatus),
+        allergy: z.nativeEnum(illergyStatus) }).
+        merge(baseQuerySchema).transform(transformPaginationSchema)`.
+
+        The repository's `findItemsAndCount`
+        interprets:
+          - `categoryId` — exact match.
+          - `subCategoryId` — exact match.
+          - `groupId` — mapped to
+            `where.sellingPriceGroupId` (the
+            query-param name is `groupId` but the
+            underlying field is `sellingPriceGroupId`).
+          - `status` — `nativeEnum(itemStatus)`:
+            `ACTIVE` / `INACTIVE`.
+          - `allergy` — `nativeEnum(illergyStatus)`:
+            `ALLERGIC` / `NON_ALLERGIC`. The schema
+            constant is named `illergyStatus` (typo)
+            but the DB column is `allergy`.
+          - `search` — three-branch `OR` with
+            `startsWith` (case-insensitive) on
+            `name`, `itemId`, `generic`.
+          - `start` / `end` — `createdAt` range,
+            but only applied when **both** are
+            truthy (items-repository.ts:55-60).
+        Ordering: `createdAt: desc`. The `count`
+        shares the same `where`, so `totalCount`
+        is the filtered total.
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        subCategoryId:
+          type: string
+          format: uuid
+        groupId:
+          type: string
+          format: uuid
+          description: |
+            Maps to `where.sellingPriceGroupId`.
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        allergy:
+          type: string
+          enum: [ALLERGIC, NON_ALLERGIC]
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetItemsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/items`. The
+    repository returns
+    `Promise<{ items: Item[]; totalCount: number }>`
+    (items-repository.ts:14-101) and the route wraps
+    it in
+    `{ success: true, result, message: "", error: null }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: ./common-items.yaml#/Item
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetItemByIdResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/items/[id]`. The
+    repository's `findItemById` returns the row (or
+    `null`); the route wraps it in
+    `{ success: true, result, message: "", error: null }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-items.yaml#/Item
+        - type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Item:
+  type: object
+  description: |
+    Canonical item shape. TS type `Item` from
+    `src/app/(dashboard)/common/items/features/types/index.ts:22-58`.
+
+    Maps to the Prisma `Item` model
+    (prisma/schema.prisma, @@map("items")). Two
+    `@unique` columns: `name` and `itemId`. Notable
+    columns:
+      - `taxValue` — `Decimal`, **coerced to
+        `Number`** in the response. In practice
+        this is a percentage (0–100), so IEEE-754
+        precision is fine.
+      - `status` — `ItemStatus` enum
+        (`ACTIVE`/`INACTIVE`), defaults to
+        `ACTIVE` at the DB level.
+      - `allergy` — `AllergyStatus` enum
+        (`ALLERGIC`/`NON_ALLERGIC`), defaults to
+        `NON_ALLERGIC` at the DB level. The
+        Zod-side constant is `illergyStatus`
+        (typo).
+      - `itemType` — nullable `ItemType` enum
+        with 13 values (TABLET, INJECTION, LPO,
+        DISPOSABLE, SUTURE, POWDER, INHALER,
+        CREAM, OINTMENT,
+        EXTERNAL_APPLICATION, SUSPENSION, LIQUID).
+        No DB-level default.
+      - `itemId` — business identifier, sequential
+        (`ITEM-NNN`), generated by
+        `generateCustomId("ITEM-", lastItem?.itemId)`.
+      - `subCategoryId` — nullable, so sub-category
+        relation is optional.
+      - `itemUsedByDepartmentId` — nullable, so
+        department relation is optional.
+      - `sellingPriceGroupId` / `supplierId` —
+        nullable, so those relations are optional.
+      - `lastMaintainDate` / `nextMaintenanceDate`
+        — nullable `DateTime`s.
+      - `serialNumber`, `brandName`,
+        `manufactureName`, `warrantyPeriod` —
+        all nullable strings.
+      - `reorderQty` — nullable `Int`.
+
+    The list and detail endpoints' `include`
+    joins are full-row (`category: true`,
+    `subCategory: true`, `supplier: true`,
+    `unit: true`, `itemUsedByDepartment: true`,
+    `sellingPriceGroup: true`), even though the
+    TS type narrows several of them via
+    `Pick<...>`. See security notes for the
+    forward-compat hazard.
+  required:
+    - id
+    - itemId
+    - name
+    - generic
+    - unitId
+    - categoryId
+    - taxValue
+    - status
+    - allergy
+    - minQty
+    - maxQty
+    - storageLocation
+    - storageMethod
+    - createdBy
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    itemId:
+      type: string
+      description: |
+        Business identifier, `@unique`. Sequential
+        `ITEM-NNN` via `generateCustomId`.
+    name:
+      type: string
+      description: |
+        `@unique`. Case-insensitive equality is
+        used by `findDuplicateItem` (`equals:
+        name, mode: "insensitive"`).
+    generic:
+      type: string
+      description: |
+        Generic name. Not `@unique`; multiple items
+        can share a generic (e.g. multiple brands
+        of the same salt). The `search` filter
+        matches the `generic` column.
+    unitId:
+      type: string
+      format: uuid
+    unit:
+      type: object
+      description: |
+        Full `Unit` row (the repository's
+        `include: { unit: true }` returns the full
+        row). The TS type narrows to
+        `Pick<Unit, "id" | "name" | "abbreviation">`
+        — see security notes.
+    categoryId:
+      type: string
+      format: uuid
+    category:
+      type: object
+      description: |
+        Full `Category` row. TS type asserts
+        `Pick<Category, "id" | "name">`.
+    subCategoryId:
+      type: string
+      format: uuid
+      nullable: true
+    subCategory:
+      type: object
+      nullable: true
+      description: |
+        Full `Category` row (when present). TS
+        type asserts
+        `Pick<Category, "id" | "name">`.
+    itemType:
+      type: string
+      enum:
+        - TABLET
+        - INJECTION
+        - LPO
+        - DISPOSABLE
+        - SUTURE
+        - POWDER
+        - INHALER
+        - CREAM
+        - OINTMENT
+        - EXTERNAL_APPLICATION
+        - SUSPENSION
+        - LIQUID
+      nullable: true
+    manufactureName:
+      type: string
+      nullable: true
+    taxValue:
+      type: number
+      format: double
+      description: |
+        Original column is `Decimal`. Repository
+        coerces with `Number(item.taxValue)`.
+        In practice a percentage (0–100).
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+      description: |
+        `ItemStatus` enum. Default `ACTIVE` at the
+        DB level. The `updateItem` service maps
+        `isActive` (boolean) to this field:
+        `status: isActive ? "ACTIVE" : "INACTIVE"`.
+    allergy:
+      type: string
+      enum: [ALLERGIC, NON_ALLERGIC]
+      description: |
+        `AllergyStatus` enum. Default
+        `NON_ALLERGIC` at the DB level. The
+        `updateItem` service maps `isAllergy`
+        (boolean) to this field:
+        `allergy: isAllergy ? "ALLERGIC" :
+        "NON_ALLERGIC"`.
+    minQty:
+      type: integer
+      minimum: 0
+    maxQty:
+      type: integer
+      minimum: 0
+    reorderQty:
+      type: integer
+      minimum: 0
+      nullable: true
+    sellingPriceGroupId:
+      type: string
+      format: uuid
+      nullable: true
+    sellingPriceGroup:
+      type: object
+      nullable: true
+      description: |
+        Full `SellingPriceGroup` row (no
+        projection). Carries `local`, `foreigner`,
+        `insurance`, `government` percentage fields
+        — see [[common-selling-price-groups]].
+    supplierId:
+      type: string
+      format: uuid
+      nullable: true
+    supplier:
+      type: object
+      nullable: true
+      description: |
+        Full `Supplier` row (no projection). TS
+        type asserts
+        `Pick<Supplier, "id" | "companyName">` —
+        see security notes.
+    storageLocation:
+      type: string
+    storageMethod:
+      type: string
+    warrantyPeriod:
+      type: string
+      nullable: true
+    lastMaintainDate:
+      type: string
+      format: date-time
+      nullable: true
+    nextMaintenanceDate:
+      type: string
+      format: date-time
+      nullable: true
+    itemUsedByDepartmentId:
+      type: string
+      format: uuid
+      nullable: true
+    itemUsedByDepartment:
+      type: object
+      nullable: true
+      description: |
+        Full `Department` row (no projection). TS
+        type asserts
+        `Pick<Department, "id" | "name">`.
+    serialNumber:
+      type: string
+      nullable: true
+    brandName:
+      type: string
+      nullable: true
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

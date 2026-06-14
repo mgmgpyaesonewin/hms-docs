@@ -1,0 +1,155 @@
+# docs/schemas/common-service-sub-category.yaml
+# Schemas for the common-service-sub-category
+# sub-area of the `common` REST module. Single
+# endpoint:
+#   GET /api/service-sub-category
+# Source: src/app/api/(common)/service-sub-category/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetServiceSubCategoryQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getServiceSubCategorySchema }`. The schema is
+        `z.object({ categoryId, departmentId }).merge(
+        baseQuerySchema).transform(transformPaginationSchema)`,
+        so the post-transform shape is
+        `{ page, limit, offset, search?, start?, end?,
+        categoryId?, departmentId? }`.
+
+        The repository's `findServiceSubCategory`
+        interprets:
+          - `search` — case-insensitive substring
+            match on `name` **or** the parent
+            `serviceCategory.name`
+            (service-sub-category-repository.ts:41-62).
+          - `start` / `end` — `createdAt` range
+            (`gte` / `lte`).
+          - `categoryId` — `where.serviceCategoryId
+            = query.categoryId` (wired through).
+          - `departmentId` — accepted but **not
+            wired** into the `where` clause. Silently
+            dropped (same dead filter as
+            [[common-service-category]]).
+      properties:
+        categoryId:
+          type: string
+          description: |
+            Filters to sub-categories whose
+            `serviceCategoryId` equals this value.
+            Wired through to
+            `where.serviceCategoryId`.
+        departmentId:
+          type: string
+          description: |
+            Accepted but **not used** by the
+            repository. Silently dropped.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetServiceSubCategoryResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/service-sub-category`.
+    The repository returns
+    `Promise<{ serviceSubCategory: ServiceSubCategory[]; totalCount: number }>`
+    (service-sub-category-repository.ts:38-90) and the
+    route wraps it in
+    `{ success: true, result, error: "" }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [serviceSubCategory, totalCount]
+      properties:
+        serviceSubCategory:
+          type: array
+          items:
+            $ref: ./common-service-sub-category.yaml#/ServiceSubCategory
+        totalCount:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+ServiceSubCategory:
+  type: object
+  description: |
+    Canonical service-sub-category shape. TS type
+    `ServiceSubCategory` from
+    `src/app/(dashboard)/shared/opd/types/service-sub-category.types.ts:1-21`.
+
+    Maps to the Prisma `ServiceSubCategory` model
+    (prisma/schema.prisma, @@map("service_sub_categories")).
+    The list endpoint's repository uses a shared
+    `serviceSubCategoryValidator` (a
+    `Prisma.validator<...>()({ include: { createdBy,
+    updatedBy, serviceCategory: { select: { id: true,
+    name: true } } }})`). The `createdBy` / `updatedBy`
+    are the canonical 3-field `Publisher` projection;
+    `serviceCategory` is a 2-field projection (id +
+    name). The Prisma relation declares
+    `onDelete: Cascade` on `serviceCategory`, so
+    deleting a parent `ServiceCategory` removes its
+    sub-categories automatically.
+
+    Like the parent
+    [[common-service-category]] endpoint, the
+    `@@index([name])` is redundant given `name
+    @unique`.
+  required:
+    - id
+    - name
+    - serviceCategoryId
+    - serviceCategory
+    - createdBy
+    - createdAt
+    - updatedBy
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model (with a
+        redundant `@@index([name])`).
+    serviceCategoryId:
+      type: string
+      format: uuid
+    serviceCategory:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

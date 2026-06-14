@@ -1,0 +1,1283 @@
+# docs/schemas/emr.yaml
+# Schemas for the EMR (Electronic
+# Medical Records) REST module. 60
+# read-only endpoints across 5 path
+# files (emr-top-level, emr-opd,
+# emr-ed, emr-daycare, emr-ipd).
+# All return
+# `{ success, result, message: "",
+# error: null }` envelopes.
+#
+# Architectural notes:
+#   1. **Service reuse**: the entire
+#      OPD / ED / Daycare sub-tree is
+#      powered by a single class
+#      `OPDEmrService` constructed 9
+#      different ways (with different
+#      `moduleType` configs). The IPD
+#      sub-tree uses a separate
+#      `IPDEmrService` class (3
+#      configs). The top-level
+#      `(emr)/emr/...` patient tabs
+#      use a third service,
+#      `PatientEmrService`.
+#   2. **No RBAC** on any of the 60
+#      endpoints — all use
+#      `auth: { required: true }`
+#      only. EMR data is clinically
+#      sensitive (vital signs, doctor
+#      notes, prescriptions,
+#      investigations) so RBAC
+#      gating is worth confirming
+#      with the team.
+#   3. **No write operations**. The
+#      EMR REST surface is read-only.
+#      Create / update / delete all
+#      live on `OPDEmrService` /
+#      `IPDEmrService` and are reached
+#      via `next-safe-action` server
+#      actions invoked from RSC —
+#      they are NOT part of this
+#      documentation set.
+
+# =============================================================================
+# Generic envelope
+# =============================================================================
+
+EmrResponse:
+  type: object
+  description: |
+    Common envelope for ALL 60 EMR
+    endpoints. Every successful GET
+    returns
+    `{ success: true, result, message:
+    "", error: null }`. On error the
+    `enhancedApiHandler` populates
+    `error` and a non-2xx status code
+    is returned.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      description: |
+        Endpoint-specific. See the
+        `Get*Response` schemas below
+        for the concrete shapes.
+      oneOf:
+        - type: object
+          additionalProperties: true
+        - type: array
+          items: {}
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+# =============================================================================
+# Top-level (emr)/emr/* patient tabs
+# =============================================================================
+
+GetPatientProfileTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-profile/{id}`.
+    `result` is the
+    `PatientProfileTabData` object
+    built by
+    `PatientEmrService.getPatientProfileTabData`:
+    a single "snapshot" with the
+    latest vital sign across IPD /
+    OPD / ED, the upcoming-or-latest
+    appointment, the latest
+    referral name, and the
+    latest-visit timestamp.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientProfileTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientProfileTabData:
+  type: object
+  description: |
+    Single-snapshot profile data
+    for a patient. See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientProfileTabData`.
+  required:
+    - referralName
+    - latestVisitedAt
+    - displayedAppointmentType
+    - displayedAppointment
+    - latestVitalSign
+  properties:
+    referralName: { type: string, example: "-" }
+    latestVisitedAt: { type: string, format: date-time, nullable: true }
+    displayedAppointmentType:
+      type: string
+      enum: [UPCOMING, LATEST]
+      nullable: true
+    displayedAppointment:
+      $ref: ../schemas/emr.yaml#/PatientProfileTabAppointment
+      nullable: true
+    latestVitalSign:
+      $ref: ../schemas/emr.yaml#/PatientProfileTabVitalSign
+      nullable: true
+
+PatientProfileTabAppointment:
+  type: object
+  description: |
+    The "displayed" appointment
+    (upcoming if any, else latest).
+    See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientProfileTabAppointment`.
+  properties:
+    appointmentId: { type: string, nullable: true }
+    appointmentDate: { type: string, format: date-time, nullable: true }
+    start: { type: string, format: date-time, nullable: true }
+    end: { type: string, format: date-time, nullable: true }
+    status:
+      type: string
+      enum: [SCHEDULED, CONFIRMED, CHECKED_IN, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW]
+      nullable: true
+    doctor:
+      type: object
+      nullable: true
+      properties:
+        title: { type: string, nullable: true }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+
+PatientProfileTabVitalSign:
+  type: object
+  description: |
+    A single vital-sign record in
+    the "profile tab" format
+    (source + encounterId + 12
+    numeric fields). See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientProfileTabVitalSign`.
+  required:
+    - source
+    - encounterId
+    - recordedAt
+  properties:
+    source:
+      type: string
+      enum: [IPD, OPD, ED]
+    encounterId: { type: string, example: "-" }
+    recordedAt: { type: string, format: date-time }
+    systolicBloodPressure: { type: number, nullable: true }
+    diastolicBloodPressure: { type: number, nullable: true }
+    bodyMeasurementUnit:
+      type: string
+      enum: [METRIC, IMPERIAL]
+      nullable: true
+    weight: { type: number, nullable: true }
+    height: { type: number, nullable: true }
+    bodyTemperature: { type: number, nullable: true }
+    bodyTemperatureUnit:
+      type: string
+      enum: [CELSIUS, FAHRENHEIT]
+      nullable: true
+    spO2: { type: number, nullable: true }
+    heartRate: { type: number, nullable: true }
+    respiratoryRate: { type: number, nullable: true }
+    bpMeasuredTime:
+      type: string
+      enum: [SITTING, STANDING, LYING, AFTER_REST]
+      nullable: true
+
+GetPatientVitalSignsTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-vital-signs/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientVitalSignsTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientVitalSignsTabData:
+  type: object
+  description: |
+    Vital-signs tab payload
+    (merged, sorted desc, paginated
+    in JS). See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientVitalSignsTabData`.
+  required: [vitalSigns, totalCount]
+  properties:
+    vitalSigns:
+      type: array
+      items:
+        allOf:
+          - $ref: ../schemas/emr.yaml#/PatientProfileTabVitalSign
+          - type: object
+            required: [id]
+            properties:
+              id: { type: string, format: uuid }
+    totalCount: { type: integer, minimum: 0 }
+
+GetPatientDoctorNotesTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-doctor-notes/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientDoctorNotesTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientDoctorNotesTabData:
+  type: object
+  description: |
+    Doctor-notes tab payload
+    (merged across IPD / OPD / ED).
+  required: [doctorNotes, totalCount]
+  properties:
+    doctorNotes:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientDoctorNoteRecord
+    totalCount: { type: integer, minimum: 0 }
+
+PatientDoctorNoteRecord:
+  type: object
+  description: |
+    One merged doctor note. See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientDoctorNoteRecord`.
+  required: [id, source, encounterId, recordedAt, doctorName]
+  properties:
+    id: { type: string, format: uuid }
+    source:
+      type: string
+      enum: [IPD, OPD, ED]
+    encounterId: { type: string, example: "-" }
+    recordedAt: { type: string, format: date-time }
+    doctorName: { type: string, example: "-" }
+    note: { type: string, nullable: true }
+
+GetPatientNurseNotesTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-nurse-notes/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientNurseNotesTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientNurseNotesTabData:
+  type: object
+  required: [nurseNotes, totalCount]
+  properties:
+    nurseNotes:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientNurseNoteRecord
+    totalCount: { type: integer, minimum: 0 }
+
+PatientNurseNoteRecord:
+  type: object
+  description: |
+    One merged nurse note. See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientNurseNoteRecord`.
+  required: [id, source, encounterId, recordedAt, nurseName]
+  properties:
+    id: { type: string, format: uuid }
+    source:
+      type: string
+      enum: [IPD, OPD, ED]
+    encounterId: { type: string, example: "-" }
+    recordedAt: { type: string, format: date-time }
+    nurseName: { type: string, example: "-" }
+    note: { type: string, nullable: true }
+
+GetPatientTreatmentPrescriptionsTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-treatment-prescriptions/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientTreatmentPrescriptionTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientTreatmentPrescriptionTabData:
+  type: object
+  description: |
+    Prescriptions tab payload. See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientTreatmentPrescriptionTabData`.
+  required: [prescriptions, totalCount]
+  properties:
+    prescriptions:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientTreatmentPrescriptionRecord
+    totalCount: { type: integer, minimum: 0 }
+
+PatientTreatmentPrescriptionRecord:
+  type: object
+  description: |
+    One prescription with line
+    items. `morningDosage` /
+    `noonDosage` / `eveningDosage`
+    / `nightDosage` are
+    **stringified decimals** (the
+    `decimalToString` helper in
+    `PatientEmrService` ensures
+    they round-trip as strings
+    rather than JS `number` to
+    avoid float drift).
+  required:
+    - id
+    - encounterId
+    - recordedAt
+    - doctorName
+    - totalItems
+    - items
+  properties:
+    id: { type: string, format: uuid }
+    encounterId: { type: string, example: "-" }
+    source:
+      type: string
+      enum: [IPD, OPD, ED]
+      nullable: true
+    recordedAt: { type: string, format: date-time }
+    doctorName: { type: string, example: "-" }
+    remark: { type: string, nullable: true }
+    totalItems: { type: integer, minimum: 0 }
+    items:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientTreatmentPrescriptionItemRecord
+
+PatientTreatmentPrescriptionItemRecord:
+  type: object
+  description: |
+    One prescription line item.
+    See
+    `src/app/(dashboard)/shared/emr/types/patient-emr.type.ts#/PatientTreatmentPrescriptionItemRecord`.
+  required: [id, brandName, duration, isActive]
+  properties:
+    id: { type: string, format: uuid }
+    brandName: { type: string }
+    itemCode: { type: string, nullable: true }
+    generic: { type: string, nullable: true }
+    unit: { type: string, nullable: true }
+    dosageForm: { type: string, nullable: true }
+    morningDosage: { type: string, nullable: true }
+    noonDosage: { type: string, nullable: true }
+    eveningDosage: { type: string, nullable: true }
+    nightDosage: { type: string, nullable: true }
+    duration: { type: integer, minimum: 0 }
+    route: { type: string, nullable: true }
+    remark: { type: string, nullable: true }
+    isActive: { type: boolean }
+
+GetPatientTreatmentProceduresTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-treatment-procedures/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientTreatmentProcedureTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientTreatmentProcedureTabData:
+  type: object
+  description: |
+    Treatment-procedures tab
+    payload (merged OT + HD +
+    CATHLAB).
+  required: [procedures, totalCount]
+  properties:
+    procedures:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientTreatmentProcedureRecord
+    totalCount: { type: integer, minimum: 0 }
+
+PatientTreatmentProcedureRecord:
+  type: object
+  description: |
+    One treatment-procedure record
+    (OT, HD, or CATHLAB). Each row
+    carries exactly one populated
+    summary — `otSummary`,
+    `hdSummary`, or
+    `cathLabSummary` — the other
+    two are `null`. `status` is
+    a string union of the
+    underlying request-status enum
+    (`OTStatus | HDRequestStatus
+    | CathRequestStatus | string`).
+  required:
+    - id
+    - module
+    - encounterId
+    - recordedAt
+    - status
+  properties:
+    id: { type: string, format: uuid }
+    module:
+      type: string
+      enum: [OT, HD, CATHLAB]
+    source:
+      type: string
+      enum: [IPD, OPD, ED]
+      nullable: true
+    encounterId: { type: string, example: "-" }
+    recordedAt: { type: string, format: date-time }
+    status: { type: string }
+    billedContext:
+      type: object
+      nullable: true
+      properties:
+        proxyBillId: { type: string, format: uuid }
+        appointmentId: { type: string, nullable: true }
+        patientType: { type: string, nullable: true }
+    otSummary:
+      type: object
+      nullable: true
+      properties:
+        operationDateTime: { type: string, format: date-time, nullable: true }
+        surgeryType: { type: string, nullable: true }
+        surgeonName: { type: string, nullable: true }
+        urgentOrElective: { type: string, nullable: true }
+        anesthesiaType: { type: string, nullable: true }
+    hdSummary:
+      type: object
+      nullable: true
+      properties:
+        hdDateTime: { type: string, format: date-time, nullable: true }
+        diagnosis: { type: string, nullable: true }
+        bcr: { type: string, nullable: true }
+        anf: { type: string, nullable: true }
+        writtenBy: { type: string, nullable: true }
+        approvedBy: { type: string, nullable: true }
+        urgency: { type: string, nullable: true }
+    cathLabSummary:
+      type: object
+      nullable: true
+      properties:
+        operationDateTime: { type: string, format: date-time, nullable: true }
+        operationType: { type: string, nullable: true }
+        cardiologistName: { type: string, nullable: true }
+        assistantDoctorName: { type: string, nullable: true }
+
+GetPatientInvestigationTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-investigation/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientInvestigationTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientInvestigationTabData:
+  type: object
+  required: [investigations, totalCount]
+  properties:
+    investigations:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientInvestigationRecord
+    totalCount: { type: integer, minimum: 0 }
+
+PatientInvestigationRecord:
+  type: object
+  description: |
+    One investigation record
+    (either a `SERVICE_REQUEST`
+    variant for OPD/ED/IPD lab +
+    imaging, or an `ENDO` variant
+    for endoscopy). Discriminated
+    by `kind`. `reportAction`
+    points to the linked
+    `labReportId`,
+    `imagingServiceId`, or
+    `endoReportId` (or `null` if
+    the upstream report is missing
+    or not yet verified).
+  required:
+    - id
+    - kind
+    - module
+    - source
+    - encounterId
+    - recordedAt
+  properties:
+    id: { type: string, format: uuid }
+    kind:
+      type: string
+      enum: [SERVICE_REQUEST, ENDO]
+    module:
+      type: string
+      enum: [LAB, XRAY, CT, MRI, ULTRASOUND, ECG, ECHO, ENDO]
+    source:
+      type: string
+      enum: [IPD, OPD, ED]
+    encounterId: { type: string, example: "-" }
+    recordedAt: { type: string, format: date-time }
+    referralDisplay: { type: string, nullable: true }
+    serviceRows:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientInvestigationServiceRowRecord
+    endoSummary:
+      type: object
+      nullable: true
+      properties:
+        operationDateTime: { type: string, format: date-time, nullable: true }
+        surgeonName: { type: string, nullable: true }
+        operationType: { type: string, nullable: true }
+        status: { type: string }
+        reportAction:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [type, endoReportId]
+              properties:
+                type: { type: string, enum: [ENDO] }
+                endoReportId: { type: string, format: uuid }
+
+PatientInvestigationServiceRowRecord:
+  type: object
+  description: |
+    One row in a `serviceRows` array
+    — a service-line inside a
+    `SERVICE_REQUEST`-kind
+    investigation. `status` is a
+    free-form status string from
+    the upstream service (lab or
+    imaging).
+  required: [id, serviceName, qty]
+  properties:
+    id: { type: string, format: uuid }
+    serviceName: { type: string }
+    priority: { type: string, nullable: true }
+    doctorName: { type: string, nullable: true }
+    qty: { type: number, nullable: true }
+    status: { type: string, nullable: true }
+    reportAction:
+      oneOf:
+        - type: "null"
+        - type: object
+          required: [type, labReportId]
+          properties:
+            type: { type: string, enum: [LAB] }
+            labReportId: { type: string, format: uuid }
+        - type: object
+          required: [type, imagingListId, imagingServiceId, module]
+          properties:
+            type: { type: string, enum: [IMAGING] }
+            imagingListId: { type: string, format: uuid }
+            imagingServiceId: { type: string, format: uuid }
+            module: { type: string }
+
+GetPatientDischargeSummaryTabResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/patient-discharge-summary/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/PatientDischargeSummaryTabData
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+PatientDischargeSummaryTabData:
+  type: object
+  required: [discharges, totalCount]
+  properties:
+    discharges:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/PatientDischargeSummaryRecord
+    totalCount: { type: integer, minimum: 0 }
+
+PatientDischargeSummaryRecord:
+  type: object
+  required: [id, encounterId, intimationAt, reason]
+  properties:
+    id: { type: string, format: uuid }
+    encounterId: { type: string, example: "-" }
+    intimationAt: { type: string, format: date-time }
+    reason: { type: string }
+
+# =============================================================================
+# Clinical-document activity log
+# =============================================================================
+
+GetEmrClinicalDocumentActivitiesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/emr/clinical-documents/{id}/activities`
+    and
+    `GET /api/ipd-emr/clinical-documents/{id}/activities`.
+    `result` is the list of
+    activity-log rows for the
+    clinical document (typically
+    `{ action, userId, userName,
+    createdAt, remark }` shape,
+    returned verbatim by
+    `EmrClinicalDocumentRepository
+    .getClinicalDocumentActivities`
+    and
+    `IpdEmrClinicalDocumentRepository
+    .getClinicalDocumentActivities`).
+    Not formally typed at the Zod
+    level.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+# =============================================================================
+# OPD / ED / Daycare probes
+# =============================================================================
+
+GetAppointmentsForOpdEmrResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/appointments-for-opd-emr`,
+    `GET /api/appointments-for-ed-emr`,
+    and
+    `GET /api/appointments-for-daycare-emr`.
+    `result` is whatever
+    `OPDEmrRepository
+    .getAppointmentForOpdEmr`
+    returns — typically a list of
+    `Appointment` rows with joined
+    `doctor`, `appointmentType`,
+    `user`, etc. PII exposure.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetPatientsForOpdEmrResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/patients-for-opd-emr`,
+    `GET /api/patients-for-ed-emr`,
+    and
+    `GET /api/patients-for-daycare-emr`.
+    PII-heavy (name, phone, nrcNo,
+    township, region, etc.). The
+    schema is the same as the OPD
+    patient list
+    (`getPatientsSchema`).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+# =============================================================================
+# OPD / ED / Daycare sub-EMR list & detail
+# =============================================================================
+
+GetOpdEmrListResponse:
+  type: object
+  description: |
+    Response shape of all 8 list
+    endpoints under the OPD / ED /
+    Daycare sub-trees:
+      - `GET /api/opd-emr`
+      - `GET /api/endo-opd-emr`
+      - `GET /api/hd-opd-emr`
+      - `GET /api/ot-opd-emr`
+      - `GET /api/ed-emr`
+      - `GET /api/endo-ed-emr`
+      - `GET /api/hd-ed-emr`
+      - `GET /api/ot-ed-emr`
+      - `GET /api/daycare-emr`
+
+    `result` is a list of `OPDEMR`
+    rows projected via
+    `opdEmrValidator` (which
+    includes the `createdBy` /
+    `updatedBy` /
+    `{id, fullName, username}`
+    publisher projection, plus
+    `patient.{id, name, patientId,
+    dateofBirth, gender,
+    patientType, patientGroup,
+    guardianName}`,
+    `appointment.{id,
+    appointmentId, OPDBilling.{id,
+    opdBillingPaymentStatus}}`,
+    `doctor.{id, specialization,
+    doctorId, title, user.fullName}`,
+    and the
+    `opdEmrLabModuleJoints` /
+    `opdEmrImagingModuleJoints`
+    billing-link check relations).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/OpdEmr
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetOpdEmrByIdResponse:
+  type: object
+  description: |
+    Response shape of all 8 detail
+    endpoints under the OPD / ED /
+    Daycare sub-trees:
+      - `GET /api/opd-emr/{id}`
+      - `GET /api/endo-opd-emr/{id}`
+      - `GET /api/hd-opd-emr/{id}`
+      - `GET /api/ot-opd-emr/{id}`
+      - `GET /api/ed-emr/{id}`
+      - `GET /api/endo-ed-emr/{id}`
+      - `GET /api/hd-ed-emr/{id}`
+      - `GET /api/ot-ed-emr/{id}`
+      - `GET /api/daycare-emr/{id}`
+
+    `result` is the OPDEMR row
+    matching the supplied id, or
+    `null` if not found.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/emr.yaml#/OpdEmr
+        - type: "null"
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+OpdEmr:
+  type: object
+  description: |
+    OPD / ED / Daycare EMR row
+    (the `OPDEMR` Prisma model
+    projected via
+    `opdEmrValidator`). The same
+    row shape is used across all 8
+    list/detail endpoints. The
+    `moduleType` enum value
+    distinguishes the variant:
+    `OPD`, `ED`, `DAYCARE`,
+    `HD_OPD`, `HD_ED`, `ENDO_OPD`,
+    `ENDO_ED`, `OT_OPD`, `OT_ED`.
+  required:
+    - id
+    - moduleType
+    - patient
+    - appointment
+    - doctor
+    - createdAt
+    - updatedAt
+  properties:
+    id: { type: string, format: uuid }
+    moduleType:
+      type: string
+      enum:
+        - OPD
+        - ED
+        - DAYCARE
+        - HD_OPD
+        - HD_ED
+        - ENDO
+        - ENDO_OPD
+        - ENDO_ED
+        - OT_OPD
+        - OT_ED
+    patientId: { type: string, format: uuid }
+    appointmentId: { type: string, format: uuid, nullable: true }
+    doctorId: { type: string, format: uuid, nullable: true }
+    remark: { type: string, nullable: true }
+    patient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        patientId: { type: string, nullable: true }
+        dateofBirth: { type: string, format: date-time, nullable: true }
+        gender: { type: string, nullable: true }
+        patientType: { type: string, nullable: true }
+        patientGroup: { type: string, nullable: true }
+        guardianName: { type: string, nullable: true }
+    appointment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string, nullable: true }
+        OPDBilling:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            opdBillingPaymentStatus: { type: string, nullable: true }
+    doctor:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        specialization: { type: string, nullable: true }
+        doctorId: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+    opdEmrLabModuleJoints:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          opdEmrId: { type: string, format: uuid }
+          labPivotId: { type: string, format: uuid }
+          labPivot:
+            type: object
+            nullable: true
+            properties:
+              opdBillingId: { type: string, format: uuid, nullable: true }
+    opdEmrImagingModuleJoints:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          opdEmrId: { type: string, format: uuid }
+          imagingListId: { type: string, format: uuid }
+          imagingList:
+            type: object
+            nullable: true
+            properties:
+              opdBillingId: { type: string, format: uuid, nullable: true }
+    createdBy:
+      $ref: ../schemas/common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ../schemas/common.yaml#/Publisher
+      nullable: true
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+# =============================================================================
+# Service-request list & detail (OPD / ED / Daycare)
+# =============================================================================
+
+GetOpdEmrServiceRequestsResponse:
+  type: object
+  description: |
+    Response shape of the 9
+    service-request list endpoints
+    (one per sub-tree):
+      - `GET /api/opd-emr/service-request`
+      - `GET /api/endo-opd-emr/service-request`
+      - `GET /api/hd-opd-emr/service-request`
+      - `GET /api/ot-opd-emr/service-request`
+      - `GET /api/ed-emr/service-request`
+      - `GET /api/endo-ed-emr/service-request`
+      - `GET /api/hd-ed-emr/service-request`
+      - `GET /api/ot-ed-emr/service-request`
+      - `GET /api/daycare-emr/service-request`
+
+    When `patientId` or
+    `appointmentId` is missing from
+    the query, the service silently
+    returns
+    `{ emrServiceRequests: [],
+    totalCount: 0 }` (no 400 / 404).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      $ref: ../schemas/emr.yaml#/EmrServiceRequestList
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+EmrServiceRequestList:
+  type: object
+  description: |
+    Paginated service-request
+    list returned by
+    `EmrServiceRequestRepository
+    .findEmrServiceRequestsByPatientAppointmentId`.
+  required: [emrServiceRequests, totalCount]
+  properties:
+    emrServiceRequests:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/EmrServiceRequest
+    totalCount: { type: integer, minimum: 0 }
+
+GetOpdEmrServiceRequestByIdResponse:
+  type: object
+  description: |
+    Response shape of the 9
+    service-request detail
+    endpoints. `result` is the
+    **flattened** service-request
+    row (the
+    `flattenEmrServiceRequests`
+    method in the repository joins
+    the linked `LabService` /
+    `ImagingService` per item).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/emr.yaml#/EmrServiceRequestFlattened
+        - type: "null"
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+EmrServiceRequestFlattened:
+  type: object
+  description: |
+    Flattened OPD-EMR service
+    request (output of
+    `flattenEmrServiceRequests`).
+    Each item carries a
+    `LabService` or `ImagingService`
+    sub-object when present (one of
+    them, or neither, or both).
+  required:
+    - id
+    - opdEmrId
+    - module
+    - items
+  properties:
+    id: { type: string, format: uuid }
+    opdEmrId: { type: string, format: uuid }
+    module:
+      type: string
+      enum: [LAB, XRAY, CT, MRI, ULTRASOUND, ECG, ECHO]
+    referralType: { type: string, nullable: true }
+    referralDoctorId: { type: string, nullable: true }
+    referralClinicId: { type: string, nullable: true }
+    remark: { type: string, nullable: true }
+    items:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/EmrServiceRequestFlattenedItem
+    labPivotId: { type: string, nullable: true }
+    opdEmr:
+      type: object
+      nullable: true
+      properties:
+        appointmentId: { type: string, format: uuid, nullable: true }
+
+EmrServiceRequest:
+  type: object
+  description: |
+    Raw (non-flattened) OPD-EMR
+    service-request row from
+    `emrServiceRequestValidator`.
+    Returned by the list endpoint
+    (`EmrServiceRequestList`).
+  required:
+    - id
+    - opdEmrId
+    - module
+  properties:
+    id: { type: string, format: uuid }
+    opdEmrId: { type: string, format: uuid }
+    module:
+      type: string
+      enum: [LAB, XRAY, CT, MRI, ULTRASOUND, ECG, ECHO]
+    referralType: { type: string, nullable: true }
+    referralDoctorId: { type: string, nullable: true }
+    referralClinicId: { type: string, nullable: true }
+    remark: { type: string, nullable: true }
+    items:
+      type: array
+      items: {}
+    labPivotId: { type: string, nullable: true }
+
+EmrServiceRequestFlattenedItem:
+  type: object
+  description: |
+    A single service-request item
+    after the
+    `flattenEmrServiceRequests`
+    pass. The original
+    `OPDEmRServiceRequestItem`
+    relation is augmented with
+    `serviceName`,
+    `cancelRemark`,
+    `cancelledById`, and a
+    `LabService` / `ImagingService`
+    sub-object.
+  required: [id, serviceId]
+  properties:
+    id: { type: string, format: uuid }
+    serviceId: { type: string, format: uuid }
+    opdEmrServiceRequestId: { type: string, format: uuid }
+    qty: { type: number, minimum: 0, nullable: true }
+    price: { type: number, minimum: 0, nullable: true }
+    amount: { type: number, minimum: 0, nullable: true }
+    priceType: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    serviceName: { type: string, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    doctor:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        doctorId: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+        user:
+          type: object
+          properties:
+            fullName: { type: string, nullable: true }
+    LabService:
+      type: object
+      nullable: true
+      description: |
+        Linked `LabService` row
+        (only present for
+        `module: "LAB"`). The
+        `status` field is computed
+        via `getCurrentLabStatus`
+        from the lab-pivot status
+        helper when missing.
+      additionalProperties: true
+    ImagingService:
+      type: object
+      nullable: true
+      description: |
+        Linked `ImagingService` row
+        (only present for imaging
+        modules).
+      additionalProperties: true
+
+# =============================================================================
+# Pharmacy requests (OPD only)
+# =============================================================================
+
+GetOpdEmrPharmacyRequestsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/opd-emr/pharmacy-request`.
+    Paginates pharmacy requests
+    filed from an OPD-EMR.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetOpdEmrPharmacyRequestByIdResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/opd-emr/pharmacy-request/{id}`.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: object
+      additionalProperties: true
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+# =============================================================================
+# IPD-EMR list & detail
+# =============================================================================
+
+GetIpdEmrListResponse:
+  type: object
+  description: |
+    Response shape of the 3 IPD
+    list endpoints:
+      - `GET /api/ipd-emr`
+      - `GET /api/cathlab-ipd-emr`
+      - `GET /api/endo-ipd-emr`
+
+    `result` is a list of `IPDEMR`
+    rows projected via
+    `ipdEmrValidator` (which
+    includes the publisher
+    projection, `admission.{id,
+    admissionId}`,
+    `patient.{id, name, patientId,
+    dateofBirth, gender,
+    patientType, patientGroup,
+    guardianName}`, and
+    `ipdEmrRequestLink` — a
+    join-table).
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      type: array
+      items:
+        $ref: ../schemas/emr.yaml#/IpdEmr
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+GetIpdEmrByIdResponse:
+  type: object
+  description: |
+    Response shape of the 3 IPD
+    detail endpoints:
+      - `GET /api/ipd-emr/{id}`
+      - `GET /api/cathlab-ipd-emr/{id}`
+      - `GET /api/endo-ipd-emr/{id}`
+
+    `result` is the IPDEMR row
+    matching the supplied id, or
+    `null` if not found.
+  required: [success, result, message, error]
+  properties:
+    success: { type: boolean, enum: [true] }
+    result:
+      oneOf:
+        - $ref: ../schemas/emr.yaml#/IpdEmr
+        - type: "null"
+    message: { type: string, example: "" }
+    error:
+      oneOf:
+        - type: "null"
+
+IpdEmr:
+  type: object
+  description: |
+    IPD / Cathlab / ENDO-EMR row
+    (the `IPDEMR` Prisma model
+    projected via
+    `ipdEmrValidator`). The same
+    row shape is used across all 3
+    IPD list/detail endpoints. The
+    `moduleType` (a sibling enum
+    to `IPDEMRRequestType` —
+    `"HD" | "OT" | "ENDO" |
+    "ENDO_IPD" | "CATH_LAB"`)
+    distinguishes the variant.
+  required:
+    - id
+    - moduleType
+    - admission
+    - patient
+    - createdAt
+    - updatedAt
+  properties:
+    id: { type: string, format: uuid }
+    moduleType:
+      type: string
+      enum: [HD, OT, ENDO, ENDO_IPD, CATH_LAB]
+    admissionId: { type: string, format: uuid, nullable: true }
+    patientId: { type: string, format: uuid }
+    remark: { type: string, nullable: true }
+    admission:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        admissionId: { type: string, nullable: true }
+    patient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        patientId: { type: string, nullable: true }
+        dateofBirth: { type: string, format: date-time, nullable: true }
+        gender: { type: string, nullable: true }
+        patientType: { type: string, nullable: true }
+        patientGroup: { type: string, nullable: true }
+        guardianName: { type: string, nullable: true }
+    ipdEmrRequestLink:
+      type: array
+      items: {}
+    createdBy:
+      $ref: ../schemas/common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ../schemas/common.yaml#/Publisher
+      nullable: true
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }

@@ -1,0 +1,182 @@
+# docs/schemas/trpc-stores.yaml
+# Schemas for the tRPC `stores` router (src/lib/trpc/routers/stores.ts).
+# Structurally very similar to the `departments` module.
+# Reuses the shared `Publisher` type from common.yaml.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateStoreInput:
+  type: object
+  description: |
+    Input for `stores.createStore`. Zod schema `createStoreSchema` in
+    `src/app/(dashboard)/common/set-up/stores/features/schema/create-store-schema.tsx`
+    (note the `.tsx` extension in source — no JSX in the file).
+  required:
+    - name
+  properties:
+    name:
+      type: string
+      minLength: 1
+      description: Must be unique (case-insensitive).
+    description:
+      type: string
+      description: Optional free-text description.
+
+UpdateStoreInput:
+  type: object
+  description: |
+    Input for `stores.updateStore`. Zod schema `updateStoreSchema` in
+    `src/app/(dashboard)/common/set-up/stores/features/schema/update-store-schema.tsx`
+    (note the `.tsx` extension in source).
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      description: Store id. No UUID validation at the router layer.
+    name:
+      type: string
+      description: Required. Must be unique across other stores when changed.
+    description:
+      type: string
+
+DeleteStoreInput:
+  type: object
+  description: |
+    Input for `stores.deleteStore`. The router does
+    `verifyPasswordProcedure.input(z.object({ id: z.string() }))` —
+    see the x-security-note on `/api/trpc/stores.deleteStore` for the
+    input-schema conflict with the verifyPassword middleware.
+
+    This schema documents the **observed** input: just `{ id }`. If the
+    bug is fixed, callers will also need to include `verifyPassword`.
+  required:
+    - id
+  properties:
+    id:
+      type: string
+      description: Store id. No UUID validation at the router layer.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetStoresResponse:
+  type: object
+  description: |
+    Response shape of `stores.getStores`. Service signature
+    (store-repository.ts:11-13):
+    `Promise<{ data: Store[]; count: number }>`.
+
+    Note the field name is `count`, not `totalCount` — same convention
+    as `departments.getDepartments`.
+  required:
+    - data
+    - count
+  properties:
+    data:
+      type: array
+      items:
+        $ref: ./trpc-stores.yaml#/Store
+    count:
+      type: integer
+      minimum: 0
+      description: Total store count across all pages (via `prisma.store.count()`).
+
+Store:
+  type: object
+  description: |
+    Canonical store shape. TS type `Store` from
+    `src/app/(dashboard)/common/set-up/stores/features/type/index.ts:7-15`.
+
+    Maps to the Prisma `Store` model
+    (prisma/schema.prisma) with `createdBy` / `updatedBy` populated
+    only by the **read** methods. See `x-runtime-populated-by` below.
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique (case-insensitive).
+    description:
+      type: string
+      nullable: true
+    createdById:
+      type: string
+      format: uuid
+      description: Always present in the bare record. (Prisma column.)
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+      description: Always present in the bare record. (Prisma column.)
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    `createdBy` and `updatedBy` are **only** populated by:
+      - `stores.getStores` (with `createdBy: { select: { id, fullName, username } }`)
+      - `stores.getStoreById` (same select)
+
+    NOT populated by:
+      - `stores.createStore` (calls `prisma.store.create({ data })` with no `include`)
+      - `stores.updateStore` (calls `prisma.store.update({ where, data })` with no `include`)
+      - `stores.deleteStore` (calls `prisma.store.delete({ where })` with no `include`)
+
+    For these write methods, the response is a **bare** store record.
+    Use the `StoreBare` schema for those operations.
+
+StoreBare:
+  type: object
+  description: |
+    Bare Store record — the shape returned by `createStore`,
+    `updateStore`, and `deleteStore` (no `createdBy` / `updatedBy`
+    included). Differs from the full `Store` schema only in that
+    the `createdBy` and `updatedBy` fields are absent.
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdById
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    description:
+      type: string
+      nullable: true
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

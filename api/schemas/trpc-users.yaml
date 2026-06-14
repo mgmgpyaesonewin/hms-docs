@@ -1,0 +1,386 @@
+# docs/schemas/trpc-users.yaml
+# Schemas for the tRPC `users` router (src/lib/trpc/routers/users.ts).
+# This module OWNS the canonical `User` type and its summary projections.
+# Resolves the placeholders previously left in trpc-auth.yaml and
+# trpc-roles.yaml (both now point here).
+
+# =============================================================================
+# Enums
+# =============================================================================
+
+UserStatus:
+  type: string
+  description: |
+    Account status. Maps to the Prisma `UserStatus` enum
+    (`prisma/schema.prisma`). Default: `ACTIVE`.
+  enum:
+    - ACTIVE
+    - INACTIVE
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetUsersInput:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions layered on `PaginationQuery` by `getUserSchema`
+        (src/app/(dashboard)/common/user-management/users/features/schemas/get-user-schema.ts:8-16).
+      properties:
+        role:
+          type: string
+          description: Filter — exact match on `roleId`.
+        department:
+          type: string
+          description: Filter — exact match on `departmentId`.
+        status:
+          $ref: ./trpc-users.yaml#/UserStatus
+
+CreateUserInput:
+  type: object
+  description: |
+    Input for `users.createUser`. Zod schema `createUserSchema` in
+    src/app/(dashboard)/common/user-management/users/features/schemas/create-user-schema.ts:7-63.
+    Note: empty strings on optional fields are normalised to `undefined`
+    via `z.preprocess`; the password is Argon2-hashed server-side
+    before persistence.
+  required:
+    - employeeId
+    - fullName
+    - phoneNo
+    - jobPosition
+    - departmentId
+    - username
+    - password
+    - roleId
+    - isActive
+  properties:
+    employeeId:
+      type: string
+      description: Must be unique across users.
+    fullName:
+      type: string
+      minLength: 2
+      maxLength: 30
+    phoneNo:
+      type: string
+      minLength: 10
+      maxLength: 15
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: Optional. Empty string is coerced to `undefined`. Must be unique when present.
+    jobPosition:
+      type: string
+    joiningDate:
+      type: string
+      format: date-time
+      nullable: true
+      description: Coerced from string. Optional.
+    departmentId:
+      type: string
+      format: uuid
+      description: Must reference an existing Department.
+    username:
+      type: string
+      minLength: 3
+      maxLength: 30
+      pattern: "^[a-zA-Z0-9_]+$"
+      description: Unique. Letters, digits, and underscores only.
+    password:
+      type: string
+      minLength: 8
+      maxLength: 20
+      format: password
+      description: |
+        Plain-text password. Validated by `strongPasswordRegex`
+        (`^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[\\W_]).*$`): at least one
+        upper, one lower, one digit, one special character. Hashed
+        with Argon2 server-side before storage.
+    roleId:
+      type: string
+      format: uuid
+      description: Must reference an existing Role.
+    isActive:
+      type: boolean
+      default: true
+      description: |
+        Translated to `status`: `true` → `"ACTIVE"`, `false` → `"INACTIVE"`
+        by `UserService.createUser` (service.ts:80).
+
+EditUserInput:
+  type: object
+  description: |
+    Input for `users.editUser`. Zod schema `editUserSchema` =
+    `createUserSchema.merge({ id }).omit({ username, password })`
+    (edit-user-schema.ts:4-13). Username and password are immutable
+    through this endpoint.
+  required:
+    - id
+    - employeeId
+    - fullName
+    - phoneNo
+    - jobPosition
+    - departmentId
+    - roleId
+    - isActive
+  properties:
+    id:
+      type: string
+      description: User id. No UUID validation at the router layer.
+    employeeId:
+      type: string
+    fullName:
+      type: string
+      minLength: 2
+      maxLength: 30
+    phoneNo:
+      type: string
+      minLength: 10
+      maxLength: 15
+    email:
+      type: string
+      format: email
+      nullable: true
+    jobPosition:
+      type: string
+    joiningDate:
+      type: string
+      format: date-time
+      nullable: true
+    departmentId:
+      type: string
+      format: uuid
+    roleId:
+      type: string
+      format: uuid
+    isActive:
+      type: boolean
+      description: |
+        Translated to `status`. Setting `false` on a superadmin raises
+        `AppError("Superadmin cannot be inactive", 400)`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetUsersResponse:
+  type: object
+  description: |
+    Response shape of `users.getUsers`. Service signature:
+    `Promise<{ data: User[]; totalCount: number }>`
+    (users-repository.ts:21).
+  required:
+    - data
+    - totalCount
+  properties:
+    data:
+      type: array
+      items:
+        $ref: ./trpc-users.yaml#/User
+    totalCount:
+      type: integer
+      minimum: 0
+
+User:
+  type: object
+  description: |
+    Canonical user shape. TS type `User` from
+    `src/app/(dashboard)/common/user-management/users/features/types/index.ts:10-33`.
+    Maps to the Prisma `User` model with the following relations
+    included by `UsersRepository.findAndCountUsers` and
+    `UsersRepository.findById`:
+      - `department` (full Department)
+      - `role` (full Role + permissions)
+      - `createdBy` (UserSummary: id/fullName/username)
+      - `updatedBy` (UserSummary: id/fullName/username)
+
+    The `password` field is **omitted** by the repository methods that
+    produce this shape (`createUser`, `getUserById`, `getUsers`). See
+    `UserWithPassword` for the (insecure) shape used by `editUser` and
+    `deleteUser`.
+  required:
+    - id
+    - userId
+    - username
+    - fullName
+    - phoneNo
+    - jobPosition
+    - status
+    - isSuperadmin
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    userId:
+      type: string
+      description: |
+        Human-readable user code (e.g. "UID-0001"). Auto-generated
+        sequentially by `UserService.createUser`
+        (service.ts:66-72).
+    username:
+      type: string
+    fullName:
+      type: string
+    email:
+      type: string
+      format: email
+      nullable: true
+    phoneNo:
+      type: string
+    jobPosition:
+      type: string
+    department:
+      $ref: ./trpc-departments.yaml#/DepartmentSummary
+      nullable: true
+      description: |
+        `{ id, name }` projection (TS `User.department: { id; name } | null`).
+        Owned by the trpc-departments module (placeholder).
+    departmentId:
+      type: string
+      format: uuid
+      nullable: true
+    roleId:
+      type: string
+      format: uuid
+      nullable: true
+    role:
+      allOf:
+        - $ref: ./trpc-roles.yaml#/RoleSummary
+        - type: object
+          description: |
+            Partial Role projection — only `id`, `name`, `permissions`, and
+            `isSuperadmin` (TS `User.role: Pick<Role, ...>`). Permissions
+            are used by `checkPermission` to gate action/subject access.
+          properties:
+            permissions:
+              type: array
+              items:
+                $ref: ./trpc-roles.yaml#/Permission
+      nullable: true
+    status:
+      $ref: ./trpc-users.yaml#/UserStatus
+    createdBy:
+      $ref: ./trpc-users.yaml#/UserSummary
+      nullable: true
+    updatedBy:
+      $ref: ./trpc-users.yaml#/UserSummary
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    isSuperadmin:
+      type: boolean
+      description: |
+        When `true`, `checkPermission` (utils.ts:1812) bypasses the
+        per-permission check. The seeded superadmin is the only user
+        that should have this flag set; the service layer prevents
+        deactivating or deleting superadmins.
+    employeeId:
+      type: string
+      nullable: true
+      description: Optional employee identifier. Unique when present.
+    joiningDate:
+      type: string
+      format: date-time
+      nullable: true
+
+UserWithPassword:
+  type: object
+  description: |
+    **SECURITY WARNING:** the server returns the Argon2 `password` hash
+    for `editUser` and `deleteUser` responses. This shape exists
+    because the repository's `updateUser` and `deleteUser` methods do
+    not pass `omit: { password: true }` to Prisma. All other User
+    responses (`createUser`, `getUserById`, `getUsers`) use `User`
+    (which omits `password`).
+
+    Consumers should NOT depend on the password field — it is a leak
+    that the server-side code should be fixed to prevent. See
+    `x-security-notes` in `docs/paths/trpc-users.yaml`.
+  allOf:
+    - $ref: ./trpc-users.yaml#/User
+    - type: object
+      required:
+        - password
+      properties:
+        password:
+          type: string
+          description: |
+            Argon2 hash (e.g. `$argon2id$v=19$m=...$t=...$p=...$<salt>$<hash>`).
+            **Treat as sensitive** — should be filtered out at the client
+            boundary until the server is patched to omit it.
+
+# =============================================================================
+# Summary projections
+# =============================================================================
+
+UserSummary:
+  type: object
+  description: |
+    Minimal user projection. TS type:
+    `Pick<User, "id" | "fullName" | "username">` (types/index.ts:26-27).
+    Used for `User.createdBy` / `User.updatedBy` and the inner
+    `createdBy` / `updatedBy` selects in `UsersRepository`.
+  required:
+    - id
+    - fullName
+    - username
+  properties:
+    id:
+      type: string
+      format: uuid
+    fullName:
+      type: string
+    username:
+      type: string
+
+UserReference:
+  type: object
+  description: |
+    Wider user projection including `email`. TS type:
+    `Pick<User, "id" | "fullName" | "email" | "username">`
+    (used in Role types/index.ts:16-17 for `Role.createdBy` and
+    `Role.updatedBy`).
+  required:
+    - id
+    - fullName
+    - email
+    - username
+  properties:
+    id:
+      type: string
+      format: uuid
+    fullName:
+      type: string
+    email:
+      type: string
+      format: email
+      nullable: true
+    username:
+      type: string
+
+# =============================================================================
+# Placeholder cross-references
+# =============================================================================
+
+DepartmentSummary:
+  $ref: ./trpc-departments.yaml#/DepartmentSummary
+  description: |
+    Now defined in trpc-departments.yaml (resolved). The `User.department`
+    field is `{ id: string; name: string } | null`.
+
+RoleSummary:
+  $ref: ./trpc-roles.yaml#/RoleSummary
+  description: |
+    Placeholder. The `User.role` field is a `Pick<Role, "id" | "name" | "permissions" | "isSuperadmin">`
+    — a partial projection of the full Role type, plus its permissions
+    array. Owned by the trpc-roles module (already documented).

@@ -1,0 +1,338 @@
+# docs/paths/trpc-departments.yaml
+# tRPC router: departments (src/lib/trpc/routers/departments.ts)
+# CRUD over the `Department` model. Five procedures use `authProcedure`;
+# `deleteDepartment` uses `verifyPasswordProcedure` (caller's password
+# re-verified). **None** use `authorizeProcedure`. See the security notes
+# at the bottom.
+x-trpc-source: src/lib/trpc/routers/departments.ts
+x-trpc-router: departments
+
+/api/trpc/departments.getDepartments:
+  post:
+    summary: List departments (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of departments with the
+      total row count.
+
+      Response shape:
+        ```
+        { data: Department[], count: number }
+        ```
+      (Note: the `count` field is named `count`, not `totalCount` — this
+      differs from `users.getUsers` which uses `totalCount`.)
+
+      Search and date filters come from the shared `defaultQuerySchema`
+      (transformed to `PaginationQuery`):
+        - `search` — case-insensitive substring match against `name`.
+        - `start` / `end` — applied to `createdAt` (either bound can be
+          supplied independently).
+
+      Service: `DepartmentsService.getDepartments`. Source:
+      `src/lib/trpc/routers/departments.ts:12-21`.
+    tags:
+      - Departments
+    operationId: trpc_departments_getDepartments
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of departments.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-departments.yaml#/GetDepartmentsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/departments.getDepartmentCounts:
+  post:
+    summary: Get total department count
+    description: |
+      Authenticated query. Returns the unpaginated total count of departments
+      (`prisma.department.count()`). Source:
+      `src/lib/trpc/routers/departments.ts:23-28`.
+    tags:
+      - Departments
+    operationId: trpc_departments_getDepartmentCounts
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total department count.
+        content:
+          application/json:
+            schema:
+              type: integer
+              minimum: 0
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/departments.getDepartmentById:
+  post:
+    summary: Get a department by id
+    description: |
+      Authenticated query. Returns the department (with `createdBy` and
+      `updatedBy` populated) or `null` if not found. Input is a raw string
+      with no UUID validation.
+
+      Service: `DepartmentsService.getDepartmentById`. Source:
+      `src/lib/trpc/routers/departments.ts:30-40`.
+    tags:
+      - Departments
+    operationId: trpc_departments_getDepartmentById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Department id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: The department, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-departments.yaml#/Department
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/departments.createDepartment:
+  post:
+    summary: Create a new department
+    description: |
+      Authenticated mutation. Creates a department with a generated
+      `departmentCode` ("DID-001", "DID-002", ...).
+
+      Side effects:
+        - Generates a sequential `departmentCode`.
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/user-management/departments")`.
+        - Logs the creation via `activityLogger` (description: "Created Department",
+          action: "Create", entity: "Department").
+
+      Validation failures (HTTP 400 or 409):
+        - Empty `name` → 400.
+        - Department name already exists (case-insensitive) → 409
+          (`AppError("Department already exists", 409)`).
+
+      Service: `DepartmentsService.createDepartment`. Source:
+      `src/lib/trpc/routers/departments.ts:42-57`.
+    tags:
+      - Departments
+    operationId: trpc_departments_createDepartment
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-departments.yaml#/CreateDepartmentInput
+    responses:
+      "200":
+        description: Department created. **Response does not populate `createdBy` / `updatedBy`** — only the bare Prisma record (see x-runtime-populated-by on the `Department` schema).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-departments.yaml#/DepartmentBare
+      "400":
+        description: Validation failure (empty name).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: Department name already exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/departments.updateDepartment:
+  post:
+    summary: Update a department
+    description: |
+      Authenticated mutation. Updates the department identified by `id`.
+
+      Validation:
+        - Department must exist (else 404).
+        - If `name` is changing, the new `name` must not collide with
+          another department (case-insensitive) → 409.
+
+      Side effects:
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/user-management/departments")`.
+        - Logs the update via `activityLogger`.
+
+      **Response does not populate `createdBy` / `updatedBy`** — only the
+      bare Prisma record.
+
+      Service: `DepartmentsService.updateDepartment`. Source:
+      `src/lib/trpc/routers/departments.ts:59-74`.
+    tags:
+      - Departments
+    operationId: trpc_departments_updateDepartment
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-departments.yaml#/UpdateDepartmentInput
+    responses:
+      "200":
+        description: Updated department. **Response does not populate `createdBy` / `updatedBy`**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-departments.yaml#/DepartmentBare
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Department not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: New name already exists on a different department.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/departments.deleteDepartment:
+  post:
+    summary: Delete a department (caller password re-verified)
+    description: |
+      **Sensitive.** Built on `verifyPasswordProcedure`, which requires
+      the caller's session **and** re-verifies their current password
+      before running the mutation.
+
+      Validation:
+        - Caller must have a valid `sid` cookie.
+        - Caller's current password must verify.
+        - Department must exist (else 404).
+        - No users may be assigned to the department
+          (`prisma.user.findFirst({ where: { departmentId: id } })`).
+          If any are, throws `AppError("Cannot delete department with associated users", 400)`.
+
+      Side effects:
+        - Logs the deletion via `activityLogger`.
+        - Calls `revalidatePath("/user-management/departments")`.
+
+      **Response does not populate `createdBy` / `updatedBy`**.
+
+      Source: `src/lib/trpc/routers/departments.ts:76-90`.
+    tags:
+      - Departments
+    operationId: trpc_departments_deleteDepartment
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: ../schemas/trpc-departments.yaml#/DeleteDepartmentInput
+              - description: |
+                  Some callers (or repaired code) may include both
+                  `id` and a `verifyPassword` field that the
+                  verifyPasswordMiddleware reads. See x-security-note.
+    responses:
+      "200":
+        description: Deleted department. **Response does not populate `createdBy` / `updatedBy`**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-departments.yaml#/DepartmentBare
+      "400":
+        description: Department has associated users.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session, or caller's password verification failed.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Department not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-security-note: |
+      The router does
+        `deleteDepartment: verifyPasswordProcedure.input(z.object({ id: z.string() }))`
+      which **overrides** the base input schema. The base schema requires
+      `verifyPassword`, but the chained `.input({ id })` does not include
+      it. The middleware reads `input.verifyPassword` directly, so at
+      runtime the procedure will read `undefined` from input and
+      `authService.checkPassword(userId, undefined)` will throw.
+
+      This is the **same pattern** as `auth.resetPassword` (see the
+      `x-security-note` on `/api/trpc/auth.resetPassword`). The likely
+      fix is
+        `.input(z.object({ id: z.string(), verifyPassword: z.string() }))`
+      Documented for awareness.
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all six procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - Five of six procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can list, count, get, create, and update
+    departments. Only `deleteDepartment` adds password re-verification
+    via `verifyPasswordProcedure`. The lack of `authorizeProcedure` here
+    is consistent with the rest of the User Management module — worth
+    confirming the intent with the team.
+  - **TS type/runtime mismatch on `createdBy` / `updatedBy`** — the
+    `Department` TS type includes `createdBy: Publisher` /
+    `updatedBy: Publisher | null`, but `createDepartment`,
+    `updateDepartment`, and `deleteDepartment` all call Prisma
+    `create` / `update` / `delete` without an `include` directive. The
+    response is the bare record, not the type's full shape. Only
+    `getDepartments` and `getDepartmentById` populate those fields.
+    Captured as `DepartmentBare` and the `x-runtime-populated-by` note
+    on the `Department` schema.
+  - **Filename typo in the source** — the import points to
+    `update-departments-schem.ts` (missing the trailing `a`). The router
+    uses the same misspelling. Documented for awareness, not blocking.

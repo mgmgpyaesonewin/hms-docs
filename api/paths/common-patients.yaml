@@ -1,0 +1,672 @@
+# docs/paths/common-patients.yaml
+# REST endpoints:
+#   GET /api/patients
+#   GET /api/patients/[id]
+#   GET /api/patients/info
+# Source: src/app/api/(common)/patients/route.ts
+# Source: src/app/api/(common)/patients/[id]/route.ts
+# Source: src/app/api/(common)/patients/info/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions (patients-action.ts) — they
+# are NOT exposed as REST routes here.
+
+/api/patients:
+  get:
+    summary: List patients (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of patients with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            patients: Patient[],
+            totalCount: number,
+          },
+          error: ""
+        }
+        ```
+      Notable: the success envelope has NO
+      `message` field (only `success`, `result`,
+      `error`). Inconsistent with the standard
+      `{ success, result, message, error }`
+      envelope used by most other `common-*`
+      endpoints.
+
+      The route uses `apiHandler` (bare) with
+      manual `verifyApiAuth()` and manual
+      `validateSearchParams(getPatientsSchema,
+      ...)`. No `enhancedApiHandler`, no
+      permissions array.
+
+      Filters (from `getPatientsSchema` =
+      `baseGetPatientsSchema.merge(baseQuerySchema).transform(transformPaginationSchema)`):
+        - `search` — `contains` (case-insensitive)
+          against `name`, `phoneNo`, `patientId`,
+          or `guardianName`. Four-branch `OR`.
+        - `includePatientId` — pins
+          `where.id = query.includePatientId`,
+          but **only when `search` is empty**
+          (patients-repository.ts:134-136).
+          Same pattern as
+          [[common-doctors]] — silently ignored
+          when `search` is set.
+        - `hasAdmission` — `true` filters to
+          patients with an active admission
+          (`Admission.some: { status: "ACTIVE",
+          discharges: { is: null } }`);
+          `false` filters to those with NONE
+          such admission (the `if/else`
+          structure in the repository means
+          the filter is always applied —
+          there's no third "either" branch).
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`). Both must be present
+          (the repository only sets the range
+          if both are truthy).
+        - `patientType` — `nativeEnum(patientType)`:
+          `OPD / IPD / EMERGENCY / LOCAL /
+          FOREIGNER`. Exact match. **Overwritten**
+          by `patientTypes` if both are set
+          (the `if (query.patientTypes && ...)`
+          branch runs first, then the
+          `if (query.patientType)` branch
+          overwrites — same overwrite hazard
+          as [[common-doctors]]).
+        - `patientTypes` — array of
+          `patientType` enums, used as
+          `where.patientType = { in:
+          query.patientTypes }`.
+        - `patientGroup` —
+          `nativeEnum(patientGroup)`:
+          `LOCAL / FOREIGNER / INSURANCE /
+          GOVERNMENT`. Exact match.
+        - `region` — exact match (case-insensitive)
+          against `region`.
+        - `township` — exact match
+          (`where.township`).
+        - `hasNewBornRecord` — replaces the
+          `where.OR` with
+          `{ newBornRecord: null }`, OR (if
+          `currentAdmissionId` is also set)
+          `{ newBornRecord: { admissionId:
+          query.currentAdmissionId } }`. The
+          repository's `where.OR = ...`
+          assignment **overwrites** any prior
+          `where.OR` from the `search` branch
+          (silently drops the search filter
+          when `hasNewBornRecord` is set).
+        - `checkHasPendingBills` — adds a
+          `_count: { select: { pharmacySales:
+          { where: { paymentStatus: PENDING,
+          patientType: OPD, departmentType:
+          PHARMACY } }, ProxyBill: { where: {
+          paymentStatus: UNPAID, patientType:
+          OPD } } } }` projection (used by
+          the front-end to surface "patient
+          has unpaid bills" warnings).
+
+      Repository ordering: `createdAt: desc`.
+      The `findMany` and `count` run inside a
+      `prisma.$transaction([...])` (so they
+      share a connection / serializable
+      transaction context, not necessarily
+      true serializable isolation). The
+      `findMany` has `distinct: ["id"]` —
+      the `Patient` model has 35+ FK
+      relations, so duplicate rows can
+      appear without `distinct`.
+
+      Source:
+      `src/app/api/(common)/patients/route.ts:10-22`.
+    tags:
+      - Common / Patients
+    operationId: rest_common_patients_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: includePatientId
+        schema:
+          type: string
+        description: |
+          When `search` is empty, pins the
+          result to a single patient by id.
+          Ignored when `search` is set.
+      - in: query
+        name: hasAdmission
+        schema:
+          type: boolean
+      - in: query
+        name: patientType
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER]
+        description: |
+          Overwritten by `patientTypes` if both
+          are set.
+      - in: query
+        name: patientTypes
+        schema:
+          type: array
+          items:
+            type: string
+            enum: [OPD, IPD, EMERGENCY, LOCAL, FOREIGNER]
+        style: form
+        explode: true
+      - in: query
+        name: patientGroup
+        schema:
+          type: string
+          enum: [LOCAL, FOREIGNER, INSURANCE, GOVERNMENT]
+      - in: query
+        name: region
+        schema:
+          type: string
+      - in: query
+        name: township
+        schema:
+          type: string
+      - in: query
+        name: checkHasPendingBills
+        schema:
+          type: boolean
+        description: |
+          Adds a `_count` projection for
+          pending pharmacy sales + unpaid
+          proxy bills.
+      - in: query
+        name: hasNewBornRecord
+        schema:
+          type: boolean
+        description: |
+          **Overwrites** the `search` filter
+          when set (the repository's
+          `where.OR = ...` for `hasNewBornRecord`
+          replaces any prior `where.OR`).
+      - in: query
+        name: currentAdmissionId
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Paginated list of patients.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-patients.yaml#/GetPatientsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/patients/{id}:
+  get:
+    summary: Get a patient by id
+    description: |
+      Authenticated query. Returns a single
+      patient by its primary key (UUID), or
+      `null` if not found.
+
+      Path parameters:
+        - `id` — the patient's primary key
+          (UUID string).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: Patient | null,
+          error: ""
+        }
+        ```
+
+      The route uses `apiHandler` (bare) with
+      manual `verifyApiAuth()`. No
+      `enhancedApiHandler`, no permissions
+      array.
+
+      The repository's `getPatientById`
+      includes a much richer set of joins
+      than the list endpoint:
+        - `Admission` (full row),
+        - `roomLogs` (id-only select),
+        - `createdBy` / `updatedBy`
+          (id + fullName only — narrower
+          than the canonical 3-field
+          `Publisher`),
+        - `newBornRecord` with deep nesting
+          (admission → patient → roomLogs;
+          newBornBabyUnderCareDoctors →
+          doctor → doctorId, title, user
+          (fullName only), specialization),
+        - `patientServices` (id, patientId,
+          serviceId, service.name,
+          service.status,
+          service.includeInRegistration),
+        - `_count` for `Admission` (active
+          only), `pharmacySales` (pending
+          only), `ProxyBill` (unpaid only),
+        - `Referral` (full row).
+
+      The post-processing `flattenPatientsData`
+      sets `referralDoctor`, `referralClinic`
+      (from the most recent `Referral`), and
+      `hasPendingBills` (from `_count`).
+
+      Source:
+      `src/app/api/(common)/patients/[id]/route.ts:8-19`.
+    tags:
+      - Common / Patients
+    operationId: rest_common_patients_get_by_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: The patient's primary key (UUID).
+    responses:
+      "200":
+        description: The patient, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-patients.yaml#/GetPatientByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/patients/info:
+  get:
+    summary: Get a patient's minimal info + total sale amount
+    description: |
+      Authenticated query. Returns a minimal
+      patient projection with a `totalSaleAmount`
+      aggregate, computed via a raw SQL query.
+
+      Query parameters:
+        - `id` — required. The patient's
+          primary key (UUID string). Validated
+          by `getPatientByIdSchema` (the
+          schema requires `id: z.string()` —
+          not `.uuid()`).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            id: string,
+            name: string,
+            phoneNo: string,
+            patientGroup: string,
+            totalSaleAmount: number,
+          } | null,
+          error: ""
+        }
+        ```
+
+      The raw SQL (patients-repository.ts:409-422):
+        ```sql
+        SELECT
+          p.id::text AS id,
+          p.patient_id::text AS patient_id,
+          p.name,
+          p.phone_no,
+          ps.patient_group::text AS patient_group,
+          SUM(ps.total_amount)::int AS total_sale_amount
+        FROM pharmacy_sales AS ps
+        JOIN patients p ON ps.patient_id = p.id
+        WHERE p.id::uuid = ${id}::uuid
+          AND ps.status = 'APPROVED'
+          AND ps.patient_type <> 'IPD'
+        GROUP BY
+          ps.patient_id, p.id, p.name, p.phone_no, ps.patient_group
+        ```
+
+      Notes on the SQL:
+        - `ps.patient_id = p.id` is the FK
+          relation; rows in `pharmacy_sales`
+          are joined to the patient.
+        - `ps.status = 'APPROVED'` — only
+          approved sales count.
+        - `ps.patient_type <> 'IPD'` —
+          IPD-typed sales are excluded.
+        - `SUM(ps.total_amount)::int` —
+          total sum cast to `int` (4-byte
+          integer — overflows if a patient's
+          total sales exceed 2^31).
+        - The result is parsed via
+          `z.array(patientInfoSchema).safeParse(
+          transformKeysToCamel(patient))`.
+          If the parse fails, the repository
+          throws
+          `AppError("Invalid store stocks data",
+          400)` (a wrong-message copy-paste
+          error — the message says "store
+          stocks" but the data is patient
+          info).
+        - If the result array is empty,
+          `result.data[0] || null` returns
+          `null`.
+
+      Source:
+      `src/app/api/(common)/patients/info/route.ts:10-23`.
+    tags:
+      - Common / Patients
+    operationId: rest_common_patients_info
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: query
+        name: id
+        required: true
+        schema:
+          type: string
+        description: |
+          The patient's primary key (UUID).
+          The Zod field is `z.string()`,
+          not `.uuid()`, so any string is
+          accepted; the SQL casts to uuid
+          and will throw on invalid format.
+    responses:
+      "200":
+        description: |
+          The patient's minimal info, or `null`
+          if no approved non-IPD pharmacy
+          sales exist.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-patients.yaml#/GetPatientInfoResponse
+      "400":
+        description: |
+          Zod parse failed (the
+          `AppError("Invalid store stocks
+          data", 400)` error path — see
+          security notes).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — all
+    three routes declare only
+    `auth: { required: true }` (via manual
+    `verifyApiAuth()` in the `apiHandler`
+    wrapper), no `permissions` array. Any
+    authenticated user can read the full
+    patient list, any patient by id, and
+    the patient-info aggregate.
+  - **PII-heavy surface** — the `Patient`
+    model carries name, phoneNo, email
+    (`@unique`), guardianName, address,
+    region, township, nrcNo, nrcType,
+    nrcTownship, nrcState, passPort,
+    emergencyPhoneNo, nextToKin,
+    relationship, drugallergy,
+    additionalInformation. **The list
+    endpoint exposes all of this on every
+    row.** No tenant isolation.
+  - **All three routes use `apiHandler`
+    (bare) with manual `verifyApiAuth()`** —
+    not `enhancedApiHandler`. The auth
+    decorator and validation flow are
+    manually wired. See
+    [[common-payment-methods]],
+    [[common-hospital-info]] for the
+    same pattern.
+  - **`hasAdmission` is a strict `if/else`** —
+    the repository always applies the
+    `where.Admission` clause: `true` →
+    `some: { status: "ACTIVE", discharges:
+    { is: null } }`; `false` → `none: {
+    status: "ACTIVE", discharges: { is:
+    null } }`. There is no third "either"
+    branch — omitting the param filters
+    to `none` (no active admission). This
+    is a non-obvious behavior: the
+    unfiltered list is "patients with no
+    active admission" (because the
+    `else` branch always runs).
+  - **`hasNewBornRecord` overwrites the
+    `search` filter** — the repository's
+    `if (query.hasNewBornRecord) { where.OR
+    = [...] }` replaces any prior
+    `where.OR` from the `search` branch.
+    Setting both `search` and
+    `hasNewBornRecord` silently drops
+    `search`.
+  - **`includePatientId` is silently
+    ignored when `search` is set** —
+    same pattern as [[common-doctors]].
+    The intended "include this specific
+    patient alongside the search results"
+    UX only works when `search` is empty.
+  - **`patientType` is overwritten by
+    `patientTypes`** — same overwrite
+    hazard as [[common-doctors]]. If
+    both are set, `patientTypes` is
+    applied first, then `patientType`
+    overwrites it.
+  - **`Patient` model has 35+ FK
+    relations** — a `delete` is heavily
+    FK-constrained. The `deletePatient`
+    service throws
+    `AppError("Patient is in use and
+    cannot be deleted", 409)` on FK
+    violations (note: 409, not 400 like
+    most other endpoints). The
+    `hasPharmacySales` check throws
+    `AppError("This patient has previous
+    medical history. You can't delete
+    right now!", 400)` — 400 is
+    inconsistent.
+  - **`referralDoctor` / `referralClinic`
+    are mutually exclusive** — the
+    `updatePatient` service throws
+    `AppError("Only one of referral
+    doctor or referral clinic can be
+    set", 500)` (note: 500, not 400 like
+    a validation error should be).
+  - **Raw SQL in `getPatientInfo`** —
+    the raw query uses
+    `ps.patient_id = p.id` to join. The
+    `::uuid` casts are defense against
+    injection, but the `id` is passed
+    via `${id}::uuid` template literal,
+    which Prisma's `$queryRaw` (the
+    **tagged-template** version) treats
+    as a parameter (not interpolated
+    SQL). So injection is prevented by
+    the tagged-template mechanism. The
+    `id` is still a `string` at the DB
+    level, so the cast handles the
+    typecheck.
+  - **`SUM(ps.total_amount)::int` is
+    4-byte integer** — overflows if a
+    patient's total sales exceed 2^31
+    (≈ 2.1B kyat / MMK / etc.). For
+    most patients this is fine, but a
+    long-tenure patient with chronic
+    prescription refills could
+    approach this.
+  - **Wrong error message in
+    `getPatientInfo`** — on Zod parse
+    failure, the repository throws
+    `AppError("Invalid store stocks
+    data", 400)`. The message says
+    "store stocks" but the data is
+    patient info. Copy-paste from
+    `getStocksByStoreId` (or similar).
+    Also, the wrong-message is
+    misleading for ops.
+  - **Patients have no
+    `storeId`/`tenantId`** — the
+    `Patient` model has no `storeId`
+    or `tenantId` column. The
+    multi-tenancy model is unclear
+    (the codebase uses `storeId` on
+    some models but not patients). A
+    patient is global to the system,
+    not scoped to a store. List
+    queries return all patients
+    across stores.
+  - **`getPatients` uses
+    `prisma.$transaction([...])`** —
+    the `findMany` and `count` run
+    inside a Prisma transaction array
+    (a serial batch on the same
+    connection). This is fine for
+    read-only isolation but is
+    slightly heavier than a plain
+    `Promise.all`.
+  - **`distinct: ["id"]` on the
+    `findMany`** — required because
+    the joins (especially
+    `Referral: true`, which is a full
+    `Referral[]`) would otherwise
+    produce duplicate `Patient` rows.
+    `distinct` is a Prisma-level
+    deduplication, applied after the
+    join.
+  - **`createPatient` race hazard on
+    `patientId`** — uses
+    `generatePatientId("PN",
+    lastPatient?.patientId)` (sorts
+    by `patientId: desc` for the
+    "last" lookup, then increments
+    the trailing NNN). Two concurrent
+    creates could both read the same
+    "last" patient. `patientId` is
+    `@unique`, so one fails with a
+    Prisma unique violation. The
+    service does not catch / retry.
+  - **`createPatient` triggers
+    `appointmentService.bookAppointment`
+    for non-IPD patients** — the
+    service has a side effect of
+    booking an appointment as part of
+    the create flow. This couples
+    `createPatient` to the
+    appointment module. If
+    `appointmentService` throws, the
+    whole `createPatient` rolls back.
+    Notable: `appointmentTypeId` is
+    stored on the `Patient` row too.
+  - **`appointmentTypeId` is stored
+    on `Patient` but not in the
+    response** — the TS `Patient` type
+    declares `appointmentTypeId?: string
+    | null | undefined`, but the
+    repository's `findMany` /
+    `findUnique` do not include the
+    `appointmentType` relation. So
+    the `id` is in the DB but the
+    response carries no info about
+    it.
+  - **`createPatient` checks
+    `nrcNo == "" || passPort != ""`**
+    — the `passPort != ""` always
+    evaluates to `true` (since
+    `"" != ""` is `false`, but
+    `null != ""` is `true` and
+    `<value> != ""` is `true` for any
+    non-empty value). The condition
+    is sloppy; the intent was likely
+    `nrcNo == "" || passPort == null`.
+  - **`getPatientInfo` raw query
+    filters on `ps.patient_type <>
+    'IPD'`** — IPD sales are excluded
+    (presumably because IPD billing is
+    via the IPD discharge flow, not
+    pharmacy sales). The result is
+    "total non-IPD pharmacy sales per
+    patient".
+  - **`Patient` `email` is
+    `@unique`** — like [[common-users]],
+    the email is a `findUserByEmail`
+    surface via the list endpoint
+    `search` (case-insensitive
+    `contains`).
+  - **`Patient` `patientId` is
+    sequential and guessable** —
+    `PN-NNNNNN` (6-digit zero-pad)
+    pattern via `generatePatientId`.
+  - **The TS `Patient` type has
+    several nullable fields that are
+    non-nullable in the Prisma model**
+    — `Patient.region` is `String?` in
+    Prisma but the TS type allows
+    `string | null | undefined`. The
+    `createPatient` service does
+    `region: data.region.toUpperCase()`,
+    which throws if `region` is null
+    (the create schema requires
+    `region`, so this is enforced at
+    create time). But for read paths
+    where `region` is null, the TS
+    type allows callers to assume a
+    string. Mismatch.
+  - **The `newBornRecord` deep-nested
+    include on `[id]` route is a
+    serious leak** — the include
+    pulls `newBornRecord` →
+    `admission` → `patient` (the
+    mother's patient row) →
+    `roomLogs`, plus
+    `newBornBabyUnderCareDoctors` →
+    `doctor` → `user.fullName`,
+    `doctor.specialization`. The
+    mother's full patient row is
+    included (minus some columns).
+    The doctor's full name + the
+    specialization row are
+    included.
+  - **The `getPatientById`
+    `createdBy` / `updatedBy`
+    projection is narrower than the
+    canonical `Publisher`** — only
+    `id` + `fullName` (no `username`).
+    Same pattern as
+    [[common-payment-methods]]. The
+    list endpoint's `createdBy` /
+    `updatedBy` IS the canonical
+    3-field projection (id,
+    fullName, username).
+  - **Service uses 400 for "Patient
+    already exists"** — both
+    `createPatient` and `updatePatient`
+    throw 400. Inconsistent with the
+    409 used by other endpoints.
+  - **Service uses 500 for
+    "referral conflict"** — the
+    `updatePatient` service throws
+    `AppError(..., 500)` when both
+    referralDoctor and referralClinic
+    are set. Should be 400 (validation
+    error).

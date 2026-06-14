@@ -1,0 +1,814 @@
+# docs/paths/common-services.yaml
+# REST endpoints:
+#   GET /api/services
+#   GET /api/services/[id]
+#   GET /api/services/consultation-service
+#   GET /api/services/doctor-service
+#   GET /api/services/doctor-service/[id]
+#   GET /api/services/doctor-service/by-service-id/[id]
+#   GET /api/services/service-category-module-mapping
+# Source: src/app/api/(common)/services/route.ts
+# Source: src/app/api/(common)/services/[id]/route.ts
+# Source: src/app/api/(common)/services/consultation-service/route.ts
+# Source: src/app/api/(common)/services/doctor-service/route.ts
+# Source: src/app/api/(common)/services/doctor-service/[id]/route.ts
+# Source: src/app/api/(common)/services/doctor-service/by-service-id/[id]/route.ts
+# Source: src/app/api/(common)/services/service-category-module-mapping/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions or other routes (e.g. via the
+# shared `opd` services).
+
+/api/services:
+  get:
+    summary: List services (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of services with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            services: Service[],
+            totalCount: number,
+          },
+          error: ""
+        }
+        ```
+      Notable: no `message` field on success.
+
+      Filters (from `getServicesSchema`):
+        - `search` — `contains` (case-insensitive)
+          against `serviceId` or `name`.
+          Two-branch `OR`.
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`). Both must be present.
+        - `departmentId` — exact match.
+        - `categoryId` — exact match.
+        - `module` — narrows to services whose
+          `category.ServiceCategoryModuleMapping`
+          has a row with `module =
+          query.module.toUpperCase()`.
+        - `status` — `nativeEnum(serviceStatus)`.
+        - `isInitialService` — `boolean` (via
+          `preprocess: value === "true"` —
+          string "true" coerces to `true`,
+          anything else is `undefined`).
+        - `isMapService` — same coercion.
+        - `isConsultationService` — same.
+        - `addOthersForCt` — same.
+        - `serviceType` — stringly-typed enum
+          (`LAB_TEST`, `INITIAL_SERVICE`,
+          `CONSULTATION_SERVICE`,
+          `ADD_OTHERS_FOR_CT`, `ROUND_SERVICE`,
+          `IN_HOUSE_DOCTOR_SERVICE`,
+          `TELE_CONSULTANT_SERVICE`). Maps to
+          internal columns:
+            - `LAB_TEST` → `LabTest isNot null`
+            - `INITIAL_SERVICE` →
+              `includeInRegistration = true`
+            - `CONSULTATION_SERVICE` →
+              `isConsultationService = true`
+            - `ADD_OTHERS_FOR_CT` →
+              `addOthersForCt = true`
+            - `ROUND_SERVICE` /
+              `IN_HOUSE_DOCTOR_SERVICE` /
+              `TELE_CONSULTANT_SERVICE` →
+              `serviceTypeMeta.path: {
+              <jsonKey>: true }`
+        - `patientId` / `memberCardId` —
+          accepted by the schema but NOT
+          applied by the repository. The
+          repository's `where` builder has
+          no branch for these fields. They
+          are documented in the schema but
+          silently dropped (forward-compat
+          or dead parameters?).
+
+      Repository ordering: `createdAt: desc`.
+
+      Source:
+      `src/app/api/(common)/services/route.ts:7-23`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: categoryId
+        schema:
+          type: string
+      - in: query
+        name: departmentId
+        schema:
+          type: string
+      - in: query
+        name: module
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+      - in: query
+        name: isInitialService
+        schema:
+          type: string
+      - in: query
+        name: isMapService
+        schema:
+          type: string
+      - in: query
+        name: isConsultationService
+        schema:
+          type: string
+      - in: query
+        name: addOthersForCt
+        schema:
+          type: string
+      - in: query
+        name: serviceType
+        schema:
+          type: string
+          enum: [LAB_TEST, INITIAL_SERVICE, CONSULTATION_SERVICE, ADD_OTHERS_FOR_CT, ROUND_SERVICE, IN_HOUSE_DOCTOR_SERVICE, TELE_CONSULTANT_SERVICE]
+      - in: query
+        name: patientId
+        schema:
+          type: string
+        description: |
+          Accepted by the schema but NOT applied
+          by the repository. Silently dropped.
+      - in: query
+        name: memberCardId
+        schema:
+          type: string
+        description: |
+          Accepted by the schema but NOT applied
+          by the repository. Silently dropped.
+    responses:
+      "200":
+        description: Paginated list of services.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetServicesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services/{id}:
+  get:
+    summary: Get a service by id
+    description: |
+      Authenticated query. Returns a single
+      service by its primary key (UUID), or
+      `null` if not found.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: Service | null,
+          error: null,
+          message: ""
+        }
+        ```
+
+      Source:
+      `src/app/api/(common)/services/[id]/route.ts:7-22`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_get_by_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: The service, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetServiceByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services/consultation-service:
+  get:
+    summary: List consultation services (paginated)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `DoctorService` rows that are
+      consultation services, joined with the
+      full `service` row. **No filters** —
+      the `where` is always `{}` (an empty
+      filter, no `search`, no `module`,
+      no `isConsultationService` branch). So
+      this endpoint returns all `DoctorService`
+      rows.
+
+      Note: the repository is misnamed — the
+      `consultationValidator` uses
+      `Prisma.validator<Prisma.DoctorServiceDefaultArgs>()`
+      and includes `{ service: true }`. The
+      result is `DoctorService` rows (the
+      mapping table) joined to `Service` —
+      not a list of `Service` rows that are
+      consultation services. The endpoint
+      name suggests it returns
+      `ConsultationService` records, but the
+      shape is the `DoctorService` mapping
+      with a `service` join.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            consultationServices: DoctorServiceWithService[],
+            totalCount: number,
+          },
+          message: "",
+          error: null
+        }
+        ```
+
+      Source:
+      `src/app/api/(common)/services/consultation-service/route.ts:7-27`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_consultation_service_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: |
+          Paginated list of `DoctorService` rows
+          (no consultation-specific filter).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetConsultationServicesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services/doctor-service:
+  get:
+    summary: List doctors with their services (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of **doctors that have at least one
+      `DoctorService`** (`where.doctorServices.some:
+      {}`).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            doctorServices: DoctorWithServices[],
+            totalCount: number,
+          },
+          message: "",
+          error: null
+        }
+        ```
+
+      Filters (from `defaultQuerySchema` +
+      `transformPaginationSchema`):
+        - `search` — multi-term `AND` over
+          `doctorId`, `title`, joined
+          `user.fullName`. Each term must
+          match (`AND` of `OR`-per-term).
+
+      Note: the endpoint name is
+      `/api/services/doctor-service` but the
+      result is a list of `Doctor` records
+      with their `doctorServices` joined,
+      NOT a list of `DoctorService` rows.
+      The naming is confusing — the response
+      key is `doctorServices` but the rows
+      are `Doctor` rows.
+
+      Repository ordering: `createdAt: desc`
+      (on the `Doctor` row).
+
+      Source:
+      `src/app/api/(common)/services/doctor-service/route.ts:7-26`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_doctor_service_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: |
+          Paginated list of doctors with at
+          least one mapped service.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetDoctorServicesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services/doctor-service/{id}:
+  get:
+    summary: Get a doctor's services by doctor id
+    description: |
+      Authenticated query. Returns a single
+      `Doctor` row (with `doctorServices`
+      joined) by the doctor's primary key
+      (UUID).
+
+      Note: the path parameter is named `id`
+      but is the **doctor's primary key**,
+      not a `DoctorService` id. Confusing
+      naming.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: DoctorWithServices | null,
+          error: "",
+          message: ""
+        }
+        ```
+
+      Source:
+      `src/app/api/(common)/services/doctor-service/[id]/route.ts:8-23`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_doctor_service_get_by_doctor_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: |
+          The **doctor's** primary key (UUID).
+          The endpoint is `/api/services/doctor-service/[id]`
+          but the id is the doctor id, not a
+          `DoctorService` id.
+    responses:
+      "200":
+        description: The doctor with their services, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetDoctorServiceByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services/doctor-service/by-service-id/{id}:
+  get:
+    summary: Get doctors mapped to a service
+    description: |
+      Authenticated query. Returns a paginated
+      list of `DoctorService` rows where
+      `serviceId` matches the path parameter,
+      with the joined `Doctor` (id, title,
+      doctorId, joined `specialization.name`,
+      joined `user.fullName`).
+
+      The path parameter is the **service's**
+      primary key (UUID), not a doctor id. So
+      the URL is the inverse of the parent
+      `/api/services/doctor-service/[id]`
+      endpoint.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            serviceDoctors: DoctorServiceWithDoctor[],
+            totalCount: number,
+          },
+          error: "",
+          message: ""
+        }
+        ```
+
+      The repository's `getDoctorsByServiceId`
+      uses a different include than
+      `findDoctorServices` (different join
+      shape) and the count is run sequentially
+      inside `Promise.all` (the inner
+      `findMany` is `await`ed first, which
+      is the
+      same parallelism bug as
+      [[common-bill-types]] /
+      [[common-departments]] /
+      [[common-activity-logs]]).
+
+      Source:
+      `src/app/api/(common)/services/doctor-service/by-service-id/[id]/route.ts:8-24`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_doctor_service_get_by_service_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: |
+          The **service's** primary key (UUID).
+    responses:
+      "200":
+        description: |
+          List of doctors mapped to the given
+          service, with `totalCount`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetDoctorsByServiceIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services/service-category-module-mapping:
+  get:
+    summary: List service-category / module mappings (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated
+      list of `ServiceCategoryModuleMapping`
+      rows. The endpoint name is
+      `/api/services/service-category-module-mapping`
+      (the longest sub-path in the
+      `common-services` sub-area).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            result: ServiceCategoryModuleMapping[],
+            count: number,
+          },
+          error: null,
+          message: ""
+        }
+        ```
+      Notable: the result is double-nested
+      — `result.result` (the field on the
+      repository's return value) and
+      `result.count` (not `totalCount`).
+      Inconsistent with other `common-*`
+      endpoints that use
+      `{ data | items | logs, totalCount }`.
+
+      Filters (from `defaultQuerySchema`):
+        - `search` — `contains` (case-insensitive)
+          against the joined
+          `serviceCategory.name`.
+
+      Repository ordering: `createdAt: desc`.
+
+      Source:
+      `src/app/api/(common)/services/service-category-module-mapping/route.ts:7-28`.
+    tags:
+      - Common / Services
+    operationId: rest_common_services_service_category_module_mapping_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of mappings.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-services.yaml#/GetServiceCategoryModuleMappingsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** on any of
+    the seven routes — all declare only
+    `auth: { required: true }`, no `permissions`
+    array. Any authenticated user can read the
+    full list of services, service-category
+    mappings, doctor-service mappings, and any
+    individual service / doctor-service record.
+  - **`patientId` / `memberCardId` are
+    silently dropped** — the
+    `getServicesSchema` accepts these
+    parameters (both `z.string().optional().nullable()`)
+    but the repository's `where` builder has
+    no branch for them. The Zod schema is
+    forward-looking or documents a future
+    feature.
+  - **`isInitialService` /
+    `isMapService` / `isConsultationService` /
+    `addOthersForCt` use string-`"true"` →
+    boolean coercion** — the Zod
+    `preprocess((value) => value === "true",
+    z.boolean().optional())` only coerces the
+    literal string `"true"` to `true`;
+    everything else (including `"false"`,
+    `"True"`, `"1"`) becomes `undefined`. So
+    the filter is effectively only set when
+    the value is exactly the string `"true"`.
+  - **`isMapService` is a `Service` column** —
+    it tracks whether a service is mapped to
+    at least one doctor. The repository
+    treats it as a plain boolean filter.
+  - **`module` filter upper-cases the value
+    internally** — the repository does
+    `query.module.toUpperCase() as
+    ServiceCategoryModule`. So a query
+    parameter of `"opd"` is treated as
+    `"OPD"`. The `ServiceCategoryModule` is
+    a Prisma enum (values like
+    `OPD`, `IPD`, `PHARMACY`, `LAB`, etc.).
+  - **`serviceType` filter is a union of
+    boolean flags + JSON-path queries** —
+    different values translate to different
+    `where` clauses:
+      - `LAB_TEST` →
+        `LabTest isNot null` (a relation
+        presence check).
+      - `INITIAL_SERVICE` →
+        `includeInRegistration = true`.
+      - `CONSULTATION_SERVICE` →
+        `isConsultationService = true`.
+      - `ADD_OTHERS_FOR_CT` →
+        `addOthersForCt = true`.
+      - `ROUND_SERVICE` /
+        `IN_HOUSE_DOCTOR_SERVICE` /
+        `TELE_CONSULTANT_SERVICE` →
+        `serviceTypeMeta.path: {
+        <jsonKey>: true }` (a JSON path
+        query on the `serviceTypeMeta`
+        column).
+    `STANDARD_SERVICE` is **not handled** by
+    the switch — it falls through to the
+    `default: break` no-op. So
+    `serviceType=STANDARD_SERVICE` returns
+    all services (no narrowing).
+  - **`servicePrice`, `referredPrice`,
+    `reportingPrice`,
+    `urgentReportingPrice`, `urgentPrice`
+    are `Json` columns on the `Service`
+    model** — they store per-group pricing
+    (local / foreigner / insurance /
+    government). The list endpoint does
+    NOT project these — they come through
+    as raw JSON on the response. Same for
+    `serviceTypeMeta`.
+  - **`DoctorService.servicePrice`,
+    `urgentPrice`, `firstRoundPrice` are
+    `Json` columns** — they store
+    per-doctor pricing. The
+    `doctorServiceValidator` selects
+    `servicePrice: true, urgentPrice: true,
+    firstRoundPrice: true` (raw JSON).
+  - **`doctorServiceValidator` uses
+    `Prisma.validator<Prisma.DoctorDefaultArgs>()`
+    (a `select`, not an `include`)** — the
+    projection is the explicit `select`
+    shape (id, title, doctorId,
+    specialization, user.fullName+id,
+    doctorServices.* with nested
+    createdBy/updatedBy/service/price,
+    _count.doctorServices). Notably does
+    NOT include `specializationId`,
+    `medicalLicenseNumber`, `gender`,
+    `consultationInterval`,
+    `specializationName`. The response
+    carries `specialization` (a string
+    from `select.specialization`) — but
+    `specialization` on the `Doctor` model
+    is a string column (`specializationName`
+    in the schema), not a relation. The
+    `user` projection is
+    `{ fullName, id }` only (no
+    `username`, `email`, etc.).
+  - **`doctorServices` joined
+    `createdBy` / `updatedBy` is the
+    3-field projection
+    `fullName, username, id`** — the
+    projection does NOT include
+    `password` (no `User` is fully
+    selected). But `fullName` and
+    `username` are projected.
+  - **`getDoctorsByServiceId` has a
+    `Promise.all` parallelism bug** — the
+    inner `findMany` is `await`ed
+    **before** `Promise.all`, so the
+    `count` is not parallelized with the
+    `findMany`. Same pattern as
+    [[common-bill-types]],
+    [[common-departments]],
+    [[common-activity-logs]].
+  - **`findServiceById` /
+    `findServiceByName` are exported
+    helpers** — not REST-exposed but
+    available for service-internal use.
+    `findServiceByName` does case-insensitive
+    equality (not contains).
+  - **`/api/services/consultation-service`
+    has NO consultation-specific filter** —
+    the repository's `where` is always
+    `{}`. The endpoint name suggests
+    "consultation services" but the result
+    is all `DoctorService` rows
+    regardless of whether they're
+    consultation services. The
+    `consultationServices` key in the
+    response is also misleading — these
+    are `DoctorService` rows (the
+    mapping table), not `Service` rows.
+  - **`/api/services/doctor-service` is
+    really a list of `Doctor` rows** —
+    the response key is `doctorServices`
+    but each row is a `Doctor` with
+    joined `doctorServices`. The
+    filtering (`where.doctorServices.some:
+    {}`) means "doctors that have at
+    least one mapped service" — but
+    the rows are `Doctor` rows, not
+    `DoctorService` rows. Naming
+    inconsistency.
+  - **`/api/services/doctor-service/[id]`
+    vs `/api/services/doctor-service/by-service-id/[id]`
+    have inverted path semantics** — the
+    first is `WHERE Doctor.id = id`
+    (doctor id), the second is
+    `WHERE DoctorService.serviceId = id`
+    (service id). The URL names do not
+    make this distinction clear.
+  - **`/api/services/service-category-module-mapping`
+    has a double-nested result key** —
+    `result.result` (the field on the
+    repository's return value) and
+    `result.count` (not `totalCount`).
+    The repository returns
+    `{ result, count }` and the route
+    forwards it under
+    `{ success, result: { result, count },
+    ... }` — so the consumer reads
+    `result.result.result`. Bug or
+    design?
+  - **`createService` uses
+    `generateCustomId("SID-",
+    lastService?.serviceId)`** — the
+    `serviceId` is sequential, format
+    `SID-NNN`. Same probe-by-duplicate
+    pattern as
+    [[common-clinic]],
+    [[common-departments]],
+    [[common-doctors]],
+    [[common-roles]],
+    [[common-selling-price-groups]],
+    [[common-suppliers]],
+    [[common-users]].
+  - **`createService` has a side-effect
+    on the `LabTest` table** — when the
+    service type is `LAB_TEST`, the
+    service creates a paired `LabTest`
+    row. The duplicate check uses
+    `labTestByServiceId` to detect
+    "service already has a LabTest".
+  - **`Service.name` is NOT `@unique`
+    globally** — only
+    `@@unique([name, departmentId])` (a
+    compound unique). So two services
+    with the same name in different
+    departments are allowed. The
+    duplicate check is
+    `findServiceByNameAndDepartment` —
+    consistent with the compound unique.
+  - **`updateService` uses 409 for
+    "duplicate name" but 400 for
+    "createService" duplicate name** —
+    inconsistent. `createService` throws
+    `AppError("Service with same name
+    already exists", 400)`, but
+    `updateService` throws
+    `AppError(..., 409)`.
+  - **`updateService` may create, update,
+    or delete a `LabTest` row** —
+    `switch (true) { case createLabTest &&
+    !labTestId: create; case createLabTest
+    && !!labTestId: update; case
+    !createLabTest && !!labTestId: {
+    if (!existInTemplateItem) delete
+    else update } }`. The
+    `existInTemplateItem` check is a
+    pre-delete guard — the `LabTest` is
+    only deleted if not referenced by
+    `TemplateItem`. If referenced, the
+    `LabTest` is updated to a stub
+    (re-using the same id).
+  - **`deleteService` does NOT check FK
+    constraints explicitly** — the
+    `service.repository.deleteService`
+    does not catch FK violations (unlike
+    `deletePaymentMethod` /
+    `deleteClinic`). The service's
+    `deleteService` will throw a raw
+    Prisma error on FK violations.
+  - **`createDoctorService` /
+    `updateDoctorService` use
+    `createMany` / `deleteMany` + `createMany`
+    (atomic `update`)** — no explicit
+    transaction wrapper, but the two
+    operations are sequential and
+    non-atomic (a process crash between
+    the delete and the create leaves
+    the doctor with no services). The
+    `updateDoctorService` does use
+    `prisma.$transaction(async (tx) => {
+    ... })` though.
+  - **`markServicesAsMapped` is called
+    unconditionally on `createDoctorService`** —
+    even if the `DoctorService.createMany`
+    fails, `markServicesAsMapped` will
+    have set `Service.isMapService = true`
+    on each service. The mapping state
+    drifts. Same hazard for
+    `unmarkUnusedService` on
+    `deleteDoctorService`.
+  - **`validateUniqueServiceCategoryModuleMapping`
+    throws 400 on duplicate** — both
+    `serviceCategory` and `module` are
+    checked for uniqueness. The check
+    uses `findServiceCategoryModuleMappingBySC`
+    and
+    `findServiceCategoryModuleMappingByModule`.
+    The Prisma model has no `@@unique`
+    constraint on `(serviceCategoryId,
+    module)` — uniqueness is enforced
+    application-layer only. The
+    `module` Prisma enum is a
+    fixed set, so multiple rows for
+    the same module is a
+    domain-logic error caught by the
+    service.
+  - **`getDoctorServiceById` is named
+    misleadingly** — it takes a
+    `doctorId` parameter and returns
+    the `Doctor` row (not the
+    `DoctorService` row). The
+    repository's
+    `findDoctorServiceById(doctorId)`
+    is a `prisma.doctor.findUnique({
+    where: { id: doctorId } })` — it
+    returns the `Doctor`, not a
+    `DoctorService`.

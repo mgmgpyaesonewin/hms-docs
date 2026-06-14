@@ -1,0 +1,347 @@
+# docs/paths/common-items.yaml
+# REST endpoints:
+#   GET /api/items
+#   GET /api/items/[id]
+# Source: src/app/api/(common)/items/route.ts
+# Source: src/app/api/(common)/items/[id]/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions (items/actions.ts) — they are
+# NOT exposed as REST routes here.
+
+/api/items:
+  get:
+    summary: List items (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list
+      of items with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            items: Item[],
+            totalCount: number,
+          },
+          message: "",
+          error: null
+        }
+        ```
+
+      Filters (from `getItemsSchema`, interpreted
+      by `findItemsAndCount`):
+        - `categoryId` — exact match
+          (`where.categoryId`).
+        - `subCategoryId` — exact match
+          (`where.subCategoryId`).
+        - `groupId` — mapped to
+          `where.sellingPriceGroupId` (the
+          query-param name is `groupId` but the
+          field is `sellingPriceGroupId`).
+        - `status` — `nativeEnum(itemStatus)`:
+          `ACTIVE` / `INACTIVE`. Exact match.
+        - `allergy` — `nativeEnum(illergyStatus)`:
+          `ALLERGIC` / `NON_ALLERGIC`. Note the
+          schema name has a typo ("illergy", not
+          "allergy"); the field on `Item` is
+          `allergy`. Exact match.
+        - `search` — `startsWith` (case-insensitive)
+          against `name`, `itemId`, or `generic`.
+          Three-branch `OR`.
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`). Both must be present
+          (the repository only sets the range if
+          both are truthy).
+
+      Repository ordering: `createdAt: desc`.
+      Both the `findMany` and `count` queries
+      share the same `where`, so `totalCount` is
+      the filtered total.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` only — the
+      commented-out `permissions` line in the
+      source (route.ts:13) records the historical
+      reason:
+
+        > "will comment out bcoz in item fetching
+        > for pharma sale got error so (if we want
+        > to add permission in here, need to write
+        > another api for sale item fetching)"
+
+      Any authenticated user can read the full
+      list. The corresponding detail endpoint
+      (`[id]`) does declare
+      `permissions: [{ action: "View", subject:
+      "Items" }]`, so a viewer with the
+      `Items/View` permission is required to read
+      individual items.
+
+      Source:
+      `src/app/api/(common)/items/route.ts:9-32`.
+    tags:
+      - Common / Items
+    operationId: rest_common_items_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: categoryId
+        schema:
+          type: string
+      - in: query
+        name: subCategoryId
+        schema:
+          type: string
+      - in: query
+        name: groupId
+        schema:
+          type: string
+        description: |
+          Mapped to `where.sellingPriceGroupId`
+          (the query-param name is `groupId`).
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+      - in: query
+        name: allergy
+        schema:
+          type: string
+          enum: [ALLERGIC, NON_ALLERGIC]
+      - in: query
+        name: search
+        schema:
+          type: string
+    responses:
+      "200":
+        description: Paginated list of items.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-items.yaml#/GetItemsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/items/{id}:
+  get:
+    summary: Get an item by id
+    description: |
+      Authenticated query. Returns a single item by
+      its primary key (UUID), or `null` if not
+      found.
+
+      Path parameters:
+        - `id` — the item's primary key (UUID
+          string).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: Item | null,
+          message: "",
+          error: null
+        }
+        ```
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true, permissions: [{ action:
+      "View", subject: "Items" }] }`. The handler
+      signature `(req, {}, { params }: { params:
+      Promise<{ id: string }> })` is legitimate
+      (the route has a `[id]` segment).
+
+      Source:
+      `src/app/api/(common)/items/[id]/route.ts:8-27`.
+    tags:
+      - Common / Items
+    operationId: rest_common_items_get_by_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: The item's primary key (UUID).
+    responses:
+      "200":
+        description: The item, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-items.yaml#/GetItemByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "403":
+        description: |
+          Authenticated user does not have the
+          `Items/View` permission.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **Asymmetric RBAC** — the list endpoint
+    declares only `auth: { required: true }` (no
+    `permissions`), but the detail endpoint
+    declares
+    `permissions: [{ action: "View", subject: "Items" }]`.
+    The inline comment in the source (route.ts:13)
+    records why: pharmacy sale flows were failing
+    when the list endpoint was permission-gated, so
+    the list gate was removed with a TODO to
+    "write another api for sale item fetching" if
+    it ever needs to be re-gated. Currently, any
+    authenticated user can list all items, but only
+    users with the `Items/View` permission can
+    retrieve a single item by id.
+  - **`itemId` / `name` are sequential /
+    guessable** — `name @unique` (case-insensitive
+    match in the duplicate check), `itemId @unique`
+    auto-generated as `ITEM-NNN` via
+    `generateCustomId("ITEM-", lastItem?.itemId)`
+    (items-repository.ts:143-148). The
+    `generateCustomId` helper sorts by `createdAt:
+    desc` for the "last" lookup, then increments
+    the trailing NNN segment. So the prefix sorts
+    chronologically for the first 999 rows.
+  - **The `Item` model has 25+ FK relations** —
+    `GRNItem`, `PharmacyRequestItem`,
+    `PharmacyTransferItem`, `PurchaseOrderItem`,
+    `Stock`, `StockRequestItem`, `StockTransferItem`,
+    `PrescriptionItem`, `OpdBillingPharmacySaleItem`,
+    `OpdRefundBillPharmacyItem`,
+    `OpdEmrPharmacyRequestItem`,
+    `OpdEmrPharmacyTransferItem`,
+    `DailyStockReport`, `ExpiryUpdatedStock`,
+    `PurchasedPriceUpdatedStock`,
+    `ItemManualPrice`,
+    `SellingPriceChangeHistory`,
+    `PurchaseRequestItem` (via
+    `mappedPurchaseRequestItems`). A `delete` is
+    heavily FK-constrained — the service's
+    `updateItem` even blocks deactivation while
+    stocks exist
+    (`"This item unit has ${totalStockQty} stocks.
+    You can't inactive right now!"`, 400).
+  - **Tax value is `Decimal` and is coerced to
+    `Number` in the response** — the `Item.taxValue`
+    column is a Prisma `Decimal`. The repository's
+    `findItemsAndCount` and `findItemById` both
+    post-process with
+    `taxValue: Number(item.taxValue)`. So the
+    response carries a JavaScript `number` (IEEE-754
+    double), not a stringified decimal. For tax
+    rates that exceed 2^53, this would lose
+    precision; in practice the `taxValue` is a
+    percentage (0–100) so this is fine.
+  - **`sellingPriceGroup` is the full row** —
+    the repository includes the joined
+    `SellingPriceGroup` row (no projection), so the
+    response carries all `selling_price_groups`
+    columns (including `local`, `foreigner`,
+    `insurance`, `government` percentage fields —
+    see [[common-selling-price-groups]]).
+  - **`supplier` is the full row** — the
+    repository includes the joined `Supplier`
+    (no projection). The TS `Item.supplier` type
+    declares a `Pick<Supplier, "id" | "companyName">`
+    shape, but the runtime data is the full
+    `Supplier` row. Consumers relying on the
+    narrower TS type may break if a column is
+    added to `Supplier` (forward-compat hazard).
+  - **`itemUsedByDepartment` is the full row** —
+    same as `supplier` / `sellingPriceGroup`:
+    full `Department` row (no projection), but
+    TS type asserts
+    `Pick<Department, "id" | "name">`.
+  - **`unit` is the full row** — full `Unit` row
+    (no projection), but TS type asserts
+    `Pick<Unit, "id" | "name" | "abbreviation">`.
+  - **`category` / `subCategory` are full `Category`
+    rows** — same forward-compat pattern. The TS
+    type asserts `Pick<Category, "id" | "name">`.
+  - **`search` uses `startsWith`, not `contains`** —
+    a 4-character prefix match (`name: { startsWith:
+    query.search }`). "Substring anywhere" is
+    not supported. This is consistent with
+    [[common-bill-types]] (which also uses
+    `contains`) only by accident — most
+    `common-*` lookups use `contains`, this one
+    uses `startsWith`.
+  - **`start` / `end` is a strict `&&` in the
+    repository** — the range is only set when
+    **both** are present
+    (items-repository.ts:55-60). A query with
+    only `start` or only `end` is silently
+    ignored.
+  - **Service uses 400 for "stocks > 0" guard
+    messages** — `updateItem` throws 400 ("can't
+    inactive / can't change unit") on
+    stock-presence constraints. Inconsistent with
+    the 409 pattern used for "name already
+    exists" in the same method.
+  - **Activity log entity typo "illergy" in
+    enum** — the `illergyStatus` constant has a
+    typo (intended: "allergy"). The DB column
+    is `allergy`, and the activity logger uses
+    `entity: "Item"`. The typo is contained to
+    the Zod enum.
+  - **Write path uses server actions, not REST** —
+    `createItem` / `updateItem` / `deleteItem`
+    are reached via `items/actions.ts` server
+    actions. The REST surface is read-only.
+  - **`createItem` always creates a new `itemId`
+    sequentially** — uses
+    `generateCustomId("ITEM-", lastItem?.itemId)`,
+    which extracts the trailing number from
+    `lastItem?.itemId`, increments it, and
+    zero-pads to 3 digits. The Prisma `Item`
+    model also has `name @unique`, so the create
+    service does a duplicate check via
+    `findDuplicateItem` (case-insensitive). The
+    409 on duplicate-name is consistent.
+  - **Sub-category is filterable, but the join
+    shape is unfiltered** — the `subCategoryId`
+    filter narrows to a sub-category id; the
+    repository's `include.subCategory = true`
+    includes the full `Category` row, but the
+    relation is `Item.subCategory Category?` via
+    `fields: [subCategoryId], references: [id]`
+    on the `SubCategory` named relation. No
+    constraint that `subCategory.parentCategoryId
+    = categoryId` (the application does not
+    enforce sub-category-parent consistency at
+    the query layer).
+  - **`Item.categoryId` and `Item.subCategoryId`
+    are required / optional respectively** —
+    `categoryId` is `String @db.Uuid` (required,
+    no `?`), `subCategoryId` is `String?` (nullable).
+    A list filter on `subCategoryId` may
+    accidentally return items where
+    `subCategoryId` is null if Prisma's
+    `where: { subCategoryId: ... }` is being
+    misread — but no, the explicit equality match
+    is fine; a non-empty value just matches the
+    non-null rows. Worth noting that there's no
+    implicit "or `subCategoryId IS NULL`" branch.

@@ -1,0 +1,271 @@
+# docs/schemas/common-users.yaml
+# Schemas for the common-users sub-area of the
+# `common` REST module. One endpoint:
+#   GET /api/users
+# Source: src/app/api/(common)/users/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetUsersQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getUserSchema }`. The schema is
+        `baseQuerySchema.merge(z.object({ role:
+        z.string().optional(), department:
+        z.string().optional(), status:
+        z.nativeEnum(userStatus).optional() })).
+        transform(transformPaginationSchema)`.
+
+        The repository's `findAndCountUsers`
+        interprets:
+          - `search` — `contains` (case-insensitive)
+            against `username`, `fullName`,
+            `userId`, `phoneNo`, or `email`.
+            Five-branch `OR`.
+          - `start` / `end` — `createdAt` range
+            (`gte` / `lte`). Both must be present.
+          - `role` — exact match
+            (`where.roleId`).
+          - `department` — exact match
+            (`where.departmentId`).
+          - `status` — `nativeEnum(userStatus)`:
+            `ACTIVE` / `INACTIVE`.
+        Ordering: `createdAt: desc`. The `count`
+        shares the same `where`, so `totalCount`
+        is the filtered total.
+      properties:
+        role:
+          type: string
+          description: |
+            Filter by `roleId` (UUID). The Zod
+            field is `z.string()`, not
+            `z.string().uuid()`, so malformed
+            UUIDs are accepted and result in
+            zero rows.
+        department:
+          type: string
+          description: |
+            Filter by `departmentId` (UUID).
+            Same UUID-validity issue.
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetUsersResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/users`. The
+    repository returns
+    `Promise<{ data: User[]; totalCount: number }>`
+    (users-repository.ts:12-114) and the route
+    wraps it in
+    `{ success: true, result, message: "", error: "" }`.
+    Notable: the result's data key is `data`,
+    not `users` (inconsistent naming).
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [data, totalCount]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: ./common-users.yaml#/User
+        totalCount:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+User:
+  type: object
+  description: |
+    Canonical user shape. TS type `User` from
+    `src/app/(dashboard)/common/user-management/users/features/types/index.ts:10-33`.
+
+    Maps to the Prisma `User` model
+    (prisma/schema.prisma, @@map("users")).
+    Notable columns:
+      - `id` (UUID, PK), `userId` (`@unique`
+        business id, `UID-NNNN`).
+      - `username` (`@unique`), `email`
+        (`@unique`, nullable), `employeeId`
+        (`@unique`, nullable).
+      - `phoneNo`, `fullName`, `jobPosition`
+        (all required strings).
+      - `password` (`String @db.VarChar(255)`,
+        Argon2 hash) — **present in the
+        runtime list response (the
+        `findAndCountUsers` does NOT use
+        `omit: { password: true }`)**;
+        omitted in `createUser` and in the
+        joined `createdBy` / `updatedBy` of
+        `findById`. The TS `User` type does
+        not declare the `password` field —
+        type-vs-runtime mismatch on the list
+        endpoint.
+      - `isSuperadmin` (`@default(false)`).
+      - `status` (`UserStatus` enum,
+        `ACTIVE`/`INACTIVE`, default
+        `ACTIVE`).
+      - `roleId` (FK to `Role`, required —
+        not nullable in the Prisma model;
+        the TS type wrongly says
+        `string | null`).
+      - `departmentId` (FK to `Department`,
+        nullable).
+      - `specialization` (nullable string,
+        free-form).
+
+    The `findAndCountUsers` `include` joins
+    are:
+      - `createdBy` / `updatedBy` — canonical
+        3-field `Publisher` projection
+        (`id, fullName, username`). **No
+        `omit`** — so if these rows have
+        `password`, the password is exposed.
+        The Prisma `User` model always has
+        `password`, so the list response
+        leaks the password hash for the
+        creator / updater. (The `createUser`
+        repo applies `omit: { password: true }`
+        to these projections; `findAndCount`
+        does not.)
+      - `department` — full `Department` row
+        (no projection).
+      - `role` — full `Role` row (no
+        projection) with
+        `permissions: true`. **The full
+        permission matrix for every user
+        in the list is in the response**.
+
+    `User` has 70+ FK relations — a `delete`
+    is heavily FK-constrained.
+  required:
+    - id
+    - userId
+    - username
+    - fullName
+    - phoneNo
+    - jobPosition
+    - status
+    - isSuperadmin
+    - roleId
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    userId:
+      type: string
+      description: |
+        Business id, `@unique`. Sequential
+        `UID-NNNN` (4-digit zero-pad),
+        generated by the service via
+        `getLastUserId` + increment.
+    username:
+      type: string
+      description: |
+        `@unique`. Searchable by `contains`
+        (case-insensitive).
+    fullName:
+      type: string
+    email:
+      type: string
+      format: email
+      nullable: true
+      description: |
+        `@unique` (nullable in Prisma).
+        Searchable by `contains`
+        (case-insensitive).
+    phoneNo:
+      type: string
+    jobPosition:
+      type: string
+    specialization:
+      type: string
+      nullable: true
+    joiningDate:
+      type: string
+      format: date-time
+      nullable: true
+    employeeId:
+      type: string
+      nullable: true
+      description: |
+        `@unique` (nullable in Prisma).
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    isSuperadmin:
+      type: boolean
+      description: |
+        `@default(false)` at the DB level.
+    roleId:
+      type: string
+      format: uuid
+      description: |
+        FK to `Role`. **Non-nullable** in
+        the Prisma model (the TS type wrongly
+        says `string | null`).
+    role:
+      type: object
+      nullable: true
+      description: |
+        Full `Role` row (no projection) with
+        `permissions: true`. The
+        `permissions: true` exposes the full
+        `Permission[]` for the role on
+        every list response item.
+    departmentId:
+      type: string
+      format: uuid
+      nullable: true
+    department:
+      type: object
+      nullable: true
+      description: |
+        Full `Department` row (no projection).
+    password:
+      type: string
+      format: password
+      description: |
+        **LEAK SURFACE**: present on the
+        runtime response of the list
+        endpoint, because
+        `findAndCountUsers` does not apply
+        `omit: { password: true }`. The TS
+        `User` type does not declare this
+        field, so callers using TS type
+        checks do not see the leak;
+        callers using `JSON.parse` do.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

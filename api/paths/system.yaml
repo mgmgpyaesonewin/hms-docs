@@ -1,0 +1,57 @@
+# docs/paths/system.yaml
+# System / infrastructure endpoints.
+# URL note: Next.js App Router drops route groups (parenthesised dirs) from URLs,
+# so a file at src/app/api/(group)/foo/route.ts serves at /api/foo. This module
+# has no route group, so paths are taken verbatim from the file location.
+
+/api/health:
+  get:
+    summary: Liveness / health check
+    description: |
+      Returns a snapshot of service health. Probes three subsystems:
+        - **memory** — uses `os.totalmem()` / `os.freemem()`. OK if usage < 85% (configurable).
+        - **disk** — uses `fs.statfs()` on the filesystem root. OK if usage < 90% (configurable).
+        - **database** — runs `prisma.$queryRaw\`SELECT 1\`` against Postgres. OK on success.
+
+      Aggregate status:
+        - `OK` — all checks pass and no errors collected.
+        - `WARN` — at least one error was caught but no threshold was breached.
+        - `ERROR` — at least one check failed its threshold (memory > 85%, disk > 90%, or DB unreachable).
+
+      The endpoint is unauthenticated by design and **always** returns HTTP 200;
+      consumers should inspect the `status` field of the response body. Used as
+      the Kubernetes liveness/readiness probe (see `src/app/api/health/route.ts`).
+
+      Source: `src/app/api/health/route.ts` → `HealthCheckService.check()`
+      (src/app/(dashboard)/common/health-check/services/health-check.service.ts).
+    tags:
+      - System
+    operationId: system_health_check
+    security: []     # public — no auth
+    responses:
+      "200":
+        description: Health snapshot (always returned, even on failure — see `status`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/HealthSnapshot
+
+/api/sentry-example-api:
+  get:
+    summary: Sentry error-monitoring probe
+    description: |
+      Intentionally throws an unhandled error on every invocation so that the
+      Sentry integration can be verified end-to-end. Marked
+      `export const dynamic = "force-dynamic"` so the route is never cached and
+      the throw is hit on every request. Always returns HTTP 500.
+    tags:
+      - System
+    operationId: system_sentry_probe
+    security: []     # public — no auth
+    responses:
+      "500":
+        description: Always thrown. Used only to verify Sentry is capturing server-side errors.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

@@ -1,0 +1,911 @@
+# docs/paths/emr-opd.yaml
+# OPD-EMR REST surface under
+# `src/app/api/(emr)/(opd)/`. 20
+# read-only endpoints split into
+# four "specialty" sub-trees
+# (opd-emr, endo-opd-emr,
+# hd-opd-emr, ot-opd-emr) plus the
+# appointments / patients / pharmacy
+# probes. Each sub-tree exposes the
+# same 4 operations:
+#   1. `GET /<tree>` — list EMRs
+#      (paginated, `getOpdEmrSchema`).
+#   2. `GET /<tree>/{id}` — single EMR
+#      detail.
+#   3. `GET /<tree>/service-request` —
+#      service-request list filtered
+#      by `patientId` + `appointmentId`
+#      (both optional, but the service
+#      returns `{ emrServiceRequests:
+#      [], totalCount: 0 }` if either
+#      is missing).
+#   4. `GET /<tree>/service-request/{id}`
+#      — single service-request detail
+#      (returns 404 with `AppError
+#      "Service request not found"` if
+#      the id is unknown).
+#
+# All 20 routes use
+# `enhancedApiHandler` with
+# `auth: { required: true }` only —
+# no RBAC. All 20 are GET-only and
+# return
+# `{ success: true, result, message:
+# "", error: null }`.
+#
+# All 9 OPD-side services
+# (`opdEmrService`, `endoOpdEmrService`,
+# `hdOpdEmrService`, `otOpdEmrService`)
+# are instances of the SAME class
+# `OPDEmrService` constructed with
+# different `moduleType` configs
+# (see
+# `src/app/(dashboard)/shared/emr/
+# opd/service/opd-emr.service.ts`).
+# `opd-emr.service` is the
+# workhorse of the whole OPD subtree.
+
+# =============================================================================
+# Appointments and patient lists
+# =============================================================================
+
+/api/appointments-for-opd-emr:
+  get:
+    operationId: getAppointmentsForOpdEmr
+    summary: Get a patient's appointments (for OPD-EMR)
+    description: |
+      Returns the appointments for a
+      single patient, used when
+      building an OPD EMR. Service:
+      `OPDEmrService.getAppointmentForOpdEmr`
+      → `OPDEmrRepository.getAppointmentForOpdEmr`.
+
+      Schema:
+      `getAppointmentForProxySchema`
+      (from
+      `@/app/(dashboard)/shared/proxy-bill/schemas/proxy-appointment.schema.ts`).
+      `patientId` is required;
+      `includeAppointmentId` is
+      optional (used to exclude a
+      specific appointment from the
+      result set, e.g., when editing
+      an existing EMR and swapping
+      the linked appointment).
+
+      PII exposure: appointment rows
+      include patient identifiers and
+      timestamps.
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `auth: { required: true }` only
+      — no RBAC. PII exposure (patient
+      ids, doctor ids, appointment
+      timestamps).
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetAppointmentsForOpdEmrResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/patients-for-opd-emr:
+  get:
+    operationId: getPatientsForOpdEmr
+    summary: Patients eligible for OPD-EMR
+    description: |
+      Returns the paginated list of
+      patients suitable for an
+      OPD-EMR (reuses the shared
+      `getPatientsSchema` from the
+      `common` module — same shape
+      as the OPD patient list).
+      Service: `OPDEmrService
+      .getPatientForOPDEmr`
+      → `OPDEmrRepository
+      .getPatientForOPDEmr`.
+
+      PII-heavy: name, phone, nrcNo,
+      township, region, etc.
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `auth: { required: true }` only
+      — no RBAC. PII-heavy.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetPatientsForOpdEmrResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# OPD-EMR main sub-tree
+# =============================================================================
+#
+# Service: `opdEmrService` (an
+# `OPDEmrService` with default config:
+# `moduleType: "OPD"`,
+# `serviceLabel: "OPD"`).
+
+/api/opd-emr:
+  get:
+    operationId: getOpdEmrList
+    summary: OPD-EMR list
+    description: |
+      Returns the paginated list of
+      OPD EMR rows. Service: `OPDEmrService
+      .getOpdEmrs` → `OPDEmrRepository
+      .findOpdEmrs` (which uses
+      `opdEmrValidator` to include
+      `createdBy`/`updatedBy`/
+      `patient`/`appointment`/
+      `doctor` relations and
+      `opdEmrLabModuleJoints` /
+      `opdEmrImagingModuleJoints` for
+      billing-link status checks).
+
+      Filter schema: `getOpdEmrSchema`
+      (just `baseQuerySchema` with
+      `transformPaginationSchema` —
+      no extra filters beyond
+      pagination + search + start/end).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/opd-emr/{id}:
+  get:
+    operationId: getOpdEmrById
+    summary: OPD-EMR detail
+    description: |
+      Returns the full OPD-EMR row
+      (the `opdEmrValidator` projection
+      with relations). Service: `OPDEmrService
+      .getOpdEmrById` → `OPDEmrRepository
+      .findOpdEmrById`.
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/opd-emr/service-request:
+  get:
+    operationId: getOpdEmrServiceRequests
+    summary: OPD-EMR service-request list
+    description: |
+      Returns the paginated list of
+      OPD-EMR service requests for a
+      given patient+appointment pair.
+      Service: `OPDEmrService
+      .getEmrServiceRequests` →
+      `EmrServiceRequestRepository
+      .findEmrServiceRequestsByPatientAppointmentId`.
+
+      **Behavioural quirk:** the
+      service method returns
+      `{ emrServiceRequests: [],
+      totalCount: 0 }` if either
+      `patientId` or `appointmentId`
+      is missing from the query. This
+      is a **silent** contract — no
+      400 / 404 is raised, the response
+      is a well-formed empty list.
+      Worth surfacing to clients as
+      an empty-state.
+
+      Schema: `defaultQuerySchema.and(
+      z.object({ appointmentId: ...,
+      patientId: ... }))` (the two
+      extra fields are `.optional()`).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      When `patientId` or
+      `appointmentId` is missing, the
+      service silently returns
+      `{ emrServiceRequests: [],
+      totalCount: 0 }` rather than a
+      400 / 404. Clients must check
+      for empty arrays and treat the
+      empty result as "missing
+      filter", not "no data".
+    parameters:
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: appointmentId
+        required: false
+        schema: { type: string }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/opd-emr/service-request/{id}:
+  get:
+    operationId: getOpdEmrServiceRequestById
+    summary: OPD-EMR service-request detail
+    description: |
+      Returns a single OPD-EMR service
+      request, "flattened" via
+      `EmrServiceRequestRepository
+      .flattenEmrServiceRequests`.
+      Returns 404 (`AppError
+      "Service request not found"`) on
+      a missing id. Service: `OPDEmrService
+      .getEmrServiceRequestById`.
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Service request not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# OPD-EMR pharmacy requests
+# =============================================================================
+#
+# Service: `opdEmrService
+# .getEmrPharmacyRequests` →
+# `EmrPharmacyRequestTransferService
+# .getEmrPharmacyRequestsByPatientAppointmentId`.
+# (pharmacy-request paths are OPD-only
+# — none of the ED / daycare / endo /
+# hd / ot sub-trees expose a
+# pharmacy-request probe.)
+
+/api/opd-emr/pharmacy-request:
+  get:
+    operationId: getOpdEmrPharmacyRequests
+    summary: OPD-EMR pharmacy-request list
+    description: |
+      Returns the paginated list of
+      pharmacy requests filed from an
+      OPD-EMR. Service: `OPDEmrService
+      .getEmrPharmacyRequests` →
+      `EmrPharmacyRequestTransferService
+      .getEmrPharmacyRequestsByPatientAppointmentId`.
+
+      Schema: `getEmrPharmacyRequestSchema`
+      (extends `defaultQuerySchema`
+      with `patientId` and
+      `appointmentId` filters).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrPharmacyRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/opd-emr/pharmacy-request/{id}:
+  get:
+    operationId: getOpdEmrPharmacyRequestById
+    summary: OPD-EMR pharmacy-request detail
+    description: |
+      Returns a single OPD-EMR
+      pharmacy request. Service: `OPDEmrService
+      .getEmrPharmacyRequestById` →
+      `EmrPharmacyRequestTransferService
+      .getEmrPharmacyRequestById`.
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrPharmacyRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# ENDO-OPD-EMR sub-tree
+# =============================================================================
+#
+# Service: `endoOpdEmrService` (an
+# `OPDEmrService` configured with
+# `moduleType: "ENDO_OPD"`,
+# `serviceLabel: "ENDO"`,
+# `appointmentModule: ModuleEnum.ENDO`).
+#
+# The 4 routes below mirror the OPD
+# main sub-tree but are filtered to
+# ENDO (Endoscopy) requests.
+/api/endo-opd-emr:
+  get:
+    operationId: getEndoOpdEmrList
+    summary: ENDO-OPD-EMR list
+    description: |
+      Returns the paginated list of
+      ENDO (Endoscopy) OPD-EMR rows.
+      Service: `OPDEmrService
+      .getOpdEmrs` (on the
+      `endoOpdEmrService` instance) →
+      `OPDEmrRepository.findOpdEmrs`
+      with the ENDO config.
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo-opd-emr/{id}:
+  get:
+    operationId: getEndoOpdEmrById
+    summary: ENDO-OPD-EMR detail
+    description: |
+      Returns a single ENDO-OPD-EMR
+      row. Service: `OPDEmrService
+      .getOpdEmrById` (on the
+      `endoOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo-opd-emr/service-request:
+  get:
+    operationId: getEndoOpdEmrServiceRequests
+    summary: ENDO-OPD-EMR service-request list
+    description: |
+      Returns ENDO-OPD-EMR service
+      requests filtered by
+      `patientId` + `appointmentId`.
+      Same empty-on-missing-filter
+      contract as `/opd-emr/service-request`.
+      Service: `OPDEmrService
+      .getEmrServiceRequests` (on the
+      `endoOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: appointmentId
+        required: false
+        schema: { type: string }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/endo-opd-emr/service-request/{id}:
+  get:
+    operationId: getEndoOpdEmrServiceRequestById
+    summary: ENDO-OPD-EMR service-request detail
+    description: |
+      Returns a single ENDO-OPD-EMR
+      service request. Service: `OPDEmrService
+      .getEmrServiceRequestById` (on
+      the `endoOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Service request not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# HD-OPD-EMR sub-tree
+# =============================================================================
+#
+# Service: `hdOpdEmrService` (an
+# `OPDEmrService` configured with
+# `moduleType: "HD_OPD"`,
+# `serviceLabel: "HD"`,
+# `appointmentModule: ModuleEnum.HD`).
+#
+# HD = Hemodialysis. The 4 routes
+# below mirror the OPD main sub-tree
+# but are filtered to HD encounters.
+
+/api/hd-opd-emr:
+  get:
+    operationId: getHdOpdEmrList
+    summary: HD-OPD-EMR list
+    description: |
+      Returns the paginated list of
+      HD (Hemodialysis) OPD-EMR rows.
+      Service: `OPDEmrService
+      .getOpdEmrs` (on the
+      `hdOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd-opd-emr/{id}:
+  get:
+    operationId: getHdOpdEmrById
+    summary: HD-OPD-EMR detail
+    description: |
+      Returns a single HD-OPD-EMR row.
+      Service: `OPDEmrService
+      .getOpdEmrById` (on the
+      `hdOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd-opd-emr/service-request:
+  get:
+    operationId: getHdOpdEmrServiceRequests
+    summary: HD-OPD-EMR service-request list
+    description: |
+      Returns HD-OPD-EMR service
+      requests filtered by
+      `patientId` + `appointmentId`.
+      Same empty-on-missing-filter
+      contract as `/opd-emr/service-request`.
+      Service: `OPDEmrService
+      .getEmrServiceRequests` (on the
+      `hdOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: appointmentId
+        required: false
+        schema: { type: string }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd-opd-emr/service-request/{id}:
+  get:
+    operationId: getHdOpdEmrServiceRequestById
+    summary: HD-OPD-EMR service-request detail
+    description: |
+      Returns a single HD-OPD-EMR
+      service request. Service: `OPDEmrService
+      .getEmrServiceRequestById` (on
+      the `hdOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Service request not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# OT-OPD-EMR sub-tree
+# =============================================================================
+#
+# Service: `otOpdEmrService` (an
+# `OPDEmrService` configured with
+# `moduleType: "OT_OPD"`,
+# `serviceLabel: "OT"`,
+# `appointmentModule: ModuleEnum.OT`).
+#
+# OT = Operating Theatre. The 4
+# routes below mirror the OPD main
+# sub-tree but are filtered to OT
+# encounters.
+
+/api/ot-opd-emr:
+  get:
+    operationId: getOtOpdEmrList
+    summary: OT-OPD-EMR list
+    description: |
+      Returns the paginated list of
+      OT (Operating Theatre) OPD-EMR
+      rows. Service: `OPDEmrService
+      .getOpdEmrs` (on the
+      `otOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ot-opd-emr/{id}:
+  get:
+    operationId: getOtOpdEmrById
+    summary: OT-OPD-EMR detail
+    description: |
+      Returns a single OT-OPD-EMR row.
+      Service: `OPDEmrService
+      .getOpdEmrById` (on the
+      `otOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ot-opd-emr/service-request:
+  get:
+    operationId: getOtOpdEmrServiceRequests
+    summary: OT-OPD-EMR service-request list
+    description: |
+      Returns OT-OPD-EMR service
+      requests filtered by
+      `patientId` + `appointmentId`.
+      Same empty-on-missing-filter
+      contract as `/opd-emr/service-request`.
+      Service: `OPDEmrService
+      .getEmrServiceRequests` (on the
+      `otOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: appointmentId
+        required: false
+        schema: { type: string }
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ot-opd-emr/service-request/{id}:
+  get:
+    operationId: getOtOpdEmrServiceRequestById
+    summary: OT-OPD-EMR service-request detail
+    description: |
+      Returns a single OT-OPD-EMR
+      service request. Service: `OPDEmrService
+      .getEmrServiceRequestById` (on
+      the `otOpdEmrService` instance).
+    tags: [OPD-EMR]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message:
+          "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/emr.yaml#/GetOpdEmrServiceRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Service request not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

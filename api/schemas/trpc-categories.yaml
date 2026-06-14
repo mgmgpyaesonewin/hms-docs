@@ -1,0 +1,199 @@
+# docs/schemas/trpc-categories.yaml
+# Schemas for the tRPC `categories` router (src/lib/trpc/routers/categories.ts).
+# Reuses the shared `Publisher` type from common.yaml.
+
+# =============================================================================
+# Summary types
+# =============================================================================
+
+CategorySummary:
+  type: object
+  description: |
+    Minimal Category projection. The shape referenced by
+    `SubCategory.parentCategory` in trpc-sub-categories.yaml
+    (TS type `SubCategory.parentCategory: { id; name } | null`,
+    from
+    `src/app/(dashboard)/common/set-up/sub-categories/features/type/index.ts:7-10`).
+    Same shape pattern as `DepartmentSummary` but for Category.
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateCategoryInput:
+  type: object
+  description: |
+    Input for `categories.createCategory`. Zod schema `createCategorySchema`
+    in
+    `src/app/(dashboard)/common/set-up/categories/features/schema/create-category-schema.ts:3-5`.
+    Schema has only `name` (no `description`, no `parentCategoryId`).
+  required:
+    - name
+  properties:
+    name:
+      type: string
+      minLength: 1
+      description: Must be unique (case-insensitive).
+
+UpdateCategoryInput:
+  type: object
+  description: |
+    Input for `categories.updateCategory`. Zod schema `updateCategorySchema`
+    in
+    `src/app/(dashboard)/common/set-up/categories/features/schema/update-category-schema.ts:3-6`.
+    Has only `id` and `name`.
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      description: Category id. No UUID validation at the router layer.
+    name:
+      type: string
+      description: Required. Must be unique across other categories when changed.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetCategoriesResponse:
+  type: object
+  description: |
+    Response shape of `categories.getCategories`. Service signature
+    (categories-repository.ts:12, returned at line 47):
+    `{ categories: Category[]; count: number }`.
+
+    Note the field is named `categories`, **not** `data` — this differs
+    from `departments.getDepartments` and `stores.getStores`. The
+    response is filtered to top-level categories only
+    (`parentCategoryId: null`).
+  required:
+    - categories
+    - count
+  properties:
+    categories:
+      type: array
+      items:
+        $ref: ./trpc-categories.yaml#/Category
+    count:
+      type: integer
+      minimum: 0
+      description: Total top-level category count (filtered to `parentCategoryId: null`).
+
+Category:
+  type: object
+  description: |
+    Canonical category shape. TS type `Category` from
+    `src/app/(dashboard)/common/set-up/categories/features/type/index.ts:7-14`.
+
+    Maps to the Prisma `Category` model
+    (prisma/schema.prisma) with `createdBy` / `updatedBy` populated
+    only by the `getCategories` read method. The service's other reads
+    (`findExistingCategoryId`, `findExistingSubCategoryInCategory`,
+    `findExistingCategoryName`) return bare records.
+
+    The `parentCategoryId` field models the category hierarchy (a
+    category can be a sub-category of another). Sub-categories are
+    managed by the separate `trpc-sub-categories` router and are not
+    returned by `categories.getCategories`.
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique (case-insensitive, per repository lookup).
+    parentCategoryId:
+      type: string
+      format: uuid
+      nullable: true
+      description: |
+        Set on sub-categories (managed by trpc-sub-categories). Always
+        `null` for items returned by `categories.getCategories`.
+    createdById:
+      type: string
+      format: uuid
+      description: Always present in the bare record. (Prisma column.)
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+      description: Always present in the bare record. (Prisma column.)
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    `createdBy` and `updatedBy` are **only** populated by:
+      - `categories.getCategories` (with `createdBy: { select: { id, fullName, username } }`)
+
+    NOT populated by:
+      - `categories.createCategory` (calls `prisma.category.create({ data })` with no `include`)
+      - `categories.updateCategory` (calls `prisma.category.update({ where, data })` with no `include`)
+      - `categories.deleteCategory` (calls `prisma.category.delete({ where })` with no `include`)
+      - Service's internal lookups (`findExistingCategoryId`, `findExistingCategoryName`,
+        `findExistingSubCategoryInCategory`) — all return bare records.
+
+    For the write methods, the response is a **bare** category record.
+    Use the `CategoryBare` schema for those operations.
+
+CategoryBare:
+  type: object
+  description: |
+    Bare Category record — the shape returned by `createCategory`,
+    `updateCategory`, and `deleteCategory` (no `createdBy` / `updatedBy`
+    included). Differs from the full `Category` schema only in that
+    the `createdBy` and `updatedBy` fields are absent.
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdById
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    parentCategoryId:
+      type: string
+      format: uuid
+      nullable: true
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

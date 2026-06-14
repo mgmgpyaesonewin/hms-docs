@@ -1,0 +1,175 @@
+# docs/schemas/common-hospital-info.yaml
+# Schemas for the common-hospital-info sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/hospital-info
+# Source: src/app/api/(common)/hospital-info/route.ts
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetHospitalInfoResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/hospital-info`. The
+    route uses the bare `apiHandler` wrapper
+    (not `enhancedApiHandler`) and manual
+    `verifyApiAuth()`. The success envelope is
+
+    ```
+    { success: true, result: HospitalInfo | null }
+    ```
+
+    — there is **no `error` or `message` field** on
+    success (and no `error` field at all in the
+    response, see security notes). The error path uses
+    the `apiHandler` default envelope
+    (`{ success: false, message: "Internal Server
+    Error", result: null, error: <err> }`).
+
+    The repository uses
+    `prisma.hospitalInfo.findFirst({ include: {
+    phoneNos: true }})` with no `where` clause — so
+    the endpoint returns whichever row happens to
+    come back first. The Prisma model declares `name
+    @unique` but the row is otherwise unconstrained;
+    in practice a multi-tenant install is expected
+    to have exactly one row.
+  required:
+    - success
+    - result
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-hospital-info.yaml#/HospitalInfo
+        - type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+HospitalInfo:
+  type: object
+  description: |
+    Canonical hospital-info shape. TS type `HospitalInfo`
+    from
+    `src/app/(dashboard)/common/hospital-info/features/types/index.ts:1-9`.
+
+    Maps to the Prisma `HospitalInfo` model
+    (prisma/schema.prisma, @@map("hospital_info")).
+
+    The `phoneNos` field is a 1:N relation to
+    `HospitalPhoneNumber` rows (no `onDelete: Cascade`
+    declared in the model — manual cleanup is handled
+    by the service's `update` path via a transaction
+    that `deleteMany`s and re-`createMany`s, see
+    `hospital-info-repository.ts:20-42`).
+
+    `name` is `@unique` in the Prisma model (so the
+    `createHospitalInfo` / `updateHospitalInfo` paths
+    can identify the singleton row by name).
+  required:
+    - id
+    - name
+    - address
+    - email
+    - phoneNos
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model. The
+        `createHospitalInfo` server action enforces a
+        singleton — if a row already exists, it
+        updates that row rather than creating a new one
+        (hospital-info-service.ts:12-61).
+    address:
+      type: string
+    email:
+      type: string
+      format: email
+    footer:
+      type: string
+      nullable: true
+    logoUrl:
+      type: string
+      format: uri
+      nullable: true
+      description: |
+        S3-hosted logo URL. The
+        `delete-hospital-info-logo.job` (pg-boss) is
+        **defined but never invoked** — the
+        `createHospitalInfo` server action computes
+        `isNewLogo` but the deletion call is commented
+        out (hospital-info-service.ts:48-59, with a
+        TODO note: "having issues with .send method /
+        will look into it later"). So old logos are
+        never garbage-collected by the application —
+        they stay in S3.
+    phoneNos:
+      type: array
+      description: |
+        The `HospitalPhoneNumber` rows for this
+        hospital. The Prisma model has no `onDelete`
+        on the relation, so phone rows are NOT
+        cascade-deleted with the hospital. The
+        service's update path is what keeps the
+        `phoneNos` array in sync — it
+        `deleteMany`s and re-`createMany`s in a
+        single transaction
+        (hospital-info-repository.ts:20-42).
+      items:
+        $ref: ./common-hospital-info.yaml#/HospitalPhoneNumber
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+HospitalPhoneNumber:
+  type: object
+  description: |
+    A phone number row attached to a `HospitalInfo`.
+    Prisma model `HospitalPhoneNumber`
+    (prisma/schema.prisma). The `type` column is a
+    free-form string (not an enum); the service uses
+    `"primary"` and `"additional"` as the two known
+    values, but the column is unconstrained.
+  required:
+    - id
+    - type
+    - number
+    - hospitalId
+  properties:
+    id:
+      type: string
+      format: uuid
+    type:
+      type: string
+      description: |
+        Free-form. The
+        `createHospitalInfoSchema.phoneNos.additional`
+        array always emits `type: "additional"`, and
+        the single primary emits `type: "primary"`.
+        The Prisma column has no enum constraint, so
+        other values are possible if inserted directly.
+    number:
+      type: string
+      maxLength: 20
+      description: |
+        Max length is enforced at the create-schema
+        layer
+        (`createHospitalInfoSchema.phoneNos.primary:
+        z.string().max(20)`). The Prisma column is
+        unbounded `String`, so direct DB inserts can
+        exceed this.
+    hospitalId:
+      type: string
+      format: uuid

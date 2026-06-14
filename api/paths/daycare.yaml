@@ -1,0 +1,420 @@
+# docs/paths/daycare.yaml
+# Daycare REST module. 7 read-only endpoints
+# used by the daycare dashboard (and the EMR's
+# daycare subtree) to:
+#   - list proxy bills (the daycare bill is
+#     modelled as a "proxy bill" with
+#     `department = DAYCARE`).
+#   - list / filter daycare appointments.
+#   - list confirmed daycare patients.
+#   - look up a single daycare bill by id.
+#   - list patients eligible for daycare.
+#   - fetch a patient's appointments when
+#     creating a daycare bill.
+# All endpoints are GET-only, all use
+# `enhancedApiHandler` with
+# `auth: { required: true }` only — no
+# `permissions` array declared. Source files
+# under src/app/api/(daycare)/.
+
+# =============================================================================
+# Appointments
+# =============================================================================
+
+/api/appointments-for-daycare:
+  get:
+    operationId: getAppointmentsForDaycare
+    summary: Get a patient's appointments (for proxy-bill creation)
+    description: |
+      Returns the appointments for a single
+      patient, used when building a daycare
+      proxy bill. The service method
+      `DayCareService.getAppointmentForDaycare`
+      delegates to
+      `DayCareRepository.getAppointmentForDaycare`,
+      which in turn uses the same
+      `Appointment` query shape as the OPD /
+      IPD / ED "appointments-for-*" probes.
+
+      The schema `getAppointmentForProxySchema`
+      takes `patientId` (required) and
+      `includeAppointmentId` (optional). The
+      latter is used to exclude a specific
+      appointment from the result set
+      (e.g., when editing an existing bill and
+      you want to swap the linked
+      appointment).
+
+      PII exposure: appointment rows include
+      patient identifiers and timestamps.
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `enhancedApiHandler` with
+      `auth: { required: true }` only — no
+      RBAC. Same PII exposure pattern as the
+      other "appointments-for-*" proxies
+      under opd, ed, ot, etc.
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. `result` is whatever
+          `DayCareRepository.getAppointmentForDaycare`
+          returns (a list of `Appointment`
+          rows with joined `doctor`,
+          `appointmentType`, `user`, etc.).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetAppointmentsForDaycareResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/daycare-appointments:
+  get:
+    operationId: getDaycareAppointments
+    summary: Daycare appointment list
+    description: |
+      Returns the paginated list of daycare
+      appointments, joined with patient /
+      doctor / appointmentType. Same input
+      schema as the regular
+      `GET /api/appointments` route
+      (`getAppointmentsSchema` from the
+      shared appointment module). The service
+      method is
+      `DayCareService.getDayCareAppointment`
+      which delegates to
+      `DayCareRepository.getDayCareAppointments`.
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. PII-heavy (patient
+          name, id, doctor name, timestamps).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetDaycareAppointmentsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Confirmed patients
+# =============================================================================
+
+/api/daycare-confirmed-patients:
+  get:
+    operationId: getDaycareConfirmedPatients
+    summary: Daycare confirmed-patient list
+    description: |
+      Returns the paginated list of patients
+      with **confirmed** daycare appointments
+      (the list used by the daycare
+      dashboard's main view). The schema
+      `getDayCareConfirmedPatientSchema` is
+      just `baseQuerySchema` (pagination +
+      search + date range) — no extra
+      filters. The service method
+      `DayCareService.getDayCareConfirmedPatients`
+      delegates to
+      `DayCareRepository.getDayCareConfirmedPatients`.
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      The schema's
+      `getDayCareConfirmedPatientSchema` is
+      just `z.object({}).merge(baseQuerySchema)`
+      — no `confirmed` / `cancelled` /
+      `status` filter is exposed, despite the
+      endpoint name suggesting a status
+      filter. The repository likely hard-codes
+      the "confirmed" status filter.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. PII-heavy.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetDaycareConfirmedPatientsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Proxy bill (the daycare bill model)
+# =============================================================================
+
+/api/daycare/list:
+  get:
+    operationId: getDaycareProxyBillList
+    summary: Daycare proxy-bill list
+    description: |
+      Returns the paginated list of daycare
+      proxy bills. Service:
+      `DayCareService.getProxyBillList`
+      (inherited from
+      `ProxyBillTemplateService`, which
+      delegates to
+      `ProxyBillRepository.getProxyBillList`).
+
+      Filter inputs:
+        - `billTypeId` (string)
+        - `patientType` (`patientType` enum)
+        - `patientGroup` (string — note:
+          schema uses bare `z.string()` here,
+          not `nativeEnum(patientGroup)`,
+          unlike the daycare.schema.ts list
+          schema)
+        - `storeId` (string)
+        - `paymentStatus` (string)
+        - `departmentType` (defaults to
+          `DepartmentEnum.ED` — a copy-paste
+          from the ED proxy-bill list schema;
+          the daycare service should
+          override this with `DAYCARE` but
+          the Zod default still returns
+          `ED` when the client omits it. The
+          repository is expected to override
+          via the `department =
+          DepartmentEnum.DAYCARE` field on
+          the `DayCareService` instance.
+
+      PII + business data: patient id,
+      proxy-bill id, totals, payment status.
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      The `departmentType` Zod default is
+      `DepartmentEnum.ED` — a copy-paste
+      from the ED list schema. The daycare
+      service sets
+      `department = DepartmentEnum.DAYCARE`
+      at the class level, so the runtime
+      filter is correct, but the Zod default
+      is misleading. Worth fixing.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: billTypeId
+        schema: { type: string }
+      - in: query
+        name: patientType
+        schema: { type: string, enum: [OPD, IPD, ED, DAYCARE, EMERGENCY, OTHER] }
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: storeId
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        schema: { type: string }
+      - in: query
+        name: departmentType
+        schema:
+          type: string
+          enum: [OPD, IPD, ED, DAYCARE, OT, CATHLAB, HD, ENDO]
+        description: |
+          Defaults to `ED` per the Zod
+          schema (a copy-paste from the ED
+          list). The daycare service
+          overrides this at the repository
+          level with `department =
+          DepartmentEnum.DAYCARE`.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetDaycareProxyBillListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/daycare/{id}:
+  get:
+    operationId: getDaycareProxyBillById
+    summary: Daycare proxy-bill detail
+    description: |
+      Returns the full proxy-bill row
+      (id, patientId, storeId, date, billTypeId,
+      patientGroup, patientType, mainProcedureId,
+      admissionId, endoRequestId, otRequestId,
+      hdRequestId, departmentType, serviceBill,
+      procedureBill, servicePackageBill,
+      pharmacyBill, totals, remark, etc.) for
+      a single daycare bill. Service:
+      `DayCareService.getProxyBillById`
+      (inherited from
+      `ProxyBillTemplateService`).
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. The result is the
+          full `ProxyBill` row with joined
+          `pharmacyBill`, `serviceBill`,
+          `procedureBill`, `servicePackageBill`
+          (all nullable / optional). PII
+          (patient id) and business data.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetDaycareProxyBillByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/daycare/{id}/activities:
+  get:
+    operationId: getDaycareProxyBillActivities
+    summary: Daycare proxy-bill activity log
+    description: |
+      Returns the per-row activity-log
+      entries for a daycare bill (the audit
+      trail of who created / updated /
+      cancelled the bill, when, with what
+      remark). Service:
+      `DayCareService.getProxyBillActivites`
+      (inherited from
+      `ProxyBillTemplateService`,
+      delegates to
+      `ProxyBillRepository.getProxyBillActivites`
+      — note the upstream repo method
+      name is misspelled "Activites" not
+      "Activities"; the route path uses the
+      correct spelling).
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Upstream repository method
+      `getProxyBillActivites` is misspelled
+      (missing 'y' — should be
+      "Activities"). Preserved verbatim from
+      `proxy-bill.repository.ts`. The route
+      path uses the correct spelling
+      (`/activities`).
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. Result is the list
+          of activity-log rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetDaycareProxyBillActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Patients for daycare
+# =============================================================================
+
+/api/patients-for-daycare:
+  get:
+    operationId: getPatientsForDaycare
+    summary: Patients eligible for daycare
+    description: |
+      Returns the paginated list of patients
+      suitable for daycare billing. Reuses
+      the **same** `getPatientsSchema` as the
+      OPD patient list
+      (`@/app/(dashboard)/common/patients/.../get-patients-schema.ts`),
+      which includes the standard patient
+      PII filters (search, start, end, …).
+      The service method
+      `DayCareService.getPatientForDaycare`
+      delegates to
+      `DayCareRepository.getPatientForDaycare`.
+
+      PII-heavy: name, phone, nrcNo,
+      township, region, etc. The "for
+      daycare" filter logic lives in the
+      repository; the schema is shared with
+      the OPD patient list.
+    tags: [Daycare]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `enhancedApiHandler` with
+      `auth: { required: true }` only. No
+      RBAC. PII-heavy.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/daycare.yaml#/GetPatientsForDaycareResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

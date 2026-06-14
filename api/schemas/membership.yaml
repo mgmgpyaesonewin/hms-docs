@@ -1,0 +1,542 @@
+# docs/schemas/membership.yaml
+# OpenAPI component schemas for the `membership`
+# module's REST surface (`src/app/api/(membership)/`).
+#
+# Backed by:
+#   - `MemberCardService` (member-card CRUD)
+#   - `MemberCardTypeService` (member-card-type CRUD)
+#   - `MemberListService` (active-member lookup)
+#   - 2 standalone `PrismaClient` query routes
+#     (`/member-card/usage-count`,
+#     `/member-card/room-usage-count`) that bypass
+#     the service layer entirely.
+#
+# The module re-uses a small set of base types
+# (`MemberCardType`, `MemberCard`, `MemberList`,
+# `PatientMemberCardServiceUsage`,
+# `PatientMemberCardTypeRoomChargeUsage`) that are
+# also referenced by the proxy-bill / OPD billing
+# layer. This file documents the **shape exposed
+# via the REST endpoints** (response envelopes
+# and the underlying entity types), not the
+# server-action contracts.
+
+# =============================================================================
+# Member card type
+# =============================================================================
+
+GetMemberCardTypeListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        memberCardTypes:
+          type: array
+          items: { $ref: "#/MemberCardType" }
+        count:
+          type: integer
+          description: |
+            Total matching rows
+            (post-filter, pre-pagination).
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+  required: [success, result, message, error]
+
+GetMemberCardTypeByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/MemberCardType"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+  required: [success, result, message, error]
+
+MemberCardType:
+  type: object
+  description: |
+    `MemberCardType` is the "template" / "tier" of
+    a member card. Each `MemberCard` instance is
+    bound to one type. The type defines the
+    services / service-packages the member can
+    access, the room-charge discount policy, and
+    the visual styling (`cardColor1`,
+    `cardColor2`).
+
+    Two materialisations exist:
+      1. **List** — used by
+         `GET /api/member-card-type` via
+         `getMemberCardTypeList`. The list endpoint
+         additionally computes
+         `hasValidActiveMemberCard` (true if ≥ 1
+         active `MemberCard` of this type exists
+         with `validFrom ≤ now ≤ validTo`).
+      2. **Detail** — used by
+         `GET /api/member-card-type/{id}`. The
+         detail service transforms the `servicePrice`
+         and `servicePackage.price` JSON values
+         into the typed `SubPriceSchema` shape
+         (4-tier local/foreigner/insurance/government)
+         — if the stored value is null, the
+         service injects zeros.
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string }
+    cardColor1: { type: string, description: "Primary card color (CSS)." }
+    cardColor2: { type: string, description: "Secondary card color (CSS)." }
+    price: { type: number, minimum: 0 }
+    validityYears:
+      type: integer
+      minimum: 1
+      description: |
+        Card validity period in years. The
+        per-card `validFrom` / `validTo` are
+        derived from this at create time.
+    maxMembers:
+      type: integer
+      minimum: 1
+      description: |
+        Max `MemberList` rows the card can hold.
+        Once reached, `MemberCard.limitReachedAt`
+        is set and the card stops accepting new
+        members.
+    roomChargeDiscount:
+      type: number
+      nullable: true
+      description: Room-charge discount percentage.
+    roomChargeUsageLimit:
+      type: string
+      enum: [UNLIMITED, DAYS]
+      nullable: true
+      description: |
+        `RoomChargeUsageLimit` Prisma enum.
+        When `DAYS`, `roomChargeDays` is the
+        window in which the discount applies.
+    roomChargeDays:
+      type: integer
+      nullable: true
+      description: |
+        Days window for the room-charge discount
+        (when `roomChargeUsageLimit: "DAYS"`).
+        Must be null when `roomChargeUsageLimit`
+        is `UNLIMITED` or undefined.
+    memberCardTypeService:
+      type: array
+      description: Per-service discount / usage-limit configuration.
+      items: { $ref: "#/MemberCardTypeService" }
+    memberCardTypeServicePackage:
+      type: array
+      description: Per-service-package discount / usage-limit configuration.
+      items: { $ref: "#/MemberCardTypeServicePackage" }
+    hasValidActiveMemberCard:
+      type: boolean
+      description: |
+        **List-only** — true if ≥ 1 active
+        `MemberCard` of this type currently
+        exists. Used by the front-end to disable
+        edit / delete controls. The detail
+        endpoint does NOT return this field.
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+MemberCardTypeService:
+  type: object
+  description: |
+    Per-service discount / usage-limit row on
+    `MemberCardTypeService`. The list/detail
+    endpoint projects this with the related
+    `service` (id, name, category, serviceId).
+  properties:
+    id: { type: string, format: uuid }
+    serviceId: { type: string, format: uuid }
+    service:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category:
+          type: object
+          nullable: true
+          properties:
+            name: { type: string }
+        serviceId: { type: string }
+        servicePrice: { $ref: "#/SubPriceSchema" }
+    usageLimit:
+      type: string
+      enum: [UNLIMITED, FREQUENCY, DAYS]
+      description: |
+        `UsageLimit` Prisma enum. When
+        `FREQUENCY` or `DAYS`, `frequencyDays`
+        must be a positive integer (enforced by
+        `memberCardTypeServiceItemSchema.superRefine`).
+    frequencyDays:
+      type: integer
+      nullable: true
+      description: |
+        Required when `usageLimit: FREQUENCY` or
+        `usageLimit: DAYS`. Null for `UNLIMITED`.
+    discountPercentage:
+      type: integer
+      nullable: true
+      description: Required (positive) at create / edit time.
+    discountAmount:
+      type: integer
+      nullable: true
+    discountServicePrice:
+      type: integer
+      nullable: true
+      description: |
+        Net service price after discount. The
+        `ProxyBillIPDMembershipService` uses
+        this to apply the discount at billing
+        time.
+    originalServicePrice:
+      type: integer
+      nullable: true
+      description: |
+        Snapshot of the service price at
+        member-card-type edit time.
+
+MemberCardTypeServicePackage:
+  type: object
+  description: |
+    Per-service-package discount / usage-limit
+    row on `MemberCardTypeServicePackage`. Same
+    shape as `MemberCardTypeService` but
+    references a `ServicePackage` instead of a
+    single `Service`.
+  properties:
+    id: { type: string, format: uuid }
+    servicePackageId: { type: string, format: uuid }
+    servicePackage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        servicePackageId: { type: string }
+        price: { $ref: "#/SubPriceSchema" }
+    usageLimit:
+      type: string
+      enum: [UNLIMITED, FREQUENCY, DAYS]
+    frequencyDays: { type: integer, nullable: true }
+    discountPercentage: { type: integer, nullable: true }
+    discountAmount: { type: integer, nullable: true }
+    discountServicePrice: { type: integer, nullable: true }
+    originalServicePrice: { type: integer, nullable: true }
+
+SubPriceSchema:
+  type: object
+  description: |
+    4-tier service price
+    (local/foreigner/insurance/government). The
+    `findById` member-card-type service
+    transforms a missing `servicePrice` (or
+    `servicePackage.price`) into a zero-filled
+    default so the response is always
+    well-formed.
+  properties:
+    local: { type: number, minimum: 0 }
+    foreigner: { type: number, minimum: 0 }
+    insurance: { type: number, minimum: 0 }
+    government: { type: number, minimum: 0 }
+
+# =============================================================================
+# Member card (issued instance of a MemberCardType)
+# =============================================================================
+
+GetMemberCardListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        memberCards:
+          type: array
+          items: { $ref: "#/MemberCard" }
+        totalCount:
+          type: integer
+          description: |
+            Total matching rows
+            (post-filter, pre-pagination).
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+  required: [success, result, message, error]
+
+GetMemberCardByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/MemberCard"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+  required: [success, result, message, error]
+
+GetMemberCardWithPatientIdResponse:
+  type: object
+  description: |
+    Slim shape returned by
+    `GET /api/member-card-by-patient`. The
+    member-card-type projection is **reduced**
+    (no `roomChargeUsageLimit`,
+    `roomChargeDiscount`, `roomChargeDays`,
+    `cardColor1`, `cardColor2`) but the full
+    nested `memberCardTypeService[]` /
+    `memberCardTypeServicePackage[]` is
+    included.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/MemberCardByPatientId"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+  required: [success, result, message, error]
+
+MemberCard:
+  type: object
+  description: |
+    `MemberCard` is an issued card of a
+    particular `MemberCardType`. The
+    `memberCardId` column is the user-facing
+    card id (e.g. "VIP-2026-0001") and is
+    unique across the table (case-insensitive
+    check on `memberCardRepository.existsByNameExceptId`).
+  properties:
+    id: { type: string, format: uuid }
+    memberCardId:
+      type: string
+      description: |
+        Human-friendly card id
+        (e.g. "VIP-2026-0001"). Unique across
+        the table.
+    memberCardTypeId: { type: string, format: uuid }
+    memberCardType:
+      $ref: "#/MemberCardType"
+    memberCount:
+      type: integer
+      description: |
+        Current member count
+        (cached `MemberList` row count). Mirrors
+        `memberList.length` — denormalised
+        counter.
+    validFrom:
+      type: string
+      format: date-time
+      nullable: true
+    validTo:
+      type: string
+      format: date-time
+      nullable: true
+    limitReachedAt:
+      type: string
+      format: date-time
+      nullable: true
+      description: |
+        Set when the card hits
+        `memberCardType.maxMembers`. Once set,
+        new members cannot be added.
+    isActive: { type: boolean }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    memberList:
+      type: array
+      description: |
+        Slim member list projection (no
+        `updatedBy` / `createdBy`). Each entry
+        includes the full `patient` record.
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          createdAt: { type: string, format: date-time }
+          patient: { type: object }
+          opdBillingId:
+            type: string
+            format: uuid
+            nullable: true
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+MemberCardByPatientId:
+  allOf:
+    - $ref: "#/MemberCard"
+    - type: object
+      description: |
+        Variant of `MemberCard` returned by
+        `GET /api/member-card-by-patient`. The
+        embedded `memberCardType` is reduced
+        (no `roomChargeUsageLimit`,
+        `roomChargeDiscount`, `roomChargeDays`,
+        `cardColor1`, `cardColor2`) but the
+        full nested
+        `memberCardTypeService[]` /
+        `memberCardTypeServicePackage[]` is
+        included.
+      properties:
+        memberCardType:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            validityYears: { type: integer, minimum: 1 }
+            cardColor1: { type: string }
+            cardColor2: { type: string }
+            price: { type: number, minimum: 0 }
+            maxMembers: { type: integer, minimum: 1 }
+            memberCardTypeService:
+              type: array
+              items: { $ref: "#/MemberCardTypeService" }
+            memberCardTypeServicePackage:
+              type: array
+              items: { $ref: "#/MemberCardTypeServicePackage" }
+
+# =============================================================================
+# Member list (active members on a card)
+# =============================================================================
+
+GetMemberListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        memberLists:
+          type: array
+          items: { $ref: "#/MemberList" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { type: string, example: "" }
+  required: [success, result, message, error]
+
+MemberList:
+  type: object
+  description: |
+    `MemberList` row — a patient enrolled on a
+    `MemberCard`. The list endpoint
+    (`GET /api/member-list`) returns the full
+    `Patient` + `MemberCard` + `MemberCardType`
+    include tree (`include: { patient: true,
+    memberCard: { include: { memberCardType: true
+    } }, createdBy: true, updatedBy: true }`).
+
+    The list endpoint does NOT filter by
+    `isActive` (unlike `findActiveMember`).
+  properties:
+    id: { type: string, format: uuid }
+    patientId: { type: string, format: uuid }
+    memberCardId: { type: string, format: uuid }
+    isActive: { type: boolean }
+    opdBillingId: { type: string, format: uuid, nullable: true }
+    patient: { type: object }
+    memberCard:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        memberCardId: { type: string }
+        memberCardTypeId: { type: string, format: uuid }
+        memberCardType: { $ref: "#/MemberCardType" }
+    createdBy: { type: object }
+    updatedBy: { type: object }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+# =============================================================================
+# Usage counters (standalone routes)
+# =============================================================================
+#
+# Two routes bypass the service layer entirely
+# and instantiate their own `PrismaClient` to
+# read the `PatientMemberCardServiceUsage` and
+# `PatientMemberCardTypeRoomChargeUsage` tables.
+# They return a **non-standard envelope** —
+# just `{ usageCount, lastUsedAt, previousUsedAt }`
+# with HTTP 400 on validation failure (no
+# `success` / `result` / `error` / `message`
+# fields). This is an inconsistency the team
+# may want to normalise.
+
+GetMemberCardServiceUsageCountResponse:
+  type: object
+  description: |
+    Response from
+    `GET /api/member-card/usage-count?patientId=&memberCardTypeServiceId=`.
+    Returns a single row of
+    `PatientMemberCardServiceUsage` for the
+    (patient, memberCardTypeService) pair, or
+    zeroed defaults if no row exists. **The
+    envelope is non-standard** — no `success` /
+    `result` / `error` / `message` fields.
+  properties:
+    usageCount:
+      type: integer
+      minimum: 0
+      description: |
+        Number of times the patient has used
+        the (card-type, service) pair. `0` if
+        the row does not exist.
+    lastUsedAt:
+      type: string
+      format: date-time
+      nullable: true
+    previousUsedAt:
+      type: string
+      format: date-time
+      nullable: true
+  required: [usageCount, lastUsedAt, previousUsedAt]
+
+GetMemberCardRoomUsageCountResponse:
+  type: object
+  description: |
+    Response from
+    `GET /api/member-card/room-usage-count?patientId=&memberCardTypeId=`.
+    Returns a single row of
+    `PatientMemberCardTypeRoomChargeUsage` for
+    the (patient, memberCardType) pair, or
+    zeroed defaults if no row exists. **Same
+    non-standard envelope as
+    `GetMemberCardServiceUsageCountResponse`.**
+  properties:
+    usageCount:
+      type: integer
+      minimum: 0
+    lastUsedAt:
+      type: string
+      format: date-time
+      nullable: true
+    previousUsedAt:
+      type: string
+      format: date-time
+      nullable: true
+  required: [usageCount, lastUsedAt, previousUsedAt]

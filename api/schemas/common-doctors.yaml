@@ -1,0 +1,590 @@
+# docs/schemas/common-doctors.yaml
+# Schemas for the common-doctors sub-area of the
+# `common` REST module. Three endpoints:
+#   GET  /api/doctors
+#   GET  /api/doctors/schedules
+#   GET  /api/doctors/[id]
+# Source: src/app/api/(common)/doctors/route.ts
+# Source: src/app/api/(common)/doctors/schedules/route.ts
+# Source: src/app/api/(common)/doctors/[id]/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetDoctorsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getDoctorsSchema }`. The schema is
+        `baseQuerySchema.merge({ includeDoctorId,
+        specializationId, departmentId, doctorType,
+        status, withNoSchedules, withNoMappedServices,
+        isConsultDoctor }).transform(transformPaginationSchema)`.
+
+        The repository's `findDoctorsAndCount`
+        interprets:
+          - `search` — split by whitespace; each term
+            must match (`AND` over `OR`-per-term)
+            against `doctorId`, `title`, joined
+            `user.fullName`, or joined
+            `specialization.name`. The term-by-term
+            `AND` is unique to this endpoint — most
+            other `common-*` lookups do a single
+            substring match.
+          - `includeDoctorId` — `where.id =
+            query.includeDoctorId` (only applied
+            when `search` is empty — see security
+            notes).
+          - `specializationId` —
+            `where.specializationId`.
+          - `departmentId` —
+            `where.user = { departmentId }`.
+          - `doctorType` — exact match.
+          - `status` — exact match against the
+            `user.status` enum. Note: status is
+            applied via `where.user = { ...,
+            status }` — but the `where.user`
+            assignment is **overwritten** (not
+            merged) by the status branch, dropping
+            the `departmentId` filter when both are
+            set (see security notes).
+          - `withNoSchedules` — `where.schedules =
+            { none: {} }, where.appointments = {
+            none: {} }` (doctors with no schedules
+            AND no appointments).
+          - `withNoMappedServices` —
+            `where.doctorServices = { none: {} }`.
+          - `isConsultDoctor` — `where.doctorServices
+            = { some: { service: {
+            isConsultationService: true } } }`.
+        Ordering: `createdAt: desc`. The end bound
+        for `createdAt` is `lt` (exclusive), not
+        `lte` — same subtle inconsistency as
+        [[common-suppliers]].
+      properties:
+        includeDoctorId:
+          type: string
+          description: |
+            When `search` is **empty**, pins
+            `where.id = query.includeDoctorId`. The
+            single row is returned (if it exists)
+            and `totalCount` reflects the total
+            doctors in the system (not 1). When
+            `search` is non-empty, this filter is
+            silently ignored.
+        specializationId:
+          type: string
+        departmentId:
+          type: string
+        doctorType:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        withNoSchedules:
+          type: boolean
+          description: |
+            `true` to filter to doctors with no
+            schedules AND no appointments. Coerced
+            from string via `z.coerce.boolean()`.
+        withNoMappedServices:
+          type: boolean
+          description: |
+            `true` to filter to doctors with no
+            `DoctorService` rows. Coerced from
+            string via `z.coerce.boolean()`.
+        isConsultDoctor:
+          type: boolean
+          description: |
+            `true` to filter to doctors mapped to at
+            least one consultation service. Coerced
+            from string via `z.coerce.boolean()`.
+
+GetDoctorsWithSchedulesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        `enhancedApiHandler` `validation: { query:
+        getDoctorsWithSchedulesSchema }`. The schema
+        is `z.object({ dayOfWeek, isConsultDoctor,
+        withAvailableTimeslots, status }).merge(
+        baseQuerySchema).transform(transformPaginationSchema)`.
+
+        The repository's `findDoctorsWithSchedules`
+        interprets:
+          - `search` — enhanced search. If the
+            trimmed search contains a space, the
+            terms are `AND`-joined with
+            `buildConditions` per term. Otherwise a
+            single `OR` over the same condition set.
+            Conditions match `title`, joined
+            `user.fullName`, joined
+            `specialization.name`, or `doctorId`.
+          - `dayOfWeek` — `WeekDay` enum
+            (nativeEnum); narrows the
+            `where.schedules.some.dayOfWeek` clause.
+          - `isConsultDoctor` — same
+            `doctorServices.some` clause as
+            `findDoctorsAndCount`.
+          - `withAvailableTimeslots` —
+            `timeslotWhere.appointments = { every:
+            { status: CANCELLED } }` — i.e., a
+            timeslot is "available" iff **all** of
+            its appointments are cancelled (or it
+            has none). The "every" semantics is
+            interesting: a timeslot with 0
+            appointments also matches. Likely
+            intended: "all of the timeslot's
+            appointments are cancelled, leaving
+            some open capacity." Worth confirming.
+          - `status` — narrows `where.user.status`.
+        **Implicit filters** (always applied):
+        `where.schedules = { some: {} }` (the doctor
+        has at least one schedule) and
+        `where.user.status = ACTIVE` (always
+        `ACTIVE`, hard-coded — see security notes).
+        Ordering: not specified (the repository's
+        `findMany` does not set `orderBy`, so
+        Prisma's default order applies).
+      properties:
+        dayOfWeek:
+          type: string
+          enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
+        isConsultDoctor:
+          type: boolean
+        withAvailableTimeslots:
+          type: boolean
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: |
+            Accepted but **overridden** by the
+            hard-coded
+            `where.user.status = ACTIVE` filter
+            (doctors.repository.ts:329-332). Any
+            non-`ACTIVE` value will simply match no
+            rows. See security notes.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetDoctorsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/doctors`. The
+    repository returns
+    `Promise<{ doctors: Doctor[]; totalCount: number }>`
+    (doctors.repository.ts:192-299) and the route
+    wraps it in
+    `{ success: true, result, message: "", error: null }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [doctors, totalCount]
+      properties:
+        doctors:
+          type: array
+          items:
+            $ref: ./common-doctors.yaml#/Doctor
+        totalCount:
+          type: integer
+          minimum: 0
+
+GetDoctorByIdResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/doctors/[id]`. The
+    repository's `findById` returns the same
+    `Doctor` shape (with the `specialization`
+    string-flatten and `isActive` derivation). The
+    route wraps it in
+    `{ success: true, result, error: "", message: "" }`.
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-doctors.yaml#/Doctor
+        - type: "null"
+
+GetDoctorsWithSchedulesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/doctors/schedules`.
+    The repository returns
+    `Promise<{ doctorsWithSchedules: DoctorWithSchedules[]; totalCount: number }>`
+    (doctors.repository.ts:318-437) and the route
+    wraps it in
+    `{ success: true, result, message: "" }` — no
+    `error` field on success.
+  required:
+    - success
+    - result
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [doctorsWithSchedules, totalCount]
+      properties:
+        doctorsWithSchedules:
+          type: array
+          items:
+            $ref: ./common-doctors.yaml#/DoctorWithSchedules
+        totalCount:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+Doctor:
+  type: object
+  description: |
+    Canonical doctor shape. TS type `Doctor` from
+    `src/app/(dashboard)/common/doctors/features/doctors.types.ts:24-57`.
+
+    Maps to the Prisma `Doctor` model
+    (prisma/schema.prisma, @@map("doctors")). The
+    `Doctor` row is **paired 1:1 with a `User`
+    row** via the `userId` foreign key (which is
+    `@unique` — one doctor per user, one user per
+    doctor). The list endpoint's
+    `doctorValidator` includes:
+      - `user` — 9-field projection including
+        `username`, `fullName`, `department`
+        (denormalized string from the joined
+        `User.department` relation, set to
+        `departmentId`'s name? or a `String`?
+        column?), `status`, `employeeId`,
+        `phoneNo`, `email`, `roleId`, `joiningDate`,
+        `role: { include: { permissions: true } }`,
+        `userId`.
+      - `specialization` — full `Specialization`
+        row (the list endpoint relies on
+        `specialization?.name` for the flattened
+        `specialization: string` field, and
+        `specialization?.id` for
+        `specializationId: string`).
+      - `createdBy` / `updatedBy` — 2-field
+        projection (`fullName`, `username`). No
+        `id`, narrower than the canonical
+        3-field `Publisher`.
+      - `doctorServices` — narrowed to
+        `service.isConsultationService = true` and
+        projected to `{ serviceId }` only.
+
+    The repository's `findMany` then
+    **post-processes** each row to flatten
+    `specialization` (object → string) and add
+    `isActive: doctor.user?.status ===
+    UserStatus.ACTIVE` (booleans-derive from
+    joined `user.status`).
+
+    The `Doctor` model has 40+ FK relations — a
+    `delete` is heavily FK-constrained (see
+    security notes).
+  required:
+    - id
+    - title
+    - doctorType
+    - doctorId
+    - userId
+    - isActive
+    - specialization
+    - specializationId
+    - user
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    title:
+      type: string
+      description: |
+        Default `"Dr."` at the DB level. The create
+        schema requires
+        `z.string().trim().nonempty()` — so the
+        default is only used on direct DB inserts.
+    doctorType:
+      type: string
+      enum: [IN_SERVICE, OUT_SERVICE]
+      description: |
+        Native enum. Default `IN_SERVICE` at the DB
+        level.
+    gender:
+      type: string
+      enum: [MALE, FEMALE, OTHER]
+      nullable: true
+      description: |
+        Default `OTHER` at the DB level. The
+        `Gender` Prisma enum may include other
+        values (the application-level
+        `doctorGenders` only declares
+        `MALE`/`FEMALE`/`OTHER`).
+    medicalLicenseNumber:
+      type: string
+      nullable: true
+      description: |
+        `@unique` in the Prisma model (nullable).
+        The application-layer field is
+        `medicalLicenseNo` (no `Number` suffix).
+    qualifications:
+      type: string
+      nullable: true
+    consultationInterval:
+      type: integer
+      minimum: 0
+      nullable: true
+      description: |
+        Minutes between consultation slots. The
+        create schema requires
+        `z.coerce.number().int().nonnegative()`.
+    doctorId:
+      type: string
+      description: |
+        Business identifier, `@unique`.
+        Auto-generated by the service as
+        `DRID-NNN` (3-digit zero-pad) via
+        `generateId3Digits("DRID-",
+        lastDoctor?.doctorId)`
+        (doctors.service.ts:66). First doctor is
+        `DRID-001`.
+    userId:
+      type: string
+      format: uuid
+      description: |
+        `@unique` — one doctor per user. Linked
+        via the `User.userId` business id (a
+        separate string column from `User.id`).
+    isActive:
+      type: boolean
+      description: |
+        **Derived** in the response: `doctor.user?.
+        status === UserStatus.ACTIVE`. Not a
+        direct column on the `Doctor` model.
+    specialization:
+      type: string
+      description: |
+        The joined `Specialization.name`, **flattened
+        to a string** in the response (the underlying
+        `Doctor.specialization` column is also a
+        string `specializationName String` with
+        default `""`, but the response uses the
+        joined `name`). Empty string if no
+        specialization.
+    specializationId:
+      type: string
+      description: |
+        The joined `Specialization.id`,
+        **flattened to a string** in the response.
+        Empty string if no specialization.
+    user:
+      $ref: ./common-doctors.yaml#/DoctorUser
+    createdBy:
+      type: object
+      description: |
+        2-field projection (`fullName`, `username`)
+        — no `id`.
+      required: [fullName, username]
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+    updatedBy:
+      type: object
+      required: [fullName, username]
+      properties:
+        fullName:
+          type: string
+        username:
+          type: string
+    doctorServices:
+      type: array
+      description: |
+        `DoctorService` rows where
+        `service.isConsultationService = true`,
+        projected to `{ serviceId }` only.
+      items:
+        type: object
+        required: [serviceId]
+        properties:
+          serviceId:
+            type: string
+            format: uuid
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+DoctorUser:
+  type: object
+  description: |
+    The joined `User` row for a `Doctor`. From the
+    `doctorValidator`'s `user` projection
+    (doctors.repository.ts:11-30). Notable: the
+    projection **does NOT** include `password` —
+    so the response does not leak the Argon2 hash
+    via this join. The `userId` is the
+    business-level `User.userId` string, not the
+    primary key.
+  required:
+    - username
+    - fullName
+    - status
+    - userId
+  properties:
+    username:
+      type: string
+    fullName:
+      type: string
+    department:
+      type: string
+      description: |
+        Denormalized string. The `User` model has
+        a `department Department?` relation; the
+        projection inlines the entire `department`
+        field — likely the `name` (the value
+        type is `string` in the TS `Doctor.user`
+        shape). Confusing: the `User.department`
+        relation is to the `Department` model
+        (object), but this projection expects a
+        string. Likely a Prisma include
+        shorthand that returns the related
+        `name`. The TS type asserts a string.
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    employeeId:
+      type: string
+    phoneNo:
+      type: string
+    email:
+      type: string
+      format: email
+    roleId:
+      type: string
+    joiningDate:
+      type: string
+      format: date-time
+    role:
+      type: object
+      description: |
+        Full `Role` row, with `permissions: true`
+        (all `Permission` rows). **Notable leak**:
+        this is a substantial PII / capability
+        disclosure — the response carries the
+        doctor's role and full permission matrix
+        on every list item. See security notes.
+    userId:
+      type: string
+
+DoctorWithSchedules:
+  type: object
+  description: |
+    The "doctors with schedules" projection. TS
+    type `DoctorWithSchedules` from
+    `src/app/(dashboard)/common/doctors/features/doctors.types.ts:59-68`.
+
+    Used only by
+    `GET /api/doctors/schedules`. The
+    `findDoctorsWithSchedules` repository uses a
+    bespoke `select` (not `include`): the joined
+    `user` is `{ select: { username, fullName,
+    department: { select: { id, name } } } }` —
+    notably missing `email`, `phoneNo`, `status`,
+    `roleId`, `role`, `password`. The
+    `specialization` is a `{ select: { name } }`
+    and is **flattened** to a string
+    (`doc.specialization?.name ?? ""`).
+    `schedules` is full `DoctorSchedule[]` (the
+    Prisma model), each with a `timeslots`
+    projection of `{ id: true }`. A derived
+    `timeslotsCount` field is added.
+  required:
+    - id
+    - title
+    - doctorId
+    - specialization
+    - user
+    - schedules
+    - timeslotsCount
+  properties:
+    id:
+      type: string
+      format: uuid
+    title:
+      type: string
+    doctorId:
+      type: string
+    user:
+      type: object
+      required: [username, fullName]
+      properties:
+        username:
+          type: string
+        fullName:
+          type: string
+        department:
+          type: object
+          required: [id, name]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+    specialization:
+      type: string
+      description: |
+        Flattened from `select.specialization.name`.
+    gender:
+      type: string
+      enum: [MALE, FEMALE, OTHER]
+      nullable: true
+    schedules:
+      type: array
+      description: |
+        Full `DoctorSchedule` rows. Each
+        schedule has a `timeslots` array of
+        `{ id: true }` projections.
+      items:
+        type: object
+    timeslotsCount:
+      type: integer
+      minimum: 0
+      description: |
+        Sum of `timeslots.length` across all
+        schedules, computed in
+        `findDoctorsWithSchedules`
+        (doctors.repository.ts:424-431). The
+        `timeslots` array is `where:
+        timeslotWhere` — so this is the **filtered**
+        count, not the unfiltered count.

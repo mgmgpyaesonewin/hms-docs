@@ -1,0 +1,98 @@
+# docs/schemas/common-anesthesia-type.yaml
+# Schemas for the common-anesthesia-type sub-area of the `common`
+# REST module. Single endpoint:
+#   GET /api/anesthesia-type
+# Source: src/app/api/(common)/anesthesia-type/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetAnesthesiaTypesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getAnesthesiaTypeSchema`
+        (src/app/(dashboard)/shared/opd/schemas/anesthesia-type/get-anesthesia-type.schema.ts:7-13).
+        `.merge(baseQuerySchema).transform(transformPaginationSchema)` —
+        post-transform: `{ page, limit, offset, search?, start?, end?, status? }`.
+      properties:
+        status:
+          type: string
+          description: |
+            Stringly-typed boolean — the repository maps
+            `query.status === "ACTIVE"` to `where.isActive = true`.
+            Any other value (including undefined) means
+            "no filter on isActive". Not a native enum.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetAnesthesiaTypesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/anesthesia-type`. Repository
+    signature
+    (anesthesia-type.repository.ts:54): `Promise<{ anesthesiaTypes: AnesthesiaType[]; totalCount: number }>`.
+
+    Note the field is named `anesthesiaTypes`, **not** `data`.
+  required:
+    - anesthesiaTypes
+    - totalCount
+  properties:
+    anesthesiaTypes:
+      type: array
+      items:
+        $ref: ./common-anesthesia-type.yaml#/AnesthesiaType
+    totalCount:
+      type: integer
+      minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+AnesthesiaType:
+  type: object
+  description: |
+    Canonical anesthesia-type shape. TS type `AnesthesiaType` from
+    `src/app/(dashboard)/shared/opd/types/anesthesia-type.types.ts:1-18`.
+
+    Maps to the Prisma `AnesthesiaType` model. The list
+    endpoint includes `createdBy` / `updatedBy` as a
+    `Publisher` projection
+    (`select: { id: true, fullName: true, username: true }`),
+    matching the canonical `Publisher` shape from
+    `common.yaml`.
+  required:
+    - id
+    - name
+    - isActive
+    - createdAt
+    - updatedAt
+    - createdBy
+    - updatedBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique among anesthesia types (case-insensitive equality, per `getAnesthesiaTypeByName`).
+    isActive:
+      type: boolean
+      description: |
+        Set by the create/update payloads; filterable via
+        the `status` query param.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher

@@ -1,0 +1,329 @@
+# docs/paths/trpc-stores.yaml
+# tRPC router: stores (src/lib/trpc/routers/stores.ts)
+# CRUD over the `Store` model. Five procedures use `authProcedure`;
+# `deleteStore` uses `verifyPasswordProcedure` (caller's password
+# re-verified). **None** use `authorizeProcedure`. See the security notes
+# at the bottom.
+x-trpc-source: src/lib/trpc/routers/stores.ts
+x-trpc-router: stores
+
+/api/trpc/stores.getStores:
+  post:
+    summary: List stores (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of stores with the
+      total row count.
+
+      Response shape:
+        ```
+        { data: Store[], count: number }
+        ```
+      (Field named `count`, not `totalCount` — same convention as
+      `departments.getDepartments`.)
+
+      Search filter (from `defaultQuerySchema`):
+        - `search` — case-insensitive substring match against `name`.
+
+      No date-range filter is applied (the repository's `buildWhereQuery`
+      only handles `search`).
+
+      Service: `StoreService.getStores`. Source:
+      `src/lib/trpc/routers/stores.ts:12-18`.
+    tags:
+      - Stores
+    operationId: trpc_stores_getStores
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: Paginated list of stores.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-stores.yaml#/GetStoresResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/stores.storeTotalCounts:
+  post:
+    summary: Get total store count
+    description: |
+      Authenticated query. Returns the unpaginated total count of stores
+      (`prisma.store.count()`). Source:
+      `src/lib/trpc/routers/stores.ts:20-23`.
+    tags:
+      - Stores
+    operationId: trpc_stores_storeTotalCounts
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total store count.
+        content:
+          application/json:
+            schema:
+              type: integer
+              minimum: 0
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/stores.getStoreById:
+  post:
+    summary: Get a store by id
+    description: |
+      Authenticated query. Returns the store (with `createdBy` and
+      `updatedBy` populated) or `null` if not found. Input is a raw
+      string with no UUID validation.
+
+      Service: `StoreService.getStoreById`. Source:
+      `src/lib/trpc/routers/stores.ts:25-29`.
+    tags:
+      - Stores
+    operationId: trpc_stores_getStoreById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Store id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: The store, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-stores.yaml#/Store
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/stores.createStore:
+  post:
+    summary: Create a new store
+    description: |
+      Authenticated mutation. Creates a store.
+
+      Side effects:
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/stores")`.
+        - Logs the creation via `activityLogger` (description: "Created Store",
+          action: "Create", entity: "Store", entityId: result.id).
+
+      Validation failures:
+        - Empty `name` → 400.
+        - Store name already exists (case-insensitive) → 409
+          (`AppError("Store already exists", 409)`).
+
+      **Response does not populate `createdBy` / `updatedBy`** — the
+      repository calls `prisma.store.create({ data })` without `include`.
+
+      Service: `StoreService.createStore`. Source:
+      `src/lib/trpc/routers/stores.ts:31-42`.
+    tags:
+      - Stores
+    operationId: trpc_stores_createStore
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-stores.yaml#/CreateStoreInput
+    responses:
+      "200":
+        description: Store created. **Response does not populate `createdBy` / `updatedBy`** — bare Prisma record.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-stores.yaml#/StoreBare
+      "400":
+        description: Validation failure (empty name).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: Store name already exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/stores.updateStore:
+  post:
+    summary: Update a store
+    description: |
+      Authenticated mutation. Updates the store identified by `id`.
+
+      Validation:
+        - Store must exist (else 404).
+        - If the new `name` is taken by a *different* store → 409
+          (`AppError("Store with same name already exists", 409)`).
+
+      Side effects:
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/set-up/stores")`.
+        - Logs the update via `activityLogger`.
+
+      **Response does not populate `createdBy` / `updatedBy`**.
+
+      Service: `StoreService.updateStore`. Source:
+      `src/lib/trpc/routers/stores.ts:44-54`.
+    tags:
+      - Stores
+    operationId: trpc_stores_updateStore
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-stores.yaml#/UpdateStoreInput
+    responses:
+      "200":
+        description: Updated store. **Response does not populate `createdBy` / `updatedBy`**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-stores.yaml#/StoreBare
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Store not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: New name already exists on a different store.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/stores.deleteStore:
+  post:
+    summary: Delete a store (caller password re-verified)
+    description: |
+      **Sensitive.** Built on `verifyPasswordProcedure`, which requires
+      the caller's session **and** re-verifies their current password
+      before running the mutation.
+
+      Validation:
+        - Caller must have a valid `sid` cookie.
+        - Caller's current password must verify.
+        - Store must exist (else 404).
+        - Foreign-key references block deletion with
+          `AppError("Store is in use and cannot be deleted", 400)`.
+
+      Side effects:
+        - Logs the deletion via `activityLogger`.
+        - Calls `revalidatePath("/set-up/stores")`.
+
+      **Response does not populate `createdBy` / `updatedBy`**.
+
+      Source: `src/lib/trpc/routers/stores.ts:56-66`.
+    tags:
+      - Stores
+    operationId: trpc_stores_deleteStore
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: ../schemas/trpc-stores.yaml#/DeleteStoreInput
+              - description: |
+                  Some callers (or repaired code) may include both
+                  `id` and a `verifyPassword` field that the
+                  verifyPasswordMiddleware reads. See x-security-note.
+    responses:
+      "200":
+        description: Deleted store. **Response does not populate `createdBy` / `updatedBy`**.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-stores.yaml#/StoreBare
+      "400":
+        description: Store is in use (FK constraint).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session, or caller's password verification failed.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Store not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-security-note: |
+      The router does
+        `deleteStore: verifyPasswordProcedure.input(z.object({ id: z.string() }))`
+      which **overrides** the base input schema. The base schema requires
+      `verifyPassword`, but the chained `.input({ id })` does not include
+      it. The middleware reads `input.verifyPassword` directly, so at
+      runtime the procedure will read `undefined` from input and
+      `authService.checkPassword(userId, undefined)` will throw.
+
+      This is the **same pattern** as `auth.resetPassword` and
+      `departments.deleteDepartment` (see their `x-security-note`s).
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all six procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - Five of six procedures use `authProcedure` (not `authorizeProcedure`).
+    Any authenticated user can list, count, get, create, and update stores.
+    Only `deleteStore` adds password re-verification.
+  - **TS type/runtime mismatch on `createdBy` / `updatedBy`** — the `Store`
+    TS type includes `createdBy: Publisher` / `updatedBy: Publisher | null`,
+    but the write methods (`createStore`, `updateStore`, `deleteStore`) all
+    call Prisma without an `include` directive. The response is the bare
+    record. Captured as `StoreBare` and the `x-runtime-populated-by` note
+    on the `Store` schema.
+  - **Schema files are `.tsx` extensions** —
+    `create-store-schema.tsx` and `update-store-schema.tsx`. Unusual for
+    a Zod-only schema (no JSX in either file). Documented for awareness,
+    not blocking.

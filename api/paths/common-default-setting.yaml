@@ -1,0 +1,134 @@
+# docs/paths/common-default-setting.yaml
+# REST endpoint: GET /api/default-setting
+# Source: src/app/api/(common)/default-setting/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update) are exposed via tRPC
+# (procedures on the `defaultSetting` router, invoked
+# from the form in
+# src/app/(dashboard)/common/default-setting/features/components/default-setting-form.tsx),
+# NOT as REST routes here.
+
+/api/default-setting:
+  get:
+    summary: Get the default setting row
+    description: |
+      Authenticated query. Returns the singleton
+      default-setting row (or `null` if the table is
+      empty).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: DefaultSetting | null,
+          error: null
+        }
+        ```
+
+      Important: the repository uses
+      `prisma.defaultSetting.findFirst({ include: {...} })`
+      with **no `where` clause**, so this endpoint returns
+      whichever row happens to come back first. The
+      Prisma model declares `storeId @unique`, so in
+      practice a multi-tenant install with multiple
+      stores could have several rows — this endpoint
+      would silently return the wrong one. The form
+      (`default-setting-form.tsx`) and the activity log
+      also assume a single global row.
+
+      The `enhancedApiHandler` wrapper handles auth
+      (`auth: { required: true }`), so the error envelope
+      on auth failure is the standard
+      `{ success: false, message, result: null, error: null }`
+      shape (as opposed to the bare `apiHandler` used by
+      `common-anesthesia-type` / `common-bill-types` /
+      `common-operation-type`).
+
+      Source:
+      `src/app/api/(common)/default-setting/route.ts:12-26`.
+    tags:
+      - Common / Default Setting
+    operationId: rest_common_default_setting_get
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          The default-setting row, or `null` if none
+          exists. The response shape is
+          `{ success: true, result: DefaultSetting | null,
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-default-setting.yaml#/GetDefaultSettingResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — the route declares
+    `auth: { required: true }` only, no `permissions`.
+    Any authenticated user can read the default setting.
+  - **Multi-tenant leakage risk** — the repository uses
+    `findFirst` with no `where` clause. The Prisma model
+    declares `storeId @unique`, so multiple `Store`s could
+    each have their own `DefaultSetting` row, and this
+    endpoint would return whichever one Postgres
+    happens to return first. The form at
+    `default-setting-form.tsx` binds to this endpoint's
+    result and lets the user **update** it — meaning a
+    user from store A could in principle mutate store
+    B's default setting. The corresponding tRPC
+    `updateDefaultSetting` procedure also does not scope
+    by `storeId` (the service just passes the id through).
+    Recommend scoping both the read and update paths by
+    the session's store before any production use.
+  - **No `createdBy` / `updatedBy` audit columns** — the
+    `DefaultSetting` Prisma model lacks the standard
+    `createdById` / `updatedById` foreign keys. The
+    service's `activityLogger.log` calls do emit
+    `userId` (the actor) and `entityId` (the row id),
+    so audit-by-actor is preserved in the activity log,
+    but no row-level `lastModifiedBy` exists.
+  - **`billType` field is half-implemented** — present in
+    the Prisma model (`billTypeId String?`, `billType
+    BillType? @relation(..., onDelete: Cascade)`), but
+    commented out in the TS type, the create schema,
+    and the repository's include list. The commented-out
+    code suggests an upcoming feature.
+  - **`version` field is orphaned** — the Prisma model
+    declares `version String?` (likely for
+    optimistic-concurrency or migrations), but the TS
+    type and schemas do not expose it. The
+    `createDefaultSetting` /
+    `updateDefaultSetting` repository calls do not set it.
+  - **Loose JSON `settings` shape** — the column is
+    `Json?`, the TS type asserts
+    `{ displayTaxField, displayFOCField }`, but the
+    runtime does not validate this. The create / update
+    payloads take `displayTaxField` / `displayFOCField`
+    flat at the top level, and the repository nests
+    them under `settings: { displayTaxField,
+    displayFOCField }` on write — so the **input shape**
+    is flat but the **storage shape** is nested. The
+    `getDefaultSetting` read path returns the nested
+    shape as-is (`JsonValue | null`).
+  - **Write path goes through tRPC, not REST** — the
+    create / update operations are exposed as tRPC
+    procedures on the `defaultSetting` router (consumed
+    by `default-setting-form.tsx`). The REST surface is
+    read-only. Not part of this documentation set.
+  - **`rounding` is an unconstrained string** — the
+    create schema is `z.string({ required_error: "..."})`
+    with no enum / regex / min / max. The DB column is
+    `String` (no `@db.Decimal`). Whatever the form
+    submits is what gets stored. The application
+    contract is purely convention-based.

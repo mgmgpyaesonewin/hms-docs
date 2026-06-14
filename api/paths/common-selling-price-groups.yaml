@@ -1,0 +1,149 @@
+# docs/paths/common-selling-price-groups.yaml
+# REST endpoint: GET /api/selling-price-groups
+# Source: src/app/api/(common)/selling-price-groups/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are reached via
+# server actions / tRPC — they are NOT exposed as REST
+# routes here.
+
+/api/selling-price-groups:
+  get:
+    summary: List selling price groups (paginated, filterable)
+    description: |
+      Authenticated query, gated by the
+      `[{ action: "View", subject: "Selling Price" }]`
+      RBAC permission. Returns a paginated list of
+      selling price groups with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            groups: SellingPriceGroup[],
+            totalCount: number,
+          },
+          error: null,
+        }
+        ```
+
+      Filters (from `getSellingPriceGroupsSchema`,
+      interpreted by the repository):
+        - `search` — case-insensitive substring match
+          against `name` **or** `groupId` (the
+          repository's `where.OR` has two branches,
+          selling-price-group.repository.ts:43-58).
+        - `start` / `end` — `createdAt` range
+          (`gte` / `lte`).
+
+      Repository ordering: `createdAt: desc`.
+
+      This is the **only** `common-*` sub-area so far
+      that declares `auth.permissions`. The
+      `enhancedApiHandler` config is
+      `auth: { required: true, permissions: [{
+      action: "View", subject: "Selling Price" }] }`
+      (route.ts:12-21) — the request is rejected with
+      403 if the session user lacks the permission.
+
+      Source:
+      `src/app/api/(common)/selling-price-groups/route.ts:12-30`.
+    tags:
+      - Common / Selling Price Groups
+    operationId: rest_common_selling_price_groups_list
+    security:
+      - SessionAuth: []
+      - PermissionAuth: [View:Selling Price]
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of selling price groups.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-selling-price-groups.yaml#/GetSellingPriceGroupsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "403":
+        description: |
+          Session user lacks the `View:Selling Price`
+          permission. Returned by
+          `enhancedApiHandler`'s `auth.permissions`
+          check.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **RBAC-gated** — this is the first `common-*`
+    sub-area that declares `auth.permissions`. The
+    `[{ action: "View", subject: "Selling Price" }]`
+    requirement means an authenticated user without
+    the `View:Selling Price` permission will get a
+    403 before the request reaches the service. The
+    other `common-*` lookups (anesthesia-type,
+    bill-types, default-setting, departments,
+    hospital-info, operation-type, payment-methods,
+    roles, etc.) do not declare any `permissions`
+    and are open to any authenticated user. Worth
+    aligning the others with the same pattern.
+  - **Inconsistent response envelope** — the success
+    shape is `{ success: true, result, error: null }`
+    (no `message` field). Other `common-*` sub-areas
+    emit either
+    `{ success: true, result, message: "", error: null }`
+    or `{ success: true, result, error: "" }`.
+    Clients destructuring `result.message` will get
+    `undefined` here.
+  - **Write path uses server actions, not REST** —
+    `createSellingPriceGroup` / `updateSellingPriceGroup`
+    / `deleteSellingPriceGroup` are reached via
+    server actions (see
+    `selling-price/features/actions.ts`) or tRPC.
+    The REST surface is read-only.
+  - **Delete is not FK-guarded** — the service's
+    `deleteSellingPriceGroup` does an existence
+    check (`findSellingPriceGroupById` → 404) but
+    no FK-reference check. The Prisma model has
+    `items Item[]` (1:N); a delete of a group with
+    attached items will fail with Prisma `P2003`
+    and surface as a generic 500.
+  - **Duplicate-name check uses 400, not 409** — the
+    service's `createSellingPriceGroup` and
+    `updateSellingPriceGroup` both throw
+    `AppError("Group name must be unique", 400)`
+    (selling-price-group.service.ts:19, 64). The
+    codebase standard for duplicate-name conflicts
+    is 409 (see [[common-bill-types]],
+    [[common-roles]]).
+  - **`groupId` is sequential and guessable** — the
+    auto-increment `SPG-NNN` pattern is shared with
+    `common-departments` and `common-roles`. Not a
+    security boundary on its own, but worth flagging
+    if `groupId` is ever used as an unguessable
+    reference (it isn't, per the code).
+  - **`updateSellingPriceGroup` normalizes empties
+    to `null`** — the repository explicitly does
+    `data.insuranceProfitPercentage || null` and
+    `data.governmentProfitPercentage || null`
+    (selling-price-group.repository.ts:171-172). The
+    create path does not have this guard, so an
+    empty-string payload would 400 (the schemas use
+    `z.preprocess` to coerce empties to `undefined`).
+  - **No count/filter mismatch** — the repository
+    uses the same `where` for the `findMany` and
+    the `count` query
+    (selling-price-group.repository.ts:65-108), so
+    the returned `totalCount` is the correctly
+    filtered total. (Unlike the bug in
+    [[common-departments]].)

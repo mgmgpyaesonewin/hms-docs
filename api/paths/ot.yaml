@@ -1,0 +1,794 @@
+# docs/paths/ot.yaml
+# REST endpoints: ot (Operation Theatre) module under
+# `src/app/api/(ot)/`. 12 read endpoints + 1
+# mutation (POST `/api/ot/list`).
+#
+# Endpoints exposed:
+#   - GET  /api/ot/list
+#   - POST /api/ot/list
+#   - GET  /api/ot/{id}
+#   - GET  /api/ot/{id}/activities
+#   - GET  /api/ot-request-list
+#   - GET  /api/ot-request-by-patient
+#   - GET  /api/ot-requests/{id}
+#   - GET  /api/ot-requests-for-proxy
+#   - GET  /api/ot-infection-screening
+#   - GET  /api/ipd-ot-requests
+#   - GET  /api/ipd-ot-requests/{id}
+#   - GET  /api/appointments-for-ot
+#   - GET  /api/patients-for-ot
+#   - GET  /api/doctors-for-ot/{ids}
+#
+# All 14 routes use `enhancedApiHandler` with
+# `auth: { required: true }` and **no RBAC**. The
+# single mutation (POST `/api/ot/list`) also has
+# no RBAC.
+#
+# The module is organised around an
+# `OTContainerService` (see
+# `shared/ot/services/ot-container.service.ts`)
+# that wires together a 16-dep composition tree:
+# `OTService` ← `OTRepository` +
+# `ProxyBillRepository` + `ProxyBillStockService`
+# + `IPDDailyBillService` +
+# `ProxyBillIPDMembershipService` +
+# `IPDOTRequestRepository` + `IPDOTRequestService`
+# + 9 more (pharmacy, stock, EMR service
+# singletons). Routes only touch
+# `service.otService.*`; the EMR service exports
+# (`opdEmrService`, `edEmrService`, `ipdEmrService`)
+# are unused at the route layer.
+#
+# `OTService` extends `ProxyBillTemplateService`
+# with `department = DepartmentEnum.OT` and
+# `pharmacyBillInvoicePrefix = "OT"` (so IPD
+# daily bills generated from OT bills are prefixed
+# `OT/...`).
+#
+# The 4 `ipd-ot-requests` and `ot-requests` routes
+# use a separate `ipdOTRequestService` singleton
+# (no container) — they exercise
+# `IPDOTRequestRepository` directly.
+
+# =============================================================================
+# OT proxy-bill list (paginated) + create
+# =============================================================================
+#
+# Backed by `OTService.getProxyBillList` (inherits
+# from `ProxyBillTemplateService` → calls
+# `ProxyBillRepository.getProxyBillList` with
+# `departmentType: DepartmentEnum.OT`) and
+# `OTService.createOTProxyBill` (which chains
+# `resolveOTRequestForOPDProxyBill` /
+# `resolveOTRequestForIPDProxyBill` →
+# `super.createProxyBill` → create
+# `ProxyBillRequestLink` (requestType: "OT") →
+# `markOTRequestAsBilled`).
+
+/api/ot/list:
+  get:
+    operationId: getOtList
+    summary: OT proxy-bill list
+    description: |
+      Authenticated query. Returns a paginated list of
+      `ProxyBill` rows scoped to `departmentType: OT`.
+      Service: `OTService.getProxyBillList` →
+      `ProxyBillRepository.getProxyBillList`. Validation:
+      `getProxyBillListSchema` (`billTypeId`,
+      `patientType`, `patientGroup`, `storeId`,
+      `paymentStatus`, `departmentType`, plus standard
+      pagination). The repository forces
+      `departmentType: DepartmentEnum.OT` and
+      `isDeleted: false` server-side regardless of
+      the query.
+
+      Search supports `appointmentId`, patient
+      `name` / `phoneNo` / `patientId`, and admission
+      `admissionId` (case-insensitive `contains`).
+    tags: [OT]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: billTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: patientType
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, DAYCARE]
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: storeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: paymentStatus
+        schema:
+          type: string
+          enum: [UNPAID, PAID, PARTIALLY_PAID, CANCELLED]
+    responses:
+      "200":
+        description: OT proxy bills for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtListResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+  post:
+    operationId: createOtProxyBill
+    summary: Create OT proxy bill
+    description: |
+      Authenticated mutation. Creates a new OT proxy
+      bill, attaches a `ProxyBillRequestLink`
+      (`requestType: "OT"`) to the underlying OT
+      request, and marks the request as billed.
+
+      Service: `OTService.createOTProxyBill` →
+        1. If `patientType === IPD`:
+           `resolveOTRequestForIPDProxyBill` (requires
+           `otRequestId` + `admissionId`; throws 404
+           if no APPROVED, `hasServicesAdded: false`,
+           non-billed OT request exists for the
+           (patient, admission) pair). For IPD, the
+           request is also auto-transitioned to
+           `COMPLETED` (via `markOTRequestAsBilled`).
+        2. Else (OPD / ED / DAYCARE):
+           `resolveOTRequestForOPDProxyBill` (requires
+           `appointmentId`; throws 404 if no APPROVED,
+           `hasServicesAdded: false`, non-billed OT
+           request exists for the (patient, appointment)
+           pair).
+        3. `super.createProxyBill(...)` — full proxy-bill
+           create flow (service-bill, procedure-bill,
+           service-package-bill, pharmacy-bill,
+           main-procedure sidecar, IPD deposit
+           deduction if applicable).
+        4. `OTRepository.createProxyBillRequestLink`
+           (requestType: "OT").
+        5. `IPDOTRequestService.markOTRequestAsBilled`
+           (sets `hasServicesAdded: true`; for IPD also
+           sets `status: COMPLETED`).
+
+      Validation: `createProxyBillSchema`. The
+      `mainProcedureId` is **required** when
+      `departmentType: "OT"` (enforced by
+      `superRefine`). At least one of
+      service / service-package / procedure / team-fee
+      / pharmacy items is required.
+
+      Side effect on appointment: not directly
+      mutated here. Status sync happens on the
+      OT request's `updateOTRequestStatus` path
+      (server-action only — not in this REST
+      surface).
+    tags: [OT]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/CreateProxyBillRequest" }
+    responses:
+      "200":
+        description: OT proxy bill created.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOtProxyBillResponse" }
+      "400": { $ref: "#/components/responses/BadRequest" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+      "404": { $ref: "#/components/responses/NotFound" }
+
+/api/ot/{id}:
+  get:
+    operationId: getOtById
+    summary: OT proxy-bill detail
+    description: |
+      Authenticated query. Returns the full
+      `ProxyBill` (with the sidecar
+      `proxyMainProcedure` join) by id, regardless
+      of `departmentType`. The route is
+      OT-scoped only by the container (a bill of
+      type `ED` or `ENDO` can technically be
+      fetched but the surrounding UX is OT).
+
+      Service: `OTService.getProxyBillById` →
+      `ProxyBillRepository.getProxyBillById`. The
+      repository projects the same full include
+      tree as the list endpoint and additionally
+      fetches `proxyMainProcedure` (the sidecar
+      one-procedure-per-bill table).
+    tags: [OT]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OT proxy bill.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+      "404": { $ref: "#/components/responses/NotFound" }
+
+/api/ot/{id}/activities:
+  get:
+    operationId: getOtActivities
+    summary: OT proxy-bill activity log
+    description: |
+      Authenticated query. Returns the
+      `ActivityLog[]` for a single proxy bill id,
+      ordered `timestamp: "desc"`. The user relation
+      is joined with `role`.
+
+      Service: `OTService.getProxyBillActivites` →
+      `ProxyBillRepository.getProxyBillActivities`.
+      The list endpoint filters by `entityId` only
+      (no `entity` filter), so the response may
+      contain a mix of actions — typical entries
+      are "Create OT Bill", "Update OT Bill", and
+      "Delete OT Bill" (emitted by
+      `ProxyBillTemplateService.logActivity`).
+    tags: [OT]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Activity log.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtActivitiesResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OT request list (flat) + by-id (with staff)
+# =============================================================================
+#
+# Backed by `IPDOTRequestService` →
+# `IPDOTRequestRepository.getOTRequestList` (uses
+# the `otRequestListValidator` include tree).
+# The patient-context route uses
+# `IPDOTRequestRepository.findOTRequestByPatientContext`.
+
+/api/ot-request-list:
+  get:
+    operationId: getOtRequestList
+    summary: List OT requests (flat, paginated)
+    description: |
+      Authenticated query. Returns a paginated list
+      of the **flat** `OTRequest` (not the IPD
+      wrapper). Backed by
+      `IPDOTRequestService.getOTRequestList` →
+      `IPDOTRequestRepository.getOTRequestList`.
+
+      Validation: `getOTRequestSchema`
+      (`gender`, `buildingId`, `wardId`,
+      `roomTypeId`, `urgentOrElective`, `status`
+      ∈ {REQUESTED, APPROVED, CONFIRMED, CANCELLED,
+      COMPLETED}, `admissionId`, `patientId`, `tab`
+      ∈ {OPD, IPD, EMERGENCY} defaulting to OPD,
+      plus standard pagination). The `tab` value
+      maps to a `patientType` filter (LOCAL and
+      FOREIGNER are accepted by the mapping but
+      are not exposed in the schema enum).
+
+      Search splits on whitespace and matches
+      against `requestId`, patient `name` /
+      `patientId`, room `name`, admission
+      `admissionId`, and appointment
+      `appointmentId` (case-insensitive
+      `contains`).
+    tags: [OT]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: gender
+        schema:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+      - in: query
+        name: buildingId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: wardId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: roomTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: urgentOrElective
+        schema:
+          type: string
+          enum: [URGENT, ELECTIVE]
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [REQUESTED, APPROVED, CONFIRMED, CANCELLED, COMPLETED]
+      - in: query
+        name: admissionId
+        schema: { type: string }
+      - in: query
+        name: patientId
+        schema: { type: string }
+      - in: query
+        name: tab
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+          default: OPD
+    responses:
+      "200":
+        description: OT requests for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtRequestListResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/ot-request-by-patient:
+  get:
+    operationId: getOtRequestByPatient
+    summary: OT request by patient context
+    description: |
+      Authenticated query. Returns the most recent
+      OT request matching the patient + (optional)
+      appointment / admission context. The result
+      is reshaped before returning:
+        - `otRequestId` ← `requestId`
+        - `procedure`   ← `operationType`
+        - `remarks`     ← `remark`
+
+      Backed by
+      `IPDOTRequestService.getOTRequestByPatientContext` →
+      `IPDOTRequestRepository.findOTRequestByPatientContext`.
+
+      Validation: requires `patientId` (min 1
+      char). `appointmentId` and `admissionId` are
+      optional and ANDed in the where clause when
+      present.
+    tags: [OT]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, minLength: 1 }
+      - in: query
+        name: appointmentId
+        schema: { type: string }
+      - in: query
+        name: admissionId
+        schema: { type: string }
+    responses:
+      "200":
+        description: OT request (or `null`).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtRequestByPatientResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/ipd-ot-requests:
+  get:
+    operationId: getIpdOtRequests
+    summary: List IPD OT requests (paginated)
+    description: |
+      Authenticated query. Returns the IPD-side
+      wrapper (one row per `IPDOTRequest` linked to
+      an `OTRequest`). Backed by
+      `IPDOTRequestService.getIPDOTRequests` →
+      `IPDOTRequestRepository.getOTRequests` using
+      the `ipdOTRequestValidator` include tree.
+
+      Validation: `getOTRequestSchema` (same
+      filter set as the flat list). The
+      underlying query is on `IPDOTRequest`, not
+      `OTRequest`, so all filters are ANDed via
+      the `otrequest` relation.
+    tags: [OT]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: start
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        schema: { type: string, format: date-time }
+      - in: query
+        name: gender
+        schema:
+          type: string
+          enum: [MALE, FEMALE, OTHER]
+      - in: query
+        name: buildingId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: wardId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: roomTypeId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: urgentOrElective
+        schema:
+          type: string
+          enum: [URGENT, ELECTIVE]
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [REQUESTED, APPROVED, CONFIRMED, CANCELLED, COMPLETED]
+      - in: query
+        name: admissionId
+        schema: { type: string }
+      - in: query
+        name: patientId
+        schema: { type: string }
+      - in: query
+        name: tab
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY]
+          default: OPD
+    responses:
+      "200":
+        description: IPD OT requests for the page.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetIpdOtRequestListResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/ot-requests/{id}:
+  get:
+    operationId: getOtRequestForProxyLabel
+    summary: OT request label (slim projection)
+    description: |
+      Authenticated query. Returns the slim
+      `{ id, requestId }` projection of the OT
+      request, used as the sidebar label in the
+      proxy-bill UI.
+
+      Service: `OTService.getOTRequestForProxyLabel`
+      → `OTRepository.findOTRequestByIdForProxyLabel`.
+      The slim projection returns just
+      `{ id, requestId }`. **The miss branch is
+      represented as `result: null` in a 200
+      response** (the route does NOT throw on
+      `null`).
+    tags: [OT]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OT request label.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtRequestForProxyLabelResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/ot-requests-for-proxy:
+  get:
+    operationId: getOtRequestsForProxy
+    summary: Billable IPD OT requests (for proxy)
+    description: |
+      Authenticated query. Returns the billable
+      IPD OT requests for a (patient, admission)
+      pair. Each row is shaped as
+      `{ id, label }` where `label` is
+      `requestId ?? "Unknown Request ID"`.
+
+      Service: `OTService.getBillableIpdOTRequestsForProxy`
+      → `OTRepository.findBillableIpdOTRequestsForProxy`.
+      Filters to `status: APPROVED`,
+      `hasServicesAdded: false`, no active
+      `proxyBillRequestLink`, and
+      `ipdOTRequest.admissionId` matching the
+      input. Used by the proxy-bill picker to
+      link the new bill to a specific OT request.
+    tags: [OT]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: admissionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: Billable OT requests.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtRequestsForProxyResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OT infection screening
+# =============================================================================
+
+# =============================================================================
+# OT infection screening
+# =============================================================================
+
+/api/ot-infection-screening:
+  get:
+    operationId: getOtInfectionScreening
+    summary: OT infection screening (billing)
+    description: |
+      Authenticated query. Returns the derived
+      infection-screening status of the latest
+      APPROVED OT request for a patient. Computed
+      by
+      `OTService.getInfectionScreeningForBillingPatient`
+      → `IPDOTRequestRepository.getInfectionScreeningForBillingPatient`
+      → `getInfectionScreeningDisplay` (in
+      `src/utils/infection-screening.ts`).
+
+      Rules:
+        - `displayLabel: "Positive"` if any of
+          `hbAg` / `hcv` / `hiv` / `vdrl` is
+          `POSITIVE` (case-insensitive) or
+          `otherScreening` is non-blank.
+        - `displayLabel: "Negative"` if all four
+          markers are `NEGATIVE` and `otherScreening`
+          is blank.
+        - `displayLabel: "Pending"` otherwise
+          (includes blank, mixed, all `PENDING`).
+        - `isPositiveAlert: displayLabel === "Positive"`.
+
+      If no APPROVED OT request exists for the
+      patient, the response is
+      `{ hasApprovedRequest: false, otRequestId: null,
+      displayLabel: null, isPositiveAlert: false }`.
+    tags: [OT]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OT infection-screening display.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtInfectionScreeningResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# IPD OT request by id (with staff materialised)
+# =============================================================================
+#
+# NOTE: this is the route that exposes the full
+# `OTRequestWithStaff` (with the four staff
+# arrays materialised). The flat `/ot-requests/{id}`
+# route exposes only the slim label projection.
+
+/api/ipd-ot-requests/{id}:
+  get:
+    operationId: getOtRequestById
+    summary: OT request by id (with staff materialised)
+    description: |
+      Authenticated query. Returns a single OT
+      request with the four OT-staff arrays
+      materialised into structured records
+      (surgeons, anesthetists, assistant doctors,
+      assistant nurses). Backed by
+      `IPDOTRequestService.findById` →
+      `IPDOTRequestRepository.findByIdWithStaff` →
+      `fetchAllOTStaff` (4 parallel queries
+      against `prisma.doctor` / `prisma.user`).
+
+      On miss, the response is
+      `success: false, result: null,
+      message: "OT request not found"`. The
+      `404` HTTP status is **not** used;
+      callers must check `success`.
+    tags: [OT]
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: IPD OT request (or `null` if not found).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetOtRequestByIdResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+# =============================================================================
+# OT appointment / patient / doctor pickers
+# =============================================================================
+
+/api/appointments-for-ot:
+  get:
+    operationId: getAppointmentsForOt
+    summary: Appointments eligible for OT billing
+    description: |
+      Authenticated query. Returns appointments
+      that are eligible for OT proxy-bill creation.
+
+      Service: `OTService.getAppointmentsForOT` →
+      `OTRepository.getAppointmentsForOT`. Validation:
+      `getAppointmentForProxySchema` (`patientId`
+      required; `includeAppointmentId` optional
+      and used to short-circuit the eligibility
+      filter when the front-end has a pre-selected
+      appointment id).
+
+      Eligibility (when `includeAppointmentId` is
+      absent):
+        - `status: CONFIRMED`,
+        - `appointmentType.modules` includes
+          `ModuleEnum.OT`,
+        - no `opdEmr` of moduleType `OT_OPD` /
+          `OT_ED` exists yet,
+        - either an APPROVED `opdotrequest` with
+          no active proxy-bill link, or no
+          `opdotrequest` at all.
+    tags: [OT]
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: OT-eligible appointments.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetAppointmentsForOtResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/patients-for-ot:
+  get:
+    operationId: getPatientsForOt
+    summary: Patients eligible for OT billing
+    description: |
+      Authenticated query. Returns patients who are
+      eligible for an OT proxy-bill creation.
+      Service: `OTService.getPatientsForOT` →
+      `OTRepository.getPatientsForOT`. Validation:
+      `getPatientsSchema` (`includePatientId`,
+      `hasAdmission`, `patientType`, `patientTypes`,
+      `patientGroup`, `region`, `township`,
+      `checkHasPendingBills`, `hasNewBornRecord`,
+      `currentAdmissionId`, plus standard
+      pagination).
+
+      Eligibility (when `includePatientId` is
+      absent):
+        - IPD patients with an APPROVED OT request
+          (`patientType: IPD`, `hasServicesAdded:
+          false`, no active proxy-bill link, and
+          no `ipdEmrRequestLinks`), OR
+        - OPD / ED patients with a CONFIRMED OT
+          appointment (`appointmentType.modules`
+          includes `ModuleEnum.OT`, no OT/ED EMR
+          yet created, and either an APPROVED
+          `opdotrequest` with no active proxy-bill
+          link, or no `opdotrequest` at all).
+
+      `includePatientId` short-circuits the
+      eligibility filter and returns that one
+      patient (used to re-display a pre-selected
+      patient in the picker).
+    tags: [OT]
+    parameters:
+      - $ref: "#/components/parameters/QuerySearch"
+      - in: query
+        name: page
+        schema: { type: integer, minimum: 1, default: 1 }
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 0, default: 10 }
+      - in: query
+        name: includePatientId
+        schema: { type: string }
+      - in: query
+        name: hasAdmission
+        schema: { type: boolean }
+      - in: query
+        name: patientType
+        schema:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, DAYCARE]
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: region
+        schema: { type: string }
+      - in: query
+        name: township
+        schema: { type: string }
+      - in: query
+        name: checkHasPendingBills
+        schema: { type: boolean }
+      - in: query
+        name: hasNewBornRecord
+        schema: { type: boolean }
+      - in: query
+        name: currentAdmissionId
+        schema: { type: string }
+    responses:
+      "200":
+        description: OT-eligible patients.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetPatientsForOtResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }
+
+/api/doctors-for-ot/{ids}:
+  get:
+    operationId: getDoctorsForOt
+    summary: Doctors by ids (OT lookup)
+    description: |
+      Authenticated query. Returns doctor records
+      for the supplied ids. The route takes a
+      **comma-separated** ids path param (e.g.
+      `/api/doctors-for-ot/abc-123,def-456`) and
+      splits it on the server. Empty ids are
+      filtered out before the query.
+
+      Service: `IPDOTRequestService.findDoctorIdsInOTRequests`
+      → `IPDOTRequestRepository.findDoctorIdsInOTRequests`.
+      The doctor record is projected as
+      `{ id, title, user: { id, fullName } }`.
+    tags: [OT]
+    parameters:
+      - in: path
+        name: ids
+        required: true
+        schema: { type: string }
+        description: |
+          Comma-separated list of doctor ids.
+          Whitespace around each id is trimmed
+          before query.
+    responses:
+      "200":
+        description: Doctor records.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GetDoctorsForOtResponse" }
+      "401": { $ref: "#/components/responses/Unauthorized" }

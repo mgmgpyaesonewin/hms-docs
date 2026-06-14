@@ -1,0 +1,154 @@
+# docs/paths/common-operation-type.yaml
+# REST endpoint: GET /api/operation-type
+# Source: src/app/api/(common)/operation-type/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) live on the
+# `OperationTypeService` but are reached via server actions
+# / tRPC — they are NOT exposed as REST routes here.
+
+/api/operation-type:
+  get:
+    summary: List operation types (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      operation types with the total row count.
+
+      Response shape:
+        ```
+        { operationTypes: OperationType[]; totalCount: number }
+        ```
+      (Field named `operationTypes`, **not** `data`.)
+
+      Filters (from `getOperationTypeSchema`):
+        - `search` — case-insensitive substring match against
+          `name`.
+        - `status` — stringly-typed boolean. The repository
+          maps `query.status === "ACTIVE"` to
+          `where.isActive = true`. Any other value (or
+          undefined) means "no filter on isActive".
+        - `start` / `end` — `createdAt` range.
+
+      The repository orders by `createdAt: desc`.
+
+      Note on auth: this route uses the simpler `apiHandler`
+      wrapper, **not** `enhancedApiHandler`. Authentication
+      is checked manually via `verifyApiAuth()` at the start
+      of the handler — equivalent to
+      `auth: { required: true }` in `enhancedApiHandler`,
+      but bypasses the `auth.permissions` and
+      `auth.assertStoreId` machinery entirely. The error
+      envelope is the `apiHandler` default
+      (`{ success: false, message: "Internal Server Error",
+      result: null, error: <err msg> }`).
+
+      Source:
+      `src/app/api/(common)/operation-type/route.ts:14-29`.
+    tags:
+      - Common / Operation Type
+    operationId: rest_common_operation_type_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: |
+            Stringly-typed boolean — the repository maps
+            `status === "ACTIVE"` to `isActive: true`. The
+            literal string `"INACTIVE"` is treated the same
+            as any other non-`"ACTIVE"` value (i.e. no
+            `isActive: false` filter is applied). To match
+            inactive rows, leave the param off entirely.
+    responses:
+      "200":
+        description: Paginated list of operation types.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-operation-type.yaml#/GetOperationTypesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions** — auth is checked manually via
+    `verifyApiAuth()` at the top of the handler; the route
+    does not declare `auth: { required: true, permissions: [...] }`.
+    Any authenticated user can list operation types.
+  - **Dead `params` declaration** — the handler signature is
+    `(req, { params }: { params: Promise<{ id: number }> })`
+    and the first line is `await params`, but the route
+    file has no `[id]` segment. The `params` object is
+    always empty `{}` and the `await` is a no-op. The
+    `id: number` type is also wrong (the Prisma id is a
+    UUID string). Looks like a copy-paste leftover from a
+    sibling route. Not blocking.
+  - **No `data` field on success** — the response envelope
+    is `{ success: true, result, error: "" }` (no `message`
+    field). This differs from `enhancedApiHandler` callers,
+    which emit `{ success: true, result, message: "",
+    error: null }` or similar. The `apiHandler` error path
+    is `{ success: false, message: "Internal Server Error",
+    result: null, error: <err> }`.
+  - **`status` query param is stringly-typed** — the Zod
+    schema accepts any string. The repository only treats
+    `"ACTIVE"` as truthy; any other value silently does
+    nothing. The OpenAPI `enum: [ACTIVE, INACTIVE]` is
+    documentation-only — the runtime does not enforce it
+    and does not interpret `"INACTIVE"` as `isActive: false`.
+  - **The list endpoint uses `select: { id, fullName,
+    username }` for `createdBy` / `updatedBy`**, while the
+    helper `getOperationTypeById` /
+    `getOperationTypeByName` use `include: { createdBy:
+    true, updatedBy: true }` (which returns the full `User`
+    row, exposing `password` hash and other PII — the
+    service's `createOperationType` /
+    `updateOperationType` paths use these helpers
+    internally for the duplicate-name check). The
+    `create` / `update` Prisma calls themselves do not
+    include `createdBy` / `updatedBy`, so the **return
+    value** of those calls is a bare row — but the
+    service internally calls the full-include helpers
+    before/after, and the bare-row result is what
+    eventually flows back to the caller.
+  - **Write operations (create / update / delete) are
+    NOT exposed as REST routes** — they live on
+    `OperationTypeService` and are reached via server
+    actions / tRPC (not part of this documentation set).
+    This REST sub-area is read-only.
+  - **Delete is FK-constrained** — the `OperationType`
+    model has relations to `EndoRequest[]` and
+    `OTRequest[]`; the service surfaces FK violations as
+    `AppError("Operation Type is in use and cannot be
+    deleted!", 409)` via
+    `isForeignKeyConstraintViolationError`. The 409
+    response shape is `{ success: false, result: null,
+    error: <msg> }` (no `message` field).
+  - **Filename typo** — the types file is named
+    `opeartion-type.types.ts` (transposed `r` and `a`).
+    Both `OperationTypeRepository` and
+    `OperationTypeService` import from this misspelled
+    path. Preserved here for traceability; not blocking.
+  - **Service `context` typo** — the service instantiates
+    its child logger with `context: "bill-type-service"`
+    (operation-type.service.ts:10), a copy-paste leftover
+    from `BillTypeService`. The context string is
+    observable in Winston log output.
+  - **Subtle update-path race** — the service
+    `updateOperationType` re-fetches the row by id then
+    re-fetches by name (two separate queries). Between
+    these queries, a concurrent request could rename a
+    different row to the target name and the second
+    query would surface a stale "name exists" 409. Not
+    covered by a transaction; see [[common-bill-types]]
+    for a similar pattern.

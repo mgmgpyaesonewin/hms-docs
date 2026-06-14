@@ -1,0 +1,185 @@
+# docs/paths/trpc-hospital-info.yaml
+# tRPC router: hospitalInfo
+# (src/lib/trpc/routers/hospital-info.ts). Singleton config
+# surface — only 2 procedures: `getHospitalInfoById` (read) and
+# `createHospitalInfo` (upsert). Both use `authProcedure` (no
+# `authorizeProcedure`). See the security notes at the bottom.
+x-trpc-source: src/lib/trpc/routers/hospital-info.ts
+x-trpc-router: hospitalInfo
+
+/api/trpc/hospitalInfo.getHospitalInfoById:
+  post:
+    summary: Get the singleton hospital info row
+    description: |
+      Authenticated query. Returns the **first** `HospitalInfo`
+      row (no `where` filter beyond `findFirst`'s implicit
+      order), or `null` if no row exists. The full `phoneNos[]`
+      relation is included.
+
+      The procedure is misnamed — `getHospitalInfoById` does
+      NOT take an id; it returns the singleton row.
+
+      Source: `src/lib/trpc/routers/hospital-info.ts:10-18`.
+    tags:
+      - HospitalInfo
+    operationId: trpc_hospitalInfo_getHospitalInfoById
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: |
+          The singleton hospital-info row, or `null` if no row
+          exists.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-hospital-info.yaml#/GetHospitalInfoByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/hospitalInfo.createHospitalInfo:
+  post:
+    summary: Upsert the singleton hospital info row
+    description: |
+      Authenticated mutation. **Upserts** the singleton
+      `HospitalInfo` row. The service checks
+      `hospitalInfoRepository.findOne()`:
+        - If **no row exists**:
+          `prisma.hospitalInfo.create({ data, phoneNos: { create:
+          [...] } })`. The create path uses the nested-write
+          form to atomically create the parent + children.
+        - If **a row exists**:
+          `prisma.$transaction` runs:
+            1. `deleteMany` on `HospitalPhoneNumber` for this
+               hospital.
+            2. `createMany` with the new phone-number rows.
+            3. `update` the parent `HospitalInfo` row.
+
+      Validation (Zod):
+        - `name` non-empty.
+        - `phoneNos.primary` non-empty, ≤ 20 chars.
+        - `address` non-empty.
+        - `email` must be a valid email.
+        - `phoneNos.additional` optional array.
+        - `footer` optional.
+        - `logoUrl` optional.
+
+      Side effects:
+        - Missing `footer` / `logoUrl` are normalised to `null`
+          on the update path.
+        - The `phoneNos.additional` array is mapped to
+          `HospitalPhoneNumber` rows with `type: "additional"`.
+        - Calls `revalidatePath("/hospital-info")` — used by the
+          RSC shell to refresh the cached hospital info on the
+          client.
+        - **Does NOT** call `revalidatePath` for any of the
+          pages that consume the hospital info indirectly (e.g.
+          the header logo on every page).
+        - **Does NOT** enqueue the
+          `DELETE_HOSPITAL_INFO_LOGO_JOB` S3-cleanup job — the
+          code is commented out
+          (`hospital-info-service.ts:48-59`) with the comment
+          "having issues with .send method / will look into it
+          later / TODO: fix this".
+
+      **Returns the persisted row** (created or updated) with
+      the `phoneNos[]` populated.
+
+      Source: `src/lib/trpc/routers/hospital-info.ts:20-31`.
+    tags:
+      - HospitalInfo
+    operationId: trpc_hospitalInfo_createHospitalInfo
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-hospital-info.yaml#/CreateHospitalInfoInput
+    responses:
+      "200":
+        description: The persisted (created or updated) hospital-info row.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-hospital-info.yaml#/HospitalInfo
+      "400":
+        description: Validation failure (Zod).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to both procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **Both** procedures use `authProcedure` (not
+    `authorizeProcedure`). Any authenticated user can read and
+    upsert the hospital info. The hospital info drives the
+    header logo / footer / contact details on every page — so
+    this is a **privileged** surface. Worth gating behind a
+    `manage_hospital_info` action subject.
+  - **Misnamed procedure** — `getHospitalInfoById` does NOT
+    take an id; it returns the singleton row. The router
+    declares `getHospitalInfoById: authProcedure.query(...)`
+    with no `.input(...)`. The procedure name is a historical
+    artifact.
+  - **`createHospitalInfo` is an upsert** — the same procedure
+    creates the row if it doesn't exist, or updates it if it
+    does. The service's logic is in
+    `hospital-info-service.ts:11-62` and uses
+    `hospitalInfoRepository.findOne()` to branch. The
+    transaction wrapping on the update path is the
+    full-replacement pattern: `deleteMany` then `createMany` on
+    the `phoneNos` table, then `update` on the parent.
+  - **No activity logging** — the service does NOT call
+    `activityLogger.log` for create or update. Hospital-info
+    changes are not tracked in the activity log. Worth adding
+    for auditability.
+  - **No `createdBy` / `updatedBy` columns** on the
+    `HospitalInfo` Prisma model — the model is a singleton
+    config row, not a user-managed entity. The TS type
+    confirms this: `id`, `name`, `address`, `email`, `footer`,
+    `logoUrl`, `phoneNos` only.
+  - **S3 logo cleanup is broken** — the service has a
+    commented-out `pg-boss` job
+    (`DELETE_HOSPITAL_INFO_LOGO_JOB`) that would delete the
+    previous logo from S3 when the logo is replaced. The
+    comment says "having issues with .send method / will look
+    into it later / TODO: fix this". The current behaviour
+    leaves orphaned logos in S3 when the hospital uploads a
+    new logo.
+  - **No singleton enforcement at the DB layer** — the
+    `HospitalInfo` model has no `@unique` constraint that
+    would limit it to one row. If two rows ever exist (e.g.
+    from a manual DB insert), `getHospitalInfoById` returns an
+    arbitrary one (the first by `findFirst`'s implicit order).
+    The application-level intent is clearly a singleton.
+  - **`phoneNos.type` is an application-level string** (not a
+    Prisma `enum`). The values are lowercase strings
+    (`"primary"`, `"additional"`). No validation at the
+    DB layer; the type column is `String`.
+  - **Manifest drift** — the original `routes_count: ~3` was a
+    placeholder. The actual count is **2**. The
+    `(common)/hospital-info` REST sub-area (1 GET endpoint) is
+    the third documented surface for the same model — that
+    one is part of the `common` module.
+  - **Module-level singleton service is exported but unused**
+    (the file is small enough that I can confirm) — actually
+    the service is NOT exported as a module-level singleton
+    (no `export const hospitalInfoService = new
+    HospitalInfoService(...)` at the bottom of
+    `hospital-info-service.ts`). The router creates a fresh
+    `HospitalInfoService` on every call.

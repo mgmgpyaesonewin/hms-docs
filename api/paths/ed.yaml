@@ -1,0 +1,282 @@
+# docs/paths/ed.yaml
+# Emergency Department (ED) REST module. 5
+# read-only endpoints used by the ED
+# dashboard (and the EMR's ED subtree) to:
+#   - list / filter ED bills (the ED bill
+#     is modelled as a `ProxyBill` row with
+#     `departmentType = ED`).
+#   - look up a single ED bill by id.
+#   - list activity-log rows for a bill.
+#   - list patients eligible for ED
+#     billing.
+#   - fetch a patient's appointments
+#     when creating an ED bill.
+# Source files under
+# src/app/api/(ed)/.
+
+# =============================================================================
+# Critical security note
+# =============================================================================
+#
+# **Three of the five ED endpoints declare
+# `auth: { required: false }`** (the two
+# list endpoints + `appointments-for-ed`).
+# Patient PII (name, phone, nrcNo) and
+# bill data are exposed to any anonymous
+# caller. Only `ed-bills/{id}` and
+# `ed-bills/{id}/activities` require auth.
+# Worth fixing immediately.
+
+# =============================================================================
+# Appointments
+# =============================================================================
+
+/api/appointments-for-ed:
+  get:
+    operationId: getAppointmentsForEd
+    summary: Get a patient's appointments (for ED-bill creation)
+    description: |
+      Returns the appointments for a single
+      patient, used when building an ED bill.
+      Service:
+      `EdBillService.getAppointmentForEd` →
+      `EdBillRepository.getAppointmentForEd`.
+
+      The schema `getAppointmentForProxySchema`
+      takes `patientId` (required) and
+      `includeAppointmentId` (optional). The
+      latter excludes a specific appointment
+      from the result set (used when editing
+      an existing bill to swap the linked
+      appointment).
+
+      PII exposure: appointment rows include
+      patient identifiers and timestamps.
+
+      **No auth required** — this endpoint is
+      publicly reachable.
+    tags: [Emergency Department]
+    security: []
+    x-security-note: |
+      **`auth: { required: false }`** — the
+      endpoint is publicly reachable, no
+      session required. PII (patient id,
+      doctor id, appointment timestamps) is
+      exposed to anonymous callers. The same
+      issue affects `/ed-bills` and
+      `/patients-for-ed`. Only the two
+      detail routes (`/ed-bills/{id}` and
+      `/ed-bills/{id}/activities`) require
+      auth.
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. Result is whatever
+          `EdBillRepository.getAppointmentForEd`
+          returns.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/ed.yaml#/GetAppointmentsForEdResponse
+
+# =============================================================================
+# ED bills (ProxyBill with departmentType = ED)
+# =============================================================================
+
+/api/ed-bills:
+  get:
+    operationId: getEdBillList
+    summary: ED bill list
+    description: |
+      Returns the paginated list of ED
+      bills (`ProxyBill` rows with
+      `departmentType = ED`). Service:
+      `EdBillService.getEdBillList` →
+      `EdBillRepository.getEdBillList`.
+
+      Filter inputs:
+        - `billTypeId` (string)
+        - `patientType` (`patientType` enum)
+        - `patientGroup` (bare `z.string()`,
+          not `nativeEnum(patientGroup)`)
+        - `storeId` (string)
+        - `paymentStatus` (string)
+
+      PII + business data: patient id,
+      bill id, totals, payment status.
+
+      **No auth required** — the list is
+      publicly reachable.
+    tags: [Emergency Department]
+    security: []
+    x-security-note: |
+      **`auth: { required: false }`** — the
+      ED bill list is publicly reachable.
+      Anonymous callers can enumerate ED
+      bills, see patient ids, totals, and
+      payment statuses. Major PII /
+      financial-data leak. Should require
+      `auth: { required: true }` minimum,
+      ideally with an RBAC permission.
+
+      **No `departmentType` filter is
+      exposed** despite the repository
+      hard-coding `DepartmentEnum.ED` at
+      create-time. The Zod default does
+      NOT pin `departmentType = ED` here
+      (unlike the daycare list which at
+      least declares a Zod default that
+      the service overrides at runtime).
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: billTypeId
+        schema: { type: string }
+      - in: query
+        name: patientType
+        schema: { type: string, enum: [OPD, IPD, ED, DAYCARE, EMERGENCY, OTHER] }
+      - in: query
+        name: patientGroup
+        schema: { type: string }
+      - in: query
+        name: storeId
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/ed.yaml#/GetEdBillListResponse
+
+/api/ed-bills/{id}:
+  get:
+    operationId: getEdBillById
+    summary: ED bill detail
+    description: |
+      Returns the full ED-bill row (a
+      `ProxyBill` with `departmentType = ED`,
+      with the optional
+      `serviceBill`, `procedureBill`,
+      `servicePackageBill`, `pharmacyBill`
+      sub-objects populated). Service:
+      `EdBillService.getEdBillById` →
+      `EdBillRepository.getEdBillById` —
+      the repo does
+      `prisma.proxyBill.findUnique({ where:
+      { id }, ...edBillValidator })`.
+    tags: [Emergency Department]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/ed.yaml#/GetEdBillByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/ed-bills/{id}/activities:
+  get:
+    operationId: getEdBillActivities
+    summary: ED bill activity log
+    description: |
+      Returns the per-row activity-log
+      entries for an ED bill. Service:
+      `EdBillService.getEdBillActivities`
+      → `EdBillRepository.getEdBillActivities`.
+    tags: [Emergency Department]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`. Result is the list
+          of activity-log rows.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/ed.yaml#/GetEdBillActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Patients for ED
+# =============================================================================
+
+/api/patients-for-ed:
+  get:
+    operationId: getPatientsForEd
+    summary: Patients eligible for ED billing
+    description: |
+      Returns the paginated list of patients
+      suitable for ED billing. Reuses the
+      **same** `getPatientsSchema` as the OPD
+      patient list
+      (`@/app/(dashboard)/common/patients/.../get-patients-schema.ts`).
+
+      PII-heavy: name, phone, nrcNo,
+      township, region, etc.
+
+      **No auth required** — the patient
+      list is publicly reachable.
+    tags: [Emergency Department]
+    security: []
+    x-security-note: |
+      **`auth: { required: false }`** — the
+      patient list is publicly reachable.
+      Anonymous callers can enumerate
+      patients (name, phone, nrcNo,
+      township, region) — a serious PII
+      leak. The "for ED" filter is in the
+      repository; the schema is shared with
+      the OPD list.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/ed.yaml#/GetPatientsForEdResponse

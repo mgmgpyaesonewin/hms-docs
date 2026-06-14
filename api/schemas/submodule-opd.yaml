@@ -1,0 +1,39 @@
+# docs/schemas/submodule-opd.yaml
+# Schemas for the submodule-opd module
+# (src/app/api/submodules/opd/module-check/route.ts).
+#
+# Sibling of `submodule-appointment`. Same envelope shape, different
+# message strings.
+
+ModuleCheckResponse:
+  type: object
+  description: |
+    Standard project REST response envelope. The submodule-check
+    endpoint always returns `result: null` — only `success` and
+    `message` carry information. `message` values (verbatim from
+    the handler):
+      - "OPD Service Module exist" — success.
+      - "OPD Service Module is not enabled" — env flag explicitly
+        disabled.
+      - "OPD directory is empty or missing" — env enabled but the
+        directory is hollow.
+      - "OPD Service Module not available" — fallback for non-`Error`
+        thrown values.
+  required:
+    - success
+    - result
+    - message
+  properties:
+    success:
+      type: boolean
+      description: True only when both the env flag and the filesystem check pass.
+    result:
+      type: object
+      nullable: true
+      description: |
+        Always `null` for this endpoint. The property is required
+        by the envelope contract (kept for shape consistency with
+        other REST routes in the project).
+    message:
+      type: string
+      description: Human-readable status. See module description for the full set of possible values.

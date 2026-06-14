@@ -1,0 +1,209 @@
+# docs/schemas/trpc-sub-categories.yaml
+# Schemas for the tRPC `subCategories` router
+# (src/lib/trpc/routers/sub-categories.ts).
+#
+# IMPORTANT: sub-categories are rows in the **same** `Category` table
+# where `parentCategoryId IS NOT NULL`. The schemas below describe
+# the same row but with a stricter "must have a parent" invariant.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetSubCategoriesInput:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions layered on `PaginationQuery` by
+        `getSubCategoriesSchema`
+        (src/app/(dashboard)/common/set-up/sub-categories/features/schema/get-subcategories-schema.ts:7-12).
+        `.merge(baseQuerySchema).transform(transformPaginationSchema)` —
+        post-transform: `{ page, limit, offset, search?, start?, end?, categoryId? }`.
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+          description: |
+            Optional. Restrict to sub-categories of this parent Category.
+            (Replaces the `parentCategoryId: { not: null }` filter set
+            in `buildWhereQuery` — not added to it.)
+
+CreateSubCategoryInput:
+  type: object
+  description: |
+    Input for `subCategories.createSubCategory`. Zod schema
+    `createSubCategorySchema` in
+    `src/app/(dashboard)/common/set-up/sub-categories/features/schema/create-sub-category-schema.ts:3-6`.
+
+    Note: `parentCategoryId` is **required** here (it is optional in the
+    raw `Category` Prisma model — the constraint comes from the router
+    layer).
+  required:
+    - name
+    - parentCategoryId
+  properties:
+    name:
+      type: string
+      minLength: 1
+      description: Must be unique among sub-categories (case-insensitive).
+    parentCategoryId:
+      type: string
+      format: uuid
+      description: Must reference an existing top-level Category.
+
+UpdateSubCategoryInput:
+  type: object
+  description: |
+    Input for `subCategories.updateSubCategory`. Zod schema
+    `updateSubCategorySchema` in
+    `src/app/(dashboard)/common/set-up/sub-categories/features/schema/update-sub-category-schema.ts:3-7`.
+    `parentCategoryId` is editable here — the procedure can move a
+    sub-category to a different parent.
+  required:
+    - id
+    - name
+    - parentCategoryId
+  properties:
+    id:
+      type: string
+      description: Category id (the underlying storage is the `Category` table). No UUID validation at the router layer.
+    name:
+      type: string
+      minLength: 1
+      description: Must be unique among other sub-categories when changed.
+    parentCategoryId:
+      type: string
+      format: uuid
+      description: The new parent Category id. Must reference an existing top-level Category.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetSubCategoriesResponse:
+  type: object
+  description: |
+    Response shape of `subCategories.getSubCategories`. Service signature
+    (sub-categories-repository.ts:13-14):
+    `Promise<{ subCategories: SubCategory[]; count: number }>`.
+
+    Note the field name `subCategories` (not `data` or `categories`).
+  required:
+    - subCategories
+    - count
+  properties:
+    subCategories:
+      type: array
+      items:
+        $ref: ./trpc-sub-categories.yaml#/SubCategory
+    count:
+      type: integer
+      minimum: 0
+      description: Total sub-category count across all pages (filtered to `parentCategoryId: { not: null }`).
+
+SubCategory:
+  type: object
+  description: |
+    Canonical sub-category shape. TS type `SubCategory` from
+    `src/app/(dashboard)/common/set-up/sub-categories/features/type/index.ts:12-20`.
+
+    Maps to a row in the Prisma `Category` model where
+    `parentCategoryId IS NOT NULL` (the router's `buildWhereQuery` and
+    all count/lookup helpers enforce this). `parentCategory` /
+    `createdBy` / `updatedBy` are populated only by `getSubCategories`.
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique among sub-categories (case-insensitive, per repository lookup).
+    parentCategoryId:
+      type: string
+      format: uuid
+      description: Always non-null in practice (router constraint). May be present in the bare record but not in the typed `parentCategory` projection.
+    parentCategory:
+      $ref: ./trpc-categories.yaml#/CategorySummary
+      nullable: true
+      description: |
+        Partial Category projection `{ id; name }`. Only present in
+        `getSubCategories` responses. Uses the `CategorySummary` schema
+        from the trpc-categories module.
+    createdById:
+      type: string
+      format: uuid
+      description: Always present in the bare record. (Prisma column.)
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+      description: Always present in the bare record. (Prisma column.)
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    `parentCategory`, `createdBy`, and `updatedBy` are **only** populated by:
+      - `subCategories.getSubCategories` (with `parentCategory: { select: { id, name } }`
+        and `createdBy: { select: { id, fullName, username } }`)
+
+    NOT populated by:
+      - `subCategories.createSubCategory` (calls `prisma.category.create({ data })` with no `include`)
+      - `subCategories.updateSubCategory` (calls `prisma.category.update({ where, data })` with no `include`)
+      - `subCategories.deleteSubCategory` (calls `prisma.category.delete({ where })` with no `include`)
+      - Service's internal lookups (`findExistingSubCategoryId`, `findExistingSubCategoryName`,
+        `findUsedSubCategory`) — all return bare records.
+
+    For the write methods, the response is a **bare** `Category` row.
+    Use the `SubCategoryBare` schema for those operations.
+
+SubCategoryBare:
+  type: object
+  description: |
+    Bare `Category` row — the shape returned by `createSubCategory`,
+    `updateSubCategory`, and `deleteSubCategory` (no `parentCategory`,
+    `createdBy`, or `updatedBy` included).
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdById
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    parentCategoryId:
+      type: string
+      format: uuid
+      description: Always non-null in practice.
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

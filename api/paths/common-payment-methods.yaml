@@ -1,0 +1,174 @@
+# docs/paths/common-payment-methods.yaml
+# REST endpoint: GET /api/payment-methods
+# Source: src/app/api/(common)/payment-methods/route.ts
+#
+# Single read-only endpoint. The corresponding write
+# operations (create / update / delete) are reached via
+# server actions / tRPC — they are NOT exposed as REST
+# routes here.
+
+/api/payment-methods:
+  get:
+    summary: List payment methods (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      payment methods with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            paymentMethods: PaymentMethod[],
+            count: number,
+          },
+          message: ""
+        }
+        ```
+
+      Filters (from `defaultQuerySchema`, interpreted by
+      the repository's `buildWhereQuery`):
+        - `search` — case-insensitive substring match
+          against `name`.
+        - `start` / `end` — accepted by the Zod schema
+          but **NOT** interpreted by the repository
+          (payment-methods-repository.ts:94-105 — only
+          `query.search` is wired into the `where`
+          clause; the `start` / `end` keys are
+          silently ignored).
+
+      Repository ordering: `createdAt: desc`.
+
+      Note on auth: this route uses the bare
+      `apiHandler` wrapper. **It does NOT call
+      `verifyApiAuth()` at the top of the handler**
+      (route.ts:13-23) — see security notes. The other
+      bare-`apiHandler` common-lookup routes
+      (anesthesia-type, bill-types, operation-type)
+      all call `verifyApiAuth()` before doing
+      anything; this one does not.
+
+      The success envelope is
+      `{ success: true, result, message: "" }` — no
+      `error` field on success. The error path uses
+      the `apiHandler` default
+      (`{ success: false, message: "Internal Server
+      Error", result: null, error: <err> }`).
+
+      Source:
+      `src/app/api/(common)/payment-methods/route.ts:13-23`.
+    tags:
+      - Common / Payment Methods
+    operationId: rest_common_payment_methods_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+    responses:
+      "200":
+        description: Paginated list of payment methods.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-payment-methods.yaml#/GetPaymentMethodsResponse
+      "401":
+        description: |
+          The route does not enforce auth itself (no
+          `verifyApiAuth()` call), so a 401 is only
+          possible if a downstream middleware rejects
+          the request. In practice the route is
+          effectively unauthenticated — see security
+          notes.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No auth check in the handler** — the route uses
+    bare `apiHandler` and does **not** call
+    `verifyApiAuth()` before processing the request
+    (route.ts:13-23). All the other bare-`apiHandler`
+    common-lookup routes (anesthesia-type, bill-types,
+    operation-type) call `verifyApiAuth()` at the top
+    of the handler; this one is the outlier and is
+    effectively unauthenticated. Switching to
+    `enhancedApiHandler` with
+    `auth: { required: true }` would close the gap.
+  - **No RBAC permissions declared** — even if auth
+    were enforced, the route would not check
+    permissions (no `auth.permissions` array). Any
+    authenticated user can read the full list of
+    payment methods.
+  - **`createdBy` / `updatedBy` leak the full `User`
+    row** — the repository's `findPaymentMethods` and
+    helpers use `include: { createdBy: true, updatedBy:
+    true }` with no `select` projection
+    (payment-methods-repository.ts:16-19, 43-46, 60-61,
+    69-72, 83-86). The TS type asserts a 3-field
+    `Publisher`-like shape (`id, fullName, username`),
+    but the underlying Prisma response carries
+    additional columns including `password` (Argon2
+    hash), `email`, and `status`. A caller that doesn't
+    honor the TS narrowing could read the password
+    hash from the response payload. This is a wider
+    pattern in the codebase (see
+    [[common-anesthesia-type]],
+    [[common-operation-type]]) but is consistently
+    flagged here.
+  - **Inconsistent response envelope** — the success
+    shape is `{ success: true, result, message: "" }`
+    (no `error` field). The other common-* sub-areas
+    that use `enhancedApiHandler` emit
+    `{ success: true, result, message: "", error: null }`
+    or `{ success: true, result, error: "" }`. Clients
+    destructuring `result.error` will get `undefined`
+    here.
+  - **`start` / `end` filters are accepted but
+    silently ignored** — the Zod schema is
+    `defaultQuerySchema` (which has `start` / `end`),
+    but the repository's `buildWhereQuery` only
+    handles `query.search`
+    (payment-methods-repository.ts:94-105). The
+    `start` / `end` keys are accepted by Zod and
+    silently dropped — clients expecting date
+    filtering will see no narrowing.
+  - **Write path uses server actions, not REST** —
+    `createPaymentMethod` / `updatePaymentMethod` /
+    `deletePaymentMethod` are reached via server
+    actions or tRPC (not part of this documentation
+    set). The REST surface is read-only.
+  - **Duplicate-name check uses 400, not 409** — the
+    service's `createPaymentMethod` throws
+    `AppError("Payment method name already exits",
+    400)` and `updatePaymentMethod` throws
+    `AppError("Payment method name already exists",
+    400)` (payment-methods-service.ts:21, 64). The
+    codebase standard is 409 for duplicate-name
+    conflicts (see [[common-bill-types]],
+    [[common-roles]]). Also note the typo "exits" in
+    the create-path error message.
+  - **Delete FK-check is incomplete** — the
+    `PaymentMethod` model has 10 FK relations
+    (`AdmissionDepositPayment[]`, `BillPayment[]`,
+    `DefaultSetting[]`, `IPDFinalBillPaymentMethod[]`,
+    `OPDBillingPaymentMethod[]`, `OPDBillings[]`,
+    `OpdPackageBillPaymentMethod[]`,
+    `SupplierPaymentInfo[]`, plus optional `bankId`).
+    The service's `deletePaymentMethod` only checks
+    `DefaultSetting`, `SupplierPaymentInfo`, and
+    `OPDBilling` for usage
+    (payment-methods-service.ts:92-111). Deletes
+    against rows still referenced by
+    `AdmissionDepositPayment`, `BillPayment`,
+    `IPDFinalBillPaymentMethod`,
+    `OPDBillingPaymentMethod`, or
+    `OpdPackageBillPaymentMethod` will fail with a
+    Prisma `P2003` and surface as a generic 500.
+  - **`bankId` is unused at the application layer** —
+    the Prisma column exists and the relation to
+    `Bank?` is declared, but the create / update
+    payloads don't expose it. Latent column.

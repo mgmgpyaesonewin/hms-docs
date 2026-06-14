@@ -1,0 +1,744 @@
+# docs/schemas/hd.yaml
+# OpenAPI component schemas for the `hd` (Hemodialysis)
+# module's REST surface (`src/app/api/(hd)/`).
+#
+# Backed by:
+#   - `HdService` (proxy-bill template with
+#     `department = HD`,
+#     `pharmacyBillInvoicePrefix = "HD"`)
+#   - `HDRequestService` (the "request" layer that
+#     becomes a proxy bill at billing time)
+#
+# The HD module re-uses the shared `ProxyBill` shape
+# from `proxy-bill.type.ts` — that surface is documented
+# elsewhere under `cathlab.yaml` / `endo.yaml` /
+# `ot.yaml` / `pharmacy.yaml`. This file only documents
+# the HD-specific payloads (HDRequest, the picker lists,
+# the infection-screening display, and the standard
+# response envelopes for each route).
+
+# =============================================================================
+# HD proxy-bill list / detail
+# =============================================================================
+
+GetHdListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        proxyBills:
+          type: array
+          items: { $ref: "#/HdProxyBill" }
+          description: |
+            `ProxyBill[]` (full shape, see
+            `proxy-bill.type.ts::ProxyBillValidatorType`).
+            Always filtered to
+            `departmentType: DepartmentEnum.HD`.
+        count:
+          type: integer
+          description: Total matching rows (post-filter, pre-pagination).
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetHdByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/HdProxyBill"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdProxyBill:
+  type: object
+  description: |
+    Alias for the shared `ProxyBill` (see
+    `proxy-bill.type.ts`). HD-specific bindings:
+      - `departmentType: "HD"`
+      - The IPD daily bill prefix is `HD/...` (set by
+        `HdService.pharmacyBillInvoicePrefix`).
+  properties:
+    id: { type: string, format: uuid }
+    invoiceNo: { type: string }
+    patientId: { type: string, format: uuid }
+    date: { type: string, format: date-time }
+    departmentType: { type: string, enum: [HD] }
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+    patientGroup: { type: string }
+    billTypeId: { type: string, format: uuid }
+    storeId: { type: string, format: uuid }
+    admissionId:
+      type: string
+      format: uuid
+      nullable: true
+    appointmentId:
+      type: string
+      format: uuid
+      nullable: true
+    hdRequestId:
+      type: string
+      format: uuid
+      nullable: true
+      description: |
+        Set when the bill was created from an
+        `HDRequest` (see
+        `HdService.createHdProxyBill`).
+    paymentStatus:
+      type: string
+      enum: [PAID, UNPAID, CANCELLED, PARTIALLY_PAID]
+    subTotal: { type: number }
+    totalAmount: { type: number }
+    discountAmount: { type: number }
+    discountPercentage: { type: number }
+    taxAmount: { type: number }
+    taxPercentage: { type: number }
+    remark: { type: string, nullable: true }
+    change: { type: number }
+    isConsignment: { type: boolean }
+    displayFOCField: { type: boolean }
+    patient: { $ref: "./common-patients.yaml#/Patient" }
+    billType:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    store:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    appointment:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string }
+        OPDBilling:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              invoiceNo: { type: string }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    serviceBill:
+      type: object
+      nullable: true
+      description: |
+        `ProxyBillServiceBillType` (see
+        `proxy-bill.type.ts`).
+    procedureBill:
+      type: object
+      nullable: true
+      description: |
+        `ProxyBillProcedureBillType` — list of
+        `procedureBillItem` rows.
+    servicePackageBill:
+      type: object
+      nullable: true
+      description: |
+        `ProxyBillServicePackageBillType` — list of
+        `servicePackageBillItem` rows.
+    pharmacySale:
+      type: object
+      nullable: true
+      description: |
+        The full `PharmacySale` with `items[]`.
+    ipdDailyBill:
+      type: object
+      nullable: true
+      description: |
+        The IPD daily-bill link (only set for
+        IPD HD bills). Carries
+        `admission.admissionId` and
+        `admission.discharges.isFinalBillPaid`.
+    proxyBillRequestLink:
+      type: object
+      nullable: true
+      description: |
+        The HD-side junction (only set on bills
+        generated from an `HDRequest`).
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+# =============================================================================
+# HD proxy-bill activity log
+# =============================================================================
+
+GetHdActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/HdProxyBillActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdProxyBillActivityLog:
+  type: object
+  description: |
+    Activity-log entry for a proxy-bill write event.
+    Mirrors `ProxyBillActivityLogType` from
+    `proxy-bill.type.ts`.
+  properties:
+    id: { type: string, format: uuid }
+    entity: { type: string, example: "ProxyBill" }
+    entityId: { type: string, format: uuid }
+    action: { type: string, example: "Update" }
+    description: { type: string }
+    remark: { type: string, nullable: true }
+    userId: { type: string, format: uuid }
+    user:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    timestamp: { type: string, format: date-time }
+
+# =============================================================================
+# HD appointment list
+# =============================================================================
+
+GetHdAppointmentsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        appointments:
+          type: array
+          items: { $ref: "#/HdAppointment" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdAppointment:
+  type: object
+  description: |
+    An `Appointment` (with the `referral` attachment
+    from a separate `referral.findMany` lookup) plus
+    `appointmentType`, `doctor`, `patient`,
+    `createdBy`, `updatedBy`. Filtered to
+    `appointmentType.modules has HD`.
+  properties:
+    id: { type: string, format: uuid }
+    appointmentId: { type: string }
+    appointmentDate: { type: string, format: date-time }
+    status: { type: string }
+    patientId: { type: string, format: uuid }
+    doctorId: { type: string, format: uuid, nullable: true }
+    appointmentType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    doctor:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        specialization: { type: string, nullable: true }
+        doctorId: { type: string }
+        title: { type: string }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+    patient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        patientId: { type: string }
+        phoneNo: { type: string, nullable: true }
+        gender: { type: string, nullable: true }
+        dateofBirth: { type: string, format: date-time, nullable: true }
+        guardianName: { type: string, nullable: true }
+        patientGroup: { type: string }
+        patientServices:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              patientId: { type: string, format: uuid }
+              serviceId: { type: string }
+              service:
+                type: object
+                properties:
+                  name: { type: string }
+                  status: { type: string }
+                  includeInRegistration: { type: boolean }
+        Referral:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              doctor: { $ref: "./common-doctors.yaml#/Doctor" }
+              clinic: { $ref: "./common-clinic.yaml#/Clinic" }
+    referral:
+      type: object
+      nullable: true
+      description: |
+        The `Referral` row attached to this appointment
+        (with `doctor` + `clinic`). Attached by a
+        separate `referral.findMany` lookup keyed on
+        `appointmentId`.
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string, format: uuid }
+        doctor: { $ref: "./common-doctors.yaml#/Doctor" }
+        clinic: { $ref: "./common-clinic.yaml#/Clinic" }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+
+# =============================================================================
+# HD confirmed patients
+# =============================================================================
+
+GetHdConfirmedPatientsResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        patients:
+          type: array
+          items: { $ref: "#/HdConfirmedPatient" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdConfirmedPatient:
+  type: object
+  description: |
+    An `Appointment` row whose
+    `appointmentType.modules has HD`, `status:
+    CONFIRMED`, and `Bill: none`. Includes the full
+    `patient`, `ProxyBill[]`, `appointmentType`,
+    `appointmentId`. Returned by
+    `HdRepository.getHdConfirmedPatients` (keys are
+    camelCased).
+  properties:
+    id: { type: string, format: uuid }
+    patientId: { type: string, format: uuid }
+    status: { type: string }
+    appointmentId: { type: string }
+    patient: { $ref: "./common-patients.yaml#/Patient" }
+    appointmentType: { $ref: "#/AppointmentType" }
+    ProxyBill:
+      type: array
+      items: { $ref: "#/HdProxyBill" }
+
+AppointmentType:
+  type: object
+  properties:
+    id: { type: string }
+    name: { type: string }
+    modules:
+      type: array
+      items: { type: string }
+
+# =============================================================================
+# HD Request
+# =============================================================================
+#
+# The "request" layer above the proxy bill. Captures
+# session date/time, AVF / neck-line / femoral sides,
+# screening serology, and a referral. Mirrors the
+# `HDRequestWithRelations` type derived from
+# `hdRequestValidator` in
+# `hd-request.repository.ts`.
+
+GetHdRequestListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        hdRequests:
+          type: array
+          items: { $ref: "#/HdRequest" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetHdRequestByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/HdRequest"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdRequest:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    requestId:
+      type: string
+      description: |
+        Human-friendly monthly-reset id (e.g.
+        `HRID-202606-0007`). Generated via
+        `generateMonthlyResetId("HRID", ...)`.
+    sourceDepartment:
+      type: string
+      enum: [OPD, IPD, ED]
+      description: |
+        `HDRequestSourceDepartment`. Defaults to
+        `IPD` in the list schema. For emergency
+        patients, the service rewrites this to `ED`
+        automatically (see
+        `HDRequestService.createHDRequest`).
+    patientId: { type: string }
+    admissionId: { type: string, format: uuid, nullable: true }
+    appointmentId: { type: string, format: uuid, nullable: true }
+    appointmentTypeId: { type: string, nullable: true }
+    roomLogId: { type: string, nullable: true }
+    referralType:
+      type: string
+      enum: [REFERRALIN, REFERRALOUT]
+    referralOutType:
+      type: string
+      enum: [DOCTOR, CLINIC]
+      nullable: true
+    referralDoctorId: { type: string, nullable: true }
+    referralClinicId: { type: string, nullable: true }
+    hdDate: { type: string, format: date-time }
+    hdTime:
+      type: string
+      format: date-time
+      description: |
+        The session time-of-day (the date is in
+        `hdDate`). Stored as a `Date` in the DB.
+    diagnosis: { type: string, nullable: true }
+    urgency:
+      type: string
+      enum: [EMERGENCY, URGENT, NORMAL, ELECTIVE]
+    lastMeal: { type: string, nullable: true }
+    remark: { type: string, nullable: true }
+    # Serology (infection screening)
+    hbAg:
+      type: string
+      nullable: true
+      description: |
+        `ScreeningStatus` value (POSITIVE, NEGATIVE,
+        PENDING, etc.).
+    hcv: { type: string, nullable: true }
+    hiv: { type: string, nullable: true }
+    vdrl: { type: string, nullable: true }
+    otherScreening: { type: string, nullable: true }
+    # Access sides
+    avfSide:
+      type: string
+      enum: [LEFT, RIGHT, BOTH, NONE]
+      nullable: true
+      description: |
+        Arteriovenous fistula side.
+    neckLineSide:
+      type: string
+      enum: [LEFT, RIGHT, BOTH, NONE]
+      nullable: true
+    femoralSide:
+      type: string
+      enum: [LEFT, RIGHT, BOTH, NONE]
+      nullable: true
+    status:
+      type: string
+      enum: [REQUESTED, APPROVED, COMPLETED, CANCELLED]
+    hasServicesAdded: { type: boolean }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, format: uuid, nullable: true }
+    createdById: { type: string, format: uuid }
+    updatedById: { type: string, format: uuid }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    patient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        patientId: { type: string }
+        dateofBirth: { type: string, format: date-time }
+        gender: { type: string }
+        patientType:
+          type: string
+          enum: [OPD, IPD, EMERGENCY, DAYCARE]
+        guardianName: { type: string, nullable: true }
+    admission:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        admissionId: { type: string }
+    appointment:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string }
+    appointmentType:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string }
+        name: { type: string }
+    referralDoctor:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        doctorId: { type: string }
+        title: { type: string }
+        specialization: { type: string, nullable: true }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+    referralClinic:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+
+# =============================================================================
+# IPD HD requests for proxy
+# =============================================================================
+
+GetHdRequestsForProxyResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/HdRequestForProxy" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdRequestForProxy:
+  type: object
+  description: |
+    Tiny label/value picker shape returned by
+    `HdService.getBillableIpdHDRequestsForProxy`. The
+    list maps each `HDRequest.id` to a `requestId`
+    display string (or `"Unknown Request ID"` when
+    the request id is null).
+  properties:
+    id:
+      type: string
+      format: uuid
+      description: HDRequest id.
+    label:
+      type: string
+      description: |
+        `requestId` (e.g. `HRID-202606-0007`) or
+        `"Unknown Request ID"`.
+
+# =============================================================================
+# Infection screening display
+# =============================================================================
+#
+# Derived from the request's serology fields via
+# `getInfectionScreeningDisplay` (see
+# `src/utils/infection-screening.ts`). The util maps
+# `hbAg`, `hcv`, `hiv`, `vdrl`, `otherScreening` to
+# `"Positive" | "Negative" | "Pending"`.
+
+GetHdInfectionScreeningResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result: { $ref: "#/HdInfectionScreening" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdInfectionScreening:
+  type: object
+  description: |
+    Returned by `HDRequestService.getInfectionScreening`
+    and `getInfectionScreeningForBillingPatient`. If
+    the lookup finds no request, all four fields are
+    `false` / `null`.
+  properties:
+    hasApprovedRequest:
+      type: boolean
+      description: |
+        `true` when a request was found. The
+        `getInfectionScreening(hdRequestId)` variant
+        doesn't filter by `status`, so any request
+        with the given id returns `true`. The
+        `getInfectionScreeningForBillingPatient(patientId)`
+        variant filters to `status: APPROVED`.
+    hdRequestId:
+      type: string
+      format: uuid
+      nullable: true
+    displayLabel:
+      type: string
+      enum: [Positive, Negative, Pending]
+      nullable: true
+    isPositiveAlert:
+      type: boolean
+      description: |
+        Convenience: `displayLabel === "Positive"`.
+
+# =============================================================================
+# Appointments / patients / services lookup
+# =============================================================================
+
+GetAppointmentsForHdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/HdAppointmentForProxy" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdAppointmentForProxy:
+  type: object
+  description: |
+    An `Appointment` (full row) plus the related
+    `ProxyBill[]` and `appointmentType` rows. Keys are
+    camelCased. Returned by
+    `HdRepository.getAppointmentForHd`.
+  properties:
+    id: { type: string, format: uuid }
+    appointmentId: { type: string }
+    appointmentDate: { type: string, format: date-time }
+    status: { type: string }
+    patientId: { type: string, format: uuid }
+    doctorId: { type: string, format: uuid, nullable: true }
+    ProxyBill:
+      type: array
+      items: { $ref: "#/HdProxyBill" }
+    appointmentType: { $ref: "#/AppointmentType" }
+
+GetPatientsForHdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        patients:
+          type: array
+          items: { $ref: "#/HdPatient" }
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+HdPatient:
+  type: object
+  description: |
+    Full `Patient` row plus the filtered
+    `appointments` (CONFIRMED, HD-type, no
+    `ProxyBill`). Returned by
+    `HdRepository.getPatientForHd`.
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string }
+    patientId: { type: string }
+    phoneNo: { type: string, nullable: true }
+    gender: { type: string, nullable: true }
+    dateofBirth: { type: string, format: date-time, nullable: true }
+    guardianName: { type: string, nullable: true }
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+    patientGroup: { type: string }
+    appointments:
+      type: array
+      items:
+        allOf:
+          - $ref: "#/HdAppointmentForProxy"
+          - type: object
+            properties:
+              appointmentType: { $ref: "#/AppointmentType" }
+              ProxyBill:
+                type: array
+                items: { $ref: "#/HdProxyBill" }
+
+GetServicesForHdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        services:
+          type: array
+          items: { $ref: "./common-services.yaml#/Service" }
+          description: |
+            Full `Service` rows whose
+            `category.ServiceCategoryModuleMapping`
+            includes `HD` and `status: ACTIVE`.
+            See `serviceValidator` in
+            `opd/repositories/service.repository.ts`.
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]

@@ -1,0 +1,145 @@
+# docs/schemas/trpc-payment-methods.yaml
+# Schemas for the tRPC `paymentMethods` router
+# (src/lib/trpc/routers/payment-methods.ts).
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreatePaymentMethodInput:
+  type: object
+  description: |
+    Input for `paymentMethods.createPaymentMethod`. Zod schema
+    `createPaymentMethodSchema` in
+    `src/app/(dashboard)/common/set-up/payment-method/features/schemas/create-payment-method.ts:3-5`.
+  required:
+    - name
+  properties:
+    name:
+      type: string
+      minLength: 1
+      description: Must be unique among payment methods (case-insensitive equality).
+
+UpdatePaymentMethodInput:
+  type: object
+  description: |
+    Input for `paymentMethods.updatePaymentMethod`. The router merges
+    `updatePaymentMethodSchema` with `validateIdSchema` at
+    `src/lib/trpc/routers/payment-methods.ts:66`, giving an effective
+    schema of `{ name, id }`.
+
+    `updatePaymentMethodSchema`
+    (`src/app/(dashboard)/common/set-up/payment-method/features/schemas/update-payment-method.ts:3-5`):
+    only `name` (no `min(1)` — just `z.string()`). `validateIdSchema`
+    adds `id`.
+  required:
+    - name
+    - id
+  properties:
+    name:
+      type: string
+      description: New name. Must be unique among other payment methods when changed. (No min(1) here, unlike create.)
+    id:
+      type: string
+      description: Payment method id. No UUID validation at the router layer.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetPaymentMethodsResponse:
+  type: object
+  description: |
+    Response shape of `paymentMethods.getPaymentMethods`. Repository
+    signature (payment-methods-repository.ts:10):
+    `Promise<{ paymentMethods: PaymentMethod[]; count: number }>`.
+
+    Note the field name `paymentMethods` (not `data`) — matches the
+    `categories.getCategories` / `subCategories.getSubCategories` /
+    `units.getUnits` convention of using a domain-specific plural.
+  required:
+    - paymentMethods
+    - count
+  properties:
+    paymentMethods:
+      type: array
+      items:
+        $ref: ./trpc-payment-methods.yaml#/PaymentMethod
+    count:
+      type: integer
+      minimum: 0
+
+GetPaymentMethodsTotalCountResponse:
+  type: integer
+  minimum: 0
+  description: |
+    Response shape of `paymentMethods.getPaymentMethodsTotalCount`.
+    Bare integer (`prisma.paymentMethod.count()`), no filter.
+
+PaymentMethod:
+  type: object
+  description: |
+    Canonical payment-method shape. TS type `PaymentMethod` from
+    `src/app/(dashboard)/common/set-up/payment-method/features/type/index.ts:1-18`.
+
+    Maps to the Prisma `PaymentMethod` model. The repository populates
+    `createdBy` / `updatedBy` on **every** read AND write method (all
+    Prisma calls use `include: { createdBy: true, updatedBy: true }`),
+    so the response of `createPaymentMethod`, `getPaymentMethods`,
+    `getPaymentMethodById`, `updatePaymentMethod`, and even
+    `deletePaymentMethod` (the repository's `delete` returns the row
+    and is forwarded by the service) is the full `PaymentMethod`
+    shape. There is no Bare/Full split for this module.
+  required:
+    - id
+    - name
+    - createdAt
+    - updatedAt
+    - createdById
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique among payment methods (case-insensitive equality, per repository lookup).
+    createdById:
+      type: string
+      format: uuid
+      description: Always set. (Prisma column, non-nullable.)
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+      description: Prisma column, nullable. Set on updates; may be null on a freshly created record.
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+      description: |
+        The repository includes `createdBy: true`, which expands to
+        `select: { id, fullName, username }` (the full `User` row is
+        returned, but only those three fields are declared in the TS
+        `PaymentMethod` projection). See Publisher for the canonical
+        shape.
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    `createdBy` and `updatedBy` are populated by **every** Prisma call
+    in `payment-methods-repository.ts` — all use
+    `include: { createdBy: true, updatedBy: true }`. There is no
+    Bare/Full split for this module.
+
+    `deletePaymentMethod` is unusual: unlike `units.deleteUnitById`
+    (which returns `void` and is wrapped in a message envelope), the
+    repository's `delete` returns the deleted row, the service
+    forwards it, and the router returns it directly. So the response
+    shape is the full `PaymentMethod`, not `{ message }`.
+
+    Source: `payment-methods-repository.ts:16-19, 42-46, 58-62, 68-72, 82-86, 90-91`.

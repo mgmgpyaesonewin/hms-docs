@@ -1,0 +1,237 @@
+# docs/schemas/common-auth.yaml
+# Schemas for the common-auth sub-area of the
+# `common` REST module. Three endpoints:
+#   POST /api/auth/heartbeat
+#   GET  /api/auth/session
+#   POST /api/auth/session/resume
+# Source: src/app/api/(common)/auth/heartbeat/route.ts
+# Source: src/app/api/(common)/auth/session/route.ts
+# Source: src/app/api/(common)/auth/session/resume/route.ts
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+HeartbeatResponse:
+  type: object
+  description: |
+    Response shape of `/api/auth/heartbeat` and
+    `/api/auth/session/resume`. Both return
+    `{ success: true }` (no other fields) on
+    success and `{ success: false }` (no other
+    fields, status 401) on failure. The minimal
+    envelope is non-standard among the
+    `common-*` sub-areas; see [[common-auth]]
+    security notes.
+  required:
+    - success
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+        - false
+
+GetSessionResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/auth/session`.
+    The service's `getSession` returns a
+    `Session` row (with the joined `user` and
+    `user.role.permissions`) via
+    `prisma.session.findUnique`
+    (auth-service.ts:131-173). The route wraps
+    it in
+    `{ success: true, result, message: "", error: null }`.
+    On the not-found / expired / inactive
+    paths, the service returns `null` and the
+    route forwards `result: null` (the
+    `enhancedApiHandler` `auth: { required: true }`
+    gate may short-circuit first, depending
+    on its auth-resolver implementation).
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - $ref: ./common-auth.yaml#/SessionWithUser
+        - type: "null"
+    message:
+      type: string
+      example: ""
+    error:
+      type: "null"
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+SessionWithUser:
+  type: object
+  description: |
+    A `Session` row with the joined `user` (full
+    `User` minus `password`) and the joined
+    `user.role.permissions: true` and
+    `user.role`, `user.department`,
+    `user.createdBy`, `user.updatedBy`.
+
+    Maps to the Prisma `Session` model
+    (prisma/schema.prisma, @@map("sessions")).
+
+    Field reference (from
+    auth-service.ts:137-158):
+      - `id` (UUID, PK).
+      - `createdAt`, `updatedAt`, `expiresAt`,
+        `lastSeenAt` (DateTime).
+      - `userId` (UUID, FK to `User`).
+      - `sessionId` — `@unique`, opaque token
+        stored in the `sid` cookie.
+      - `storeId` — nullable UUID, FK to
+        `Store` (`onDelete: Cascade`).
+      - `user` — full `User` row minus
+        `password`, with `role.permissions`,
+        `department`, `createdBy`, `updatedBy`
+        all included. The `omit: { password:
+        true }` projection ensures the Argon2
+        hash is not exposed.
+  required:
+    - id
+    - sessionId
+    - userId
+    - expiresAt
+    - lastSeenAt
+    - createdAt
+    - updatedAt
+    - user
+  properties:
+    id:
+      type: string
+      format: uuid
+    sessionId:
+      type: string
+      description: |
+        Opaque token. `@unique` in the Prisma
+        model. Stored in the `sid` cookie
+        (`httpOnly`, `path: /`, `sameSite: lax`,
+        `secure: isHttps`). 32 hex characters
+        (16 random bytes via
+        `crypto.randomBytes(16).toString("hex")`,
+        auth-service.ts:95).
+    userId:
+      type: string
+      format: uuid
+    storeId:
+      type: string
+      format: uuid
+      nullable: true
+    expiresAt:
+      type: string
+      format: date-time
+      description: |
+        Absolute expiry. Set on login to
+        `now + SESSION_EXPIRES_DAYS` (1 day) and
+        refreshed by `heartbeat` / `resumeSession`
+        to the same value. After this, the
+        session is considered expired.
+    lastSeenAt:
+      type: string
+      format: date-time
+      description: |
+        Last time the session was touched. Set
+        on login, then refreshed by `heartbeat`
+        / `resumeSession`. After
+        `now - SESSION_INACTIVE_TIMEOUT_MINUTES`
+        (2 minutes), the session is considered
+        inactive and is deleted.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    user:
+      $ref: ./common-auth.yaml#/SessionUser
+
+SessionUser:
+  type: object
+  description: |
+    The joined `User` row for a `Session` —
+    full `User` minus `password`, with
+    `role`, `role.permissions`, `department`,
+    `createdBy`, `updatedBy` all included.
+    From auth-service.ts:141-157.
+  required:
+    - id
+    - userId
+    - username
+    - fullName
+    - status
+    - role
+  properties:
+    id:
+      type: string
+      format: uuid
+    userId:
+      type: string
+      description: |
+        Business-level user id string
+        (separate from the `User.id` primary
+        key).
+    username:
+      type: string
+    fullName:
+      type: string
+    email:
+      type: string
+      format: email
+      nullable: true
+    phoneNo:
+      type: string
+      nullable: true
+    employeeId:
+      type: string
+      nullable: true
+    status:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    isSuperadmin:
+      type: boolean
+    roleId:
+      type: string
+      format: uuid
+    role:
+      type: object
+      description: |
+        Full `Role` row with `permissions: true`
+        — exposes the full `Permission[]` for
+        the user's role. The front-end uses this
+        to gate UI elements.
+    department:
+      type: object
+      description: |
+        Full `Department` row (nullable).
+    joiningDate:
+      type: string
+      format: date-time
+      nullable: true
+    createdBy:
+      type: object
+      description: |
+        Full `User` row (the creator). May
+        recurse — for newly created users, the
+        creator is a superadmin.
+    updatedBy:
+      type: object
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

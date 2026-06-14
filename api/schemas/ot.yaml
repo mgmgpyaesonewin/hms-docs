@@ -1,0 +1,1121 @@
+# docs/schemas/ot.yaml
+# OpenAPI component schemas for the `ot` (Operation
+# Theatre) module's REST surface (`src/app/api/(ot)/`).
+#
+# Backed by:
+#   - `OTService extends ProxyBillTemplateService`
+#     (department = DepartmentEnum.OT,
+#     pharmacyBillInvoicePrefix = "OT")
+#   - `IPDOTRequestService` (the "request" layer that
+#     becomes a proxy bill at billing time)
+#
+# The OT module re-uses the shared `ProxyBill` shape
+# from `proxy-bill.type.ts` — that surface is documented
+# elsewhere under `cathlab.yaml` / `endo.yaml` /
+# `hd.yaml` / `pharmacy.yaml`. This file only documents
+# the OT-specific payloads (OTRequest, the picker lists,
+# the infection-screening display, and the standard
+# response envelopes for each route).
+
+# =============================================================================
+# OT proxy-bill list / detail / activity
+# =============================================================================
+
+GetOtListResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        proxyBills:
+          type: array
+          items: { $ref: "#/OtProxyBill" }
+          description: |
+            `ProxyBill[]` (full shape, see
+            `proxy-bill.type.ts::ProxyBillValidatorType`).
+            Always filtered to
+            `departmentType: DepartmentEnum.OT`.
+        count:
+          type: integer
+          description: Total matching rows (post-filter, pre-pagination).
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetOtByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/OtProxyBill"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+CreateOtProxyBillResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      $ref: "#/OtProxyBill"
+    message: { type: string, example: "OT proxy bill created successfully" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+CreateProxyBillRequest:
+  type: object
+  description: |
+    Body for `POST /api/ot/list` (and the sibling
+    ED / Endo / HD / CathLab proxy-bill create
+    routes). Mirrors the Zod
+    `createProxyBillSchema` defined in
+    `src/app/(dashboard)/shared/proxy-bill/schemas/proxy-bill.schema.ts`.
+
+    OT-specific constraints (enforced by
+    `superRefine`):
+      - `mainProcedureId` is **required** when
+        `departmentType: "OT"`.
+      - At least one of `serviceBill.services`,
+        `servicePackageBill.servicePackages`,
+        `procedureBill.procedures`, or
+        `pharmacyBill.items` must be non-empty.
+
+    For OT, exactly one of:
+      - `otRequestId` + `admissionId` (IPD path),
+      - `appointmentId` (OPD / ED path)
+    must resolve an APPROVED,
+    `hasServicesAdded: false` OT request (see
+    `OTService.resolveOTRequestForIPDProxyBill` /
+    `resolveOTRequestForOPDProxyBill`).
+  properties:
+    id: { type: string, description: Optional id (ignored on create). }
+    storeId: { type: string, format: uuid }
+    remark: { type: string }
+    date: { type: string, format: date-time }
+    billTypeId: { type: string, format: uuid }
+    patientId: { type: string }
+    mainProcedureId: { type: string, format: uuid }
+    admissionId: { type: string, format: uuid }
+    endoRequestId: { type: string, format: uuid, nullable: true }
+    otRequestId: { type: string, format: uuid, nullable: true }
+    hdRequestId: { type: string, format: uuid, nullable: true }
+    departmentType:
+      type: string
+      enum: [OT, ED, ENDO, HD, CATHLAB, DAYCARE]
+      default: ED
+    appointmentId: { type: string, format: uuid, nullable: true }
+    patientGroup:
+      type: string
+      enum: [NORMAL, STAFF, INSURANCE, CORPORATE, FOREIGNER, VIP, GOVERNMENT]
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+      default: OPD
+    serviceBill: { $ref: "#/ProxyBillServiceBillInput" }
+    procedureBill: { $ref: "#/ProxyBillProcedureBillInput" }
+    servicePackageBill: { $ref: "#/ProxyBillServicePackageBillInput" }
+    pharmacyBill: { $ref: "#/ProxyBillPharmacyBillInput" }
+    displayFOCField: { type: boolean, default: false }
+  required:
+    - storeId
+    - date
+    - billTypeId
+    - patientId
+
+ProxyBillServiceBillInput:
+  type: object
+  description: Service-bill sub-bill input.
+  properties:
+    id: { type: string }
+    proxyBillId: { type: string }
+    patientId: { type: string }
+    services:
+      type: array
+      items: { $ref: "#/ServiceBillItemInput" }
+
+ServiceBillItemInput:
+  type: object
+  properties:
+    id: { type: string }
+    name: { type: string }
+    serviceBillId: { type: string }
+    isTeamFee: { type: boolean }
+    isPriceFromMapping: { type: boolean }
+    serviceId: { type: string }
+    servicePrice: { $ref: "#/SubPriceSchema" }
+    referredPrice: { $ref: "#/SubPriceSchema" }
+    reportingPrice: { $ref: "#/SubPriceSchema" }
+    urgentPrice: { $ref: "#/SubPriceSchema" }
+    priceType: { type: string, nullable: true }
+    doctorId: { type: string, nullable: true }
+    categoryId: { type: string, nullable: true }
+    categoryName: { type: string, nullable: true }
+    price: { type: number, minimum: 0 }
+    qty: { type: number, minimum: 0 }
+    discountPercentage: { type: number, minimum: 0, nullable: true }
+    discountAmount: { type: number, minimum: 0, nullable: true }
+    foc: { type: number, minimum: 0, nullable: true }
+    amount: { type: number, minimum: 0, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean }
+
+ProxyBillProcedureBillInput:
+  type: object
+  properties:
+    id: { type: string }
+    proxyBillId: { type: string }
+    patientId: { type: string }
+    procedures:
+      type: array
+      items: { $ref: "#/ProcedureBillItemInput" }
+
+ProcedureBillItemInput:
+  type: object
+  properties:
+    id: { type: string }
+    name: { type: string }
+    procedureBillId: { type: string }
+    procedureId: { type: string }
+    doctorId: { type: string, nullable: true }
+    price: { type: number, minimum: 0 }
+    localPrice: { type: number, minimum: 0 }
+    foreignerPrice: { type: number, minimum: 0 }
+    insurancePrice: { type: number, minimum: 0 }
+    governmentPrice: { type: number, minimum: 0 }
+    qty: { type: number, minimum: 0 }
+    discountPercentage: { type: number, minimum: 0, nullable: true }
+    discountAmount: { type: number, minimum: 0, nullable: true }
+    foc: { type: number, minimum: 0, nullable: true }
+    amount: { type: number, minimum: 0, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean }
+
+ProxyBillServicePackageBillInput:
+  type: object
+  properties:
+    id: { type: string }
+    proxyBillId: { type: string }
+    patientId: { type: string }
+    servicePackages:
+      type: array
+      items: { $ref: "#/ServicePackageBillItemInput" }
+
+ServicePackageBillItemInput:
+  type: object
+  properties:
+    id: { type: string }
+    name: { type: string }
+    servicePackageBillId: { type: string }
+    servicePackageId: { type: string }
+    servicePackagePrice: { $ref: "#/SubPriceSchema" }
+    price: { type: number, minimum: 0 }
+    qty: { type: number, minimum: 0 }
+    discountPercentage: { type: number, minimum: 0, nullable: true }
+    discountAmount: { type: number, minimum: 0, nullable: true }
+    foc: { type: number, minimum: 0, nullable: true }
+    amount: { type: number, minimum: 0, nullable: true }
+
+ProxyBillPharmacyBillInput:
+  type: object
+  properties:
+    id: { type: string }
+    proxyBillId: { type: string }
+    patientId: { type: string }
+    patientGroup: { type: string }
+    date: { type: string, format: date-time }
+    invoiceNo: { type: string }
+    billTypeId: { type: string, format: uuid }
+    storeId: { type: string, format: uuid }
+    subtotal: { type: number, minimum: 0 }
+    taxPercentage: { type: number, minimum: 0 }
+    taxAmount: { type: number, minimum: 0 }
+    discountPercentage: { type: number, minimum: 0 }
+    discountAmount: { type: number, minimum: 0 }
+    totalAmount: { type: number, minimum: 0 }
+    remark: { type: string }
+    items:
+      type: array
+      items: { $ref: "#/ProxyPharmacySaleItemInput" }
+
+ProxyPharmacySaleItemInput:
+  type: object
+  description: |
+    Pharmacy-sale item input. `qty` must be `>= focQty`,
+    and `qty` must be `<= stock.qty` for new items (or
+    `<= stock.qty + initialQty` for existing items).
+    When `isCancel: true`, `cancelRemark` is required.
+  properties:
+    id: { type: string }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, nullable: true }
+    isCancel: { type: boolean }
+    qty: { type: number, minimum: 0 }
+    focQty: { type: number, minimum: 0 }
+    maximumRetailPrice: { type: number, minimum: 0 }
+    amount: { type: number, minimum: 0 }
+    stockId: { type: string, format: uuid }
+    isNewAddedItem: { type: boolean }
+    initialQty: { type: number, minimum: 0 }
+    stock: { $ref: "#/StockInput" }
+
+StockInput:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    qty: { type: number, minimum: 0 }
+
+SubPriceSchema:
+  type: object
+  description: |
+    `SubPriceSchema` from
+    `src/app/(dashboard)/opd/schemas/doctor-service/doctor-service-form.schema.ts`.
+    Holds the per-tier pricing matrix
+    (NORMAL / STAFF / INSURANCE / CORPORATE /
+    FOREIGNER / VIP / GOVERNMENT).
+  properties:
+    normal: { type: number, minimum: 0 }
+    staff: { type: number, minimum: 0 }
+    insurance: { type: number, minimum: 0 }
+    corporate: { type: number, minimum: 0 }
+    foreigner: { type: number, minimum: 0 }
+    vip: { type: number, minimum: 0 }
+    government: { type: number, minimum: 0 }
+
+GetOtActivitiesResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/OtActivityLog" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+OtProxyBill:
+  type: object
+  description: |
+    Alias for the shared `ProxyBill` (see
+    `proxy-bill.type.ts`). OT-specific bindings:
+      - `departmentType: "OT"`
+      - The IPD daily bill prefix is `OT/...` (set by
+        `OTService.pharmacyBillInvoicePrefix`).
+      - `mainProcedureId` is **required** at create time
+        for OT proxy bills (validated by
+        `createProxyBillSchema.superRefine` when
+        `departmentType === DepartmentEnum.OT`).
+      - The link side `proxyBillRequestLink.otRequest` is
+        populated (selecting `{ id, requestId }` only)
+        and the link is of `requestType: "OT"`.
+  properties:
+    id: { type: string, format: uuid }
+    invoiceNo: { type: string }
+    patientId: { type: string, format: uuid }
+    date: { type: string, format: date-time }
+    departmentType: { type: string, enum: [OT] }
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+    patientGroup: { type: string }
+    billTypeId: { type: string, format: uuid }
+    storeId: { type: string, format: uuid }
+    admissionId: { type: string, format: uuid, nullable: true }
+    appointmentId: { type: string, format: uuid, nullable: true }
+    mainProcedureId: { type: string, format: uuid, nullable: true }
+    remark: { type: string, nullable: true }
+    paymentStatus:
+      type: string
+      enum: [UNPAID, PAID, PARTIALLY_PAID, CANCELLED]
+    isDeleted: { type: boolean }
+    deletedById: { type: string, format: uuid, nullable: true }
+    deletedRemark: { type: string, nullable: true }
+    displayFOCField: { type: boolean }
+    proxyMainProcedure:
+      type: object
+      nullable: true
+      description: |
+        Sidecar table `ProxyMainProcedure` (one per
+        proxy bill). Populated only on
+        `getProxyBillById` (the list endpoint
+        projects `proxyMainProcedure` as null).
+      properties:
+        mainProcedureId: { type: string, format: uuid }
+        mainProcedure:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+    ipdDailyBill:
+      type: object
+      nullable: true
+      description: |
+        Only populated for IPD patients. Links the
+        OT bill to the IPD daily bill that auto-deducts
+        the OT total from the admission deposit
+        (`IPDDailyBillService`).
+      properties:
+        id: { type: string, format: uuid }
+        invoiceNo: { type: string }
+        admission:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            admissionId: { type: string }
+            discharges:
+              type: array
+              items:
+                type: object
+                properties:
+                  isFinalBillPaid: { type: boolean }
+    patient:
+      type: object
+      description: |
+        Slim patient projection. Includes
+        `Admission[]` for the "search by admission
+        id" filter on the list endpoint.
+    billType: { type: object }
+    bill: { type: object, nullable: true }
+    store: { type: object, nullable: true }
+    serviceBill:
+      type: object
+      nullable: true
+      description: Service-bill sub-bill (services, doctor, team fees).
+    servicePackageBill:
+      type: object
+      nullable: true
+      description: Service-package sub-bill.
+    procedureBill:
+      type: object
+      nullable: true
+      description: |
+        Procedure sub-bill. For OT proxy bills, the
+        `mainProcedureId` (stored on the sidecar
+        `ProxyMainProcedure` table) is **also** kept
+        in sync with this list, and the create schema
+        requires it to be set.
+    pharmacySale:
+      type: object
+      nullable: true
+      description: |
+        Pharmacy sub-bill. Invoice number is generated
+        by `OTService.generatePharmacyInvoice` and
+        carries the `OT-MM-YY-NNNNNN` format.
+    appointment:
+      type: object
+      nullable: true
+      description: |
+        Linked appointment (if the OT bill is
+        appointment-driven).
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string }
+        OPDBilling:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              invoiceNo: { type: string }
+    proxyBillRequestLink:
+      type: object
+      nullable: true
+      description: |
+        Active (non-deleted) `ProxyBillRequestLink` of
+        `requestType: "OT"`. The `otRequest` field is
+        the slim `{ id, requestId }` projection.
+      properties:
+        id: { type: string, format: uuid }
+        requestType: { type: string, enum: [OT] }
+        isDeleted: { type: boolean }
+        endoRequest:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            requestId: { type: string }
+        otRequest:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            requestId: { type: string }
+        hdRequest:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            requestId: { type: string }
+        endoReport:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            status:
+              type: string
+              enum: [ENTERED, DELIVERED]
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+
+OtActivityLog:
+  type: object
+  description: |
+    `ActivityLog` row joined with `user.role`. The
+    endpoint queries `entityId` against the proxy-bill
+    id, so each entry describes an action on the bill
+    itself (e.g. "Create OT Bill", "Update OT Bill",
+    "Delete OT Bill" — emitted by
+    `ProxyBillTemplateService.logActivity`).
+  properties:
+    id: { type: string, format: uuid }
+    entity: { type: string, example: OT }
+    entityId: { type: string, format: uuid }
+    action: { type: string, example: Create }
+    description: { type: string }
+    remark: { type: string, nullable: true }
+    userId: { type: string, format: uuid }
+    user:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+        role:
+          type: object
+          nullable: true
+    timestamp: { type: string, format: date-time }
+
+# =============================================================================
+# OT request (IPD / OPD / Emergency OT request)
+# =============================================================================
+
+GetOtRequestListResponse:
+  type: object
+  description: |
+    Returns the flat `OTRequest` (not the IPD wrapper).
+    Backed by `IPDOTRequestRepository.getOTRequestList`
+    using the `otRequestListValidator` include tree.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        otRequestList:
+          type: array
+          items: { $ref: "#/OtRequest" }
+        count:
+          type: integer
+          description: Total matching rows (post-filter, pre-pagination).
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetOtRequestByIdResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - $ref: "#/OtRequestWithStaff"
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetIpdOtRequestListResponse:
+  type: object
+  description: |
+    Returns the IPD-side wrapper (one row per
+    `IPDOTRequest` linked to an `OTRequest`).
+    Backed by `IPDOTRequestRepository.getOTRequests`
+    using the `ipdOTRequestValidator` include tree.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        ipdOTRequests:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/IpdOtRequest"
+            type: object
+            description: |
+              `IPDOTRequest` row with the
+              `otrequest` (flat OT request) eagerly
+              loaded via the `ipdOTRequestValidator`.
+        count:
+          type: integer
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+OtRequest:
+  type: object
+  description: |
+    `OTRequest` model. Includes the related
+    `opdOTRequest`, `ipdOTRequest`, patient, building,
+    and room sub-records. Note: the `surgeonId`,
+    `anesthetistId`, `assistantDoctorId`, and
+    `assistantNurseId` columns are `String[]` (arrays
+    of doctor/user ids); they are NOT materialised
+    into structured rows by `otRequestListValidator`
+    — the staff materialisation is opt-in via
+    `findByIdWithStaff`.
+  properties:
+    id: { type: string, format: uuid }
+    requestId:
+      type: string
+      nullable: true
+      description: |
+        Human-friendly id generated by
+        `generateMonthlyResetId("ORID", ...)` — e.g.
+        `ORID-2026-06-000001`. Reset on a monthly
+        basis; uniqueness is by `(month, serial)`.
+    patientId: { type: string, format: uuid }
+    patientType:
+      type: string
+      enum: [OPD, IPD, EMERGENCY, DAYCARE]
+    referralType: { type: string, example: REFERRALIN }
+    referralDoctorId: { type: string, format: uuid, nullable: true }
+    referralClinicId: { type: string, format: uuid, nullable: true }
+    referralClinic: { type: string, nullable: true }
+    diagnosis: { type: string, nullable: true }
+    operationDate: { type: string, format: date-time }
+    operationTime: { type: string, format: date-time }
+    operationTypeId: { type: string, format: uuid, nullable: true }
+    anesthesiaTypeId: { type: string, format: uuid, nullable: true }
+    urgentOrElective:
+      type: string
+      enum: [URGENT, ELECTIVE]
+    isBloodRequired: { type: boolean }
+    bloodRequiredRemark: { type: string, nullable: true }
+    drugAllergy: { type: string, nullable: true }
+    lastMeal: { type: string, nullable: true }
+    buildingId: { type: string, format: uuid, nullable: true }
+    roomId: { type: string, format: uuid, nullable: true }
+    surgeonId:
+      type: array
+      items: { type: string, format: uuid }
+      description: Doctor ids (array column). See `OtRequestWithStaff.surgeons` for the materialised shape.
+    anesthetistId:
+      type: array
+      items: { type: string, format: uuid }
+    assistantDoctorId:
+      type: array
+      items: { type: string, format: uuid }
+    assistantNurseId:
+      type: array
+      items: { type: string, format: uuid }
+    systolicBloodPressure: { type: number, nullable: true }
+    diastolicBloodPressure: { type: number, nullable: true }
+    bodyMeasurementUnit:
+      type: string
+      enum: [METRIC, IMPERIAL]
+      nullable: true
+    weight: { type: number, nullable: true }
+    height: { type: number, nullable: true }
+    bodyTemperature: { type: number, nullable: true }
+    bodyTemperatureUnit:
+      type: string
+      enum: [CELSIUS, FAHRENHEIT]
+      nullable: true
+    spO2: { type: number, nullable: true }
+    heartRate: { type: number, nullable: true }
+    respiratoryRate: { type: number, nullable: true }
+    hbAg:
+      type: string
+      nullable: true
+      description: Serology marker (raw select value, e.g. `POSITIVE` / `NEGATIVE` / `PENDING`).
+    hcv: { type: string, nullable: true }
+    hiv: { type: string, nullable: true }
+    vdrl: { type: string, nullable: true }
+    otherScreening: { type: string, nullable: true }
+    bloodGroup:
+      type: string
+      nullable: true
+      description: |
+        Free text — e.g. `A_POSITIVE`,
+        `O_NEGATIVE`. The schema validator
+        normalises the enum to optional, but the
+        storage column is plain text.
+    clottingMinute: { type: number, nullable: true }
+    bleedingMinute: { type: number, nullable: true }
+    bleedingSecond: { type: number, nullable: true }
+    clottingSecond: { type: number, nullable: true }
+    status:
+      type: string
+      enum: [BOOKED, REQUESTED, CONFIRMED, CANCELLED, APPROVED, COMPLETED]
+    hasServicesAdded:
+      type: boolean
+      description: |
+        Set to `true` by
+        `IPDOTRequestService.markOTRequestAsBilled`
+        when the proxy bill is created. Once
+        `true`, the request can no longer be
+        cancelled.
+    remark: { type: string, nullable: true }
+    cancelRemark: { type: string, nullable: true }
+    cancelledById: { type: string, format: uuid, nullable: true }
+    opdOTRequestId: { type: string, format: uuid, nullable: true }
+    ipdOTRequestId: { type: string, format: uuid, nullable: true }
+    createdById: { type: string, format: uuid }
+    updatedById: { type: string, format: uuid }
+    createdAt: { type: string, format: date-time }
+    updatedAt: { type: string, format: date-time }
+    opdOTRequest:
+      type: object
+      nullable: true
+      description: |
+        OPD-side link (when the request is from an
+        OPD appointment). Includes the related
+        `appointmentType` (select) and `appointment`
+        (relation).
+      properties:
+        id: { type: string, format: uuid }
+        appointmentId: { type: string, format: uuid }
+        appointmentType:
+          type: object
+          nullable: true
+        appointment:
+          type: object
+          nullable: true
+    ipdOTRequest:
+      type: object
+      nullable: true
+      description: |
+        IPD-side link (when the request is from an
+        IPD admission). Includes the `admission`
+        record.
+      properties:
+        id: { type: string, format: uuid }
+        admissionId: { type: string, format: uuid }
+        admission:
+          type: object
+          nullable: true
+    patient:
+      type: object
+      description: |
+        Full `Patient` row (the list validator
+        does NOT restrict to a slim projection).
+    operationType:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    anesthesiaType:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    building:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    room:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        floor: { type: object, nullable: true }
+        ward: { type: object, nullable: true }
+        wardRoomType:
+          type: object
+          nullable: true
+          properties:
+            roomType: { type: object, nullable: true }
+    referralDoctor:
+      type: object
+      nullable: true
+      description: |
+        Slim doctor projection (only on
+        `ipdOTRequestValidator`, not on the flat
+        list validator).
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        doctorId: { type: string }
+        specializationName: { type: string, nullable: true }
+        user:
+          type: object
+          properties:
+            fullName: { type: string }
+        specialization:
+          type: object
+          nullable: true
+          properties:
+            name: { type: string }
+    createdBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+    updatedBy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        username: { type: string }
+
+OtRequestWithStaff:
+  allOf:
+    - $ref: "#/IpdOtRequest"
+    - type: object
+      description: |
+        `IPDOTRequest` shape with the four
+        OT-staff arrays materialised into
+        structured records. Backed by
+        `IPDOTRequestRepository.findByIdWithStaff`.
+        The arrays are populated by
+        `fetchAllOTStaff` (4 parallel queries
+        against `prisma.doctor` / `prisma.user`).
+      properties:
+        otrequest:
+          allOf:
+            - $ref: "#/OtRequest"
+            - type: object
+              properties:
+                surgeons:
+                  type: array
+                  items: { $ref: "#/SurgeonDetails" }
+                anesthetists:
+                  type: array
+                  items: { $ref: "#/SurgeonDetails" }
+                assistantDoctors:
+                  type: array
+                  items: { $ref: "#/SurgeonDetails" }
+                assistantNurses:
+                  type: array
+                  items: { $ref: "#/NurseDetails" }
+
+IpdOtRequest:
+  type: object
+  description: |
+    `IPDOTRequest` row. The key relation is
+    `otrequest` — the flat `OTRequest` joined via
+    the `ipdOTRequestValidator` include. Use the
+    `opdOTRequest` sub-record on the parent
+    `otrequest` for the OPD counterpart.
+  properties:
+    id: { type: string, format: uuid }
+    admissionId: { type: string, format: uuid }
+    admission:
+      type: object
+      nullable: true
+    otrequest:
+      oneOf:
+        - $ref: "#/OtRequest"
+        - type: "null"
+      description: |
+        Flat `OTRequest` joined via the
+        `ipdOTRequestValidator`. The full
+        `OtRequest` shape is documented above;
+        the validator additionally includes
+        `referralDoctor` (slim), `opdOTRequest`,
+        `createdBy` / `updatedBy`, and the
+        `room.wardRoomType.roomType` chain.
+
+SurgeonDetails:
+  type: object
+  description: |
+    `Doctor` row projected for OT staff display.
+    Populated by `fetchSurgeonsByIds` /
+    `fetchAnesthetistsByIds` /
+    `fetchAssistantDoctorsByIds`.
+  properties:
+    id: { type: string, format: uuid }
+    doctorId: { type: string }
+    title: { type: string }
+    specializationName: { type: string, nullable: true }
+    user:
+      type: object
+      properties:
+        fullName: { type: string }
+    specialization:
+      type: object
+      nullable: true
+      properties:
+        name: { type: string }
+
+NurseDetails:
+  type: object
+  description: |
+    `User` row projected for OT assistant-nurse
+    display. Populated by
+    `fetchAssistantNursesByIds` — note the
+    assistant-nurse id column is on the `User`
+    table, not `Doctor`.
+  properties:
+    id: { type: string, format: uuid }
+    fullName: { type: string }
+
+# =============================================================================
+# OT request — for-proxy picker
+# =============================================================================
+
+GetOtRequestsForProxyResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string, format: uuid }
+          label:
+            type: string
+            description: |
+              `requestId` of the OT request (e.g.
+              `ORID-2026-06-000001`) or
+              `"Unknown Request ID"` if missing.
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# =============================================================================
+# OT request — patient context
+# =============================================================================
+
+GetOtRequestByPatientResponse:
+  type: object
+  description: |
+    Response from `ot-request-by-patient`. The
+    inner `otRequest` is a reshaped view:
+      - `otRequestId` ← `requestId`
+      - `procedure`   ← `operationType`
+      - `remarks`     ← `remark`
+    The rest of the fields are the flat
+    `OtRequest`.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        otRequest:
+          oneOf:
+            - type: object
+              description: |
+                Reshaped `OtRequest` for the
+                frontend patient context view.
+              properties:
+                id: { type: string, format: uuid }
+                requestId: { type: string, nullable: true }
+                otRequestId:
+                  type: string
+                  nullable: true
+                  description: |
+                    Alias for `requestId` —
+                    the human-friendly OT id.
+                procedure:
+                  type: string
+                  nullable: true
+                  description: Alias for `operationType`.
+                remarks: { type: string, nullable: true }
+            - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# =============================================================================
+# OT infection screening
+# =============================================================================
+
+GetOtInfectionScreeningResponse:
+  type: object
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      description: |
+        Computed by
+        `IPDOTRequestService.getInfectionScreeningForBillingPatient` →
+        `IPDOTRequestRepository.getInfectionScreeningForBillingPatient`.
+        Source: the latest APPROVED OT request for
+        the patient (if any). If no approved
+        request exists, every field is `false` /
+        `null` and `hasApprovedRequest` is
+        `false`.
+      properties:
+        hasApprovedRequest: { type: boolean }
+        otRequestId:
+          type: string
+          format: uuid
+          nullable: true
+        displayLabel:
+          type: string
+          enum: [Positive, Negative, Pending, "null"]
+          nullable: true
+          description: |
+            Computed by
+            `getInfectionScreeningDisplay`
+            (`src/utils/infection-screening.ts`)
+            from `hbAg | hcv | hiv | vdrl |
+            otherScreening` of the linked OT
+            request.
+        isPositiveAlert:
+          type: boolean
+          description: |
+            Convenience boolean —
+            `displayLabel === "Positive"`.
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+# =============================================================================
+# OT appointment / patient / doctor pickers
+# =============================================================================
+
+GetAppointmentsForOtResponse:
+  type: object
+  description: |
+    Backed by `OTService.getAppointmentsForOT` →
+    `OTRepository.getAppointmentsForOT`. The
+    repository filters to:
+      - `status: CONFIRMED`,
+      - `appointmentType.modules` includes
+        `ModuleEnum.OT`,
+      - no `opdEmr` of moduleType
+        `OT_OPD` / `OT_ED` exists yet,
+      - either an APPROVED `opdotrequest` with no
+        active proxy-bill link, or no
+        `opdotrequest` at all.
+    The `includeAppointmentId` query param
+    short-circuits the above and returns the
+    appointment by id (used to re-display a
+    pre-selected appointment in the picker).
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items:
+        type: object
+        description: |
+          `Appointment & { ProxyBill, appointmentType }`
+          (see `proxy-bill.type.ts::AppointmentForProxyBillType`).
+        properties:
+          id: { type: string, format: uuid }
+          appointmentId: { type: string }
+          appointmentType:
+            type: object
+            nullable: true
+          ProxyBill:
+            type: array
+            items: { type: object }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetPatientsForOtResponse:
+  type: object
+  description: |
+    Backed by `OTService.getPatientsForOT` →
+    `OTRepository.getPatientsForOT`. The
+    repository returns patients who are eligible
+    for an OT bill. Two cases:
+      1. IPD patients with an APPROVED
+         OT request (`patientType: IPD`,
+         `hasServicesAdded: false`, no active
+         proxy-bill link, and no
+         `ipdEmrRequestLinks`).
+      2. OPD / ED patients with a CONFIRMED
+         OT appointment whose appointment type
+         has `modules: [OT]` and no OT/ED EMR
+         yet created.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: object
+      properties:
+        patients:
+          type: array
+          items:
+            type: object
+            description: |
+              `Patient` with `appointments[]` (the
+              OT-eligible appointment subset, each
+              with `appointmentType` and
+              `ProxyBill`).
+        totalCount: { type: integer }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+GetDoctorsForOtResponse:
+  type: object
+  description: |
+    Backed by `IPDOTRequestService.findDoctorIdsInOTRequests`
+    → `IPDOTRequestRepository.findDoctorIdsInOTRequests`.
+    The route accepts a comma-separated
+    `ids` URL param and splits it into an array
+    before querying.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      type: array
+      items: { $ref: "#/DoctorForOtRequest" }
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]
+
+DoctorForOtRequest:
+  type: object
+  description: |
+    Slim `Doctor` projection — id, title, and
+    the underlying `User.fullName`.
+  properties:
+    id: { type: string, format: uuid }
+    title: { type: string }
+    user:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+
+# =============================================================================
+# OT request label (proxy-bill detail sidebar)
+# =============================================================================
+
+GetOtRequestForProxyLabelResponse:
+  type: object
+  description: |
+    Returns a 2-field slim projection
+    (`{ id, requestId }`) of the OT request, used
+    as the sidebar label in the proxy-bill UI.
+    Backed by
+    `IPDOTRequestRepository.findOTRequestByIdForProxyLabel`.
+  properties:
+    success: { type: boolean, example: true }
+    result:
+      oneOf:
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            requestId: { type: string, nullable: true }
+        - type: "null"
+    message: { type: string, example: "" }
+    error: { nullable: true }
+  required: [success, result, message, error]

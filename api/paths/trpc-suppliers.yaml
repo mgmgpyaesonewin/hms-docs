@@ -1,0 +1,408 @@
+# docs/paths/trpc-suppliers.yaml
+# tRPC router: suppliers (src/lib/trpc/routers/suppliers.ts)
+# CRUD over the `Supplier` model. Six procedures: five use
+# `authProcedure`; `deleteSupplierById` uses `verifyPasswordProcedure`
+# (caller's password re-verified). **None** use `authorizeProcedure`.
+# See the security notes at the bottom.
+x-trpc-source: src/lib/trpc/routers/suppliers.ts
+x-trpc-router: suppliers
+
+/api/trpc/suppliers.createSupplier:
+  post:
+    summary: Create a new supplier
+    description: |
+      Authenticated mutation. Creates a supplier with a generated
+      `supplierId` code (`SIDxxxxx`, monotonic with the most recent
+      supplier) and one or more child rows in `SupplierContactPerson`
+      and (after the empty-row filter) `SupplierPaymentInfo`.
+
+      Validation:
+        - `companyName` non-empty and unique → else 409
+          `SUPPLIER_ERRORS.DUPLICATE_COMPANY_NAME`.
+        - `phoneNo` non-empty and unique → else 409
+          `SUPPLIER_ERRORS.DUPLICATE_PHONE_NO`.
+        - If `email` provided, unique → else 409
+          `SUPPLIER_ERRORS.DUPLICATE_EMAIL`.
+
+      Side effects:
+        - Sets `createdById` and `updatedById` to `ctx.user.id`.
+        - `status` is translated from `boolean` →
+          `supplierStatus.ACTIVE` / `INACTIVE`.
+        - Missing `email` / `address` are normalised to `null`.
+        - `paymentInfos` are passed through a Zod `transform` that
+          drops empty rows (rows where every field is null).
+        - Logs the creation via `activityLogger` (description:
+          "Created Supplier", action: "Create", entity: "Supplier",
+          entityId: result.id).
+
+      **Response is `{ message: "..." }` only** — the created row
+      is not returned. This differs from the `stores` /
+      `departments` mutations, which return the bare Prisma record.
+
+      Source: `src/lib/trpc/routers/suppliers.ts:11-21`.
+    tags:
+      - Suppliers
+    operationId: trpc_suppliers_createSupplier
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-suppliers.yaml#/CreateSupplierInput
+    responses:
+      "200":
+        description: |
+          Supplier created. Response body is
+          `{ message: "Supplier added successfully." }`.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  example: "Supplier added successfully."
+      "400":
+        description: Validation failure (Zod).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: |
+          Duplicate `companyName` / `phoneNo` / `email` (the three
+          uniqueness invariants on the Supplier model).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/suppliers.getSuppliers:
+  post:
+    summary: List suppliers (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of suppliers with
+      the post-filter, pre-pagination total count.
+
+      Response shape:
+        ```
+        { suppliers: Supplier[], count: number }
+        ```
+      (Field names `suppliers` + `count`.)
+
+      Search filter (from `querySupplierSchema`):
+        - `search` — case-insensitive substring match against
+          `supplierId`, `companyName`, `phoneNo`, `email` (union
+          via Prisma `OR`).
+        - `start` / `end` — `createdAt` window
+          (`gte: start`, `lt: end`).
+        - `supplierType` — `MANUFACTURER` | `DISTRIBUTOR`.
+        - `status` — `ACTIVE` | `INACTIVE`.
+
+      Source: `src/lib/trpc/routers/suppliers.ts:23-31`.
+    tags:
+      - Suppliers
+    operationId: trpc_suppliers_getSuppliers
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-suppliers.yaml#/SupplierQueryInput
+    responses:
+      "200":
+        description: Paginated list of suppliers.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-suppliers.yaml#/GetSuppliersResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/suppliers.getTotalSuppliersCount:
+  post:
+    summary: Get total supplier count
+    description: |
+      Authenticated query. Returns the unpaginated total count of
+      suppliers (`prisma.supplier.count()` with no `where` filter).
+
+      **The query input is not honoured** — the router does
+      `getTotalSuppliersCount: authProcedure.query(...)` with no
+      `.input(...)`, so any payload sent on the wire is ignored.
+      The result is the global total.
+
+      Source: `src/lib/trpc/routers/suppliers.ts:33-39`.
+    tags:
+      - Suppliers
+    operationId: trpc_suppliers_getTotalSuppliersCount
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total supplier count.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-suppliers.yaml#/GetTotalSuppliersCountResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/suppliers.getSupplierById:
+  post:
+    summary: Get a supplier by id (with contacts and payment info)
+    description: |
+      Authenticated query. Returns the supplier (with `createdBy` /
+      `updatedBy` projections) including the full
+      `contactPersons[]` and `paymentInfos[]` arrays (payment infos
+      include the joined `paymentMethod: { name }`).
+
+      Returns `null` if the supplier does not exist (no tRPC throw /
+      404 envelope). The router's
+      `getSupplierById: authProcedure.input(validateIdSchema)` does
+      not raise on miss.
+
+      Source: `src/lib/trpc/routers/suppliers.ts:41-49`.
+    tags:
+      - Suppliers
+    operationId: trpc_suppliers_getSupplierById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: string
+                description: |
+                  Supplier id. No UUID refinement at the router layer
+                  (`validateIdSchema` is `z.string()`).
+    responses:
+      "200":
+        description: The supplier (or `null` if not found).
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-suppliers.yaml#/Supplier
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/suppliers.updateSupplierById:
+  post:
+    summary: Update a supplier
+    description: |
+      Authenticated mutation. Updates the supplier identified by
+      `id`. Input is `updateSupplierSchema.merge(validateIdSchema)`.
+
+      Validation:
+        - If `companyName` is taken by a *different* supplier → 409
+          `SUPPLIER_ERRORS.DUPLICATE_COMPANY_NAME`.
+        - If `phoneNo` is taken by a *different* supplier → 409
+          `SUPPLIER_ERRORS.DUPLICATE_PHONE_NO`.
+        - If `email` is taken by a *different* supplier → 409
+          `SUPPLIER_ERRORS.DUPLICATE_EMAIL`.
+        - The check is **"by different id"** — updating a row with
+          its own current `companyName` / `phoneNo` / `email` does
+          not throw.
+
+      Side effects:
+        - `contactPersons` and `paymentInfos` are fully replaced
+          inside a `prisma.$transaction` (`deleteMany` +
+          `createMany`).
+        - Sets `updatedById` to `ctx.user.id`.
+        - `status` is re-translated from `boolean` →
+          `supplierStatus.ACTIVE` / `INACTIVE`.
+        - Calls `revalidatePath("set-up/suppliers")` — **note**: this
+          string is **NOT** prefixed with `/` (other routers in this
+          folder use `/set-up/...`).
+        - Logs the update via `activityLogger` (description:
+          "Updated Supplier", action: "Update", entity: "Supplier",
+          entityId: id).
+
+      **Response is `{ message: "..." }` only** — the updated row
+      is not returned.
+
+      Source: `src/lib/trpc/routers/suppliers.ts:51-61`.
+    tags:
+      - Suppliers
+    operationId: trpc_suppliers_updateSupplierById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-suppliers.yaml#/UpdateSupplierInput
+    responses:
+      "200":
+        description: |
+          Supplier updated. Response body is
+          `{ message: "Supplier updated successfully." }`.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  example: "Supplier updated successfully."
+      "400":
+        description: Validation failure (Zod).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "409":
+        description: |
+          Duplicate `companyName` / `phoneNo` / `email` (taken by a
+          different supplier).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/suppliers.deleteSupplierById:
+  post:
+    summary: Delete a supplier (caller password re-verified)
+    description: |
+      **Sensitive.** Built on `verifyPasswordProcedure`, which
+      requires the caller's session **and** re-verifies their
+      current password before running the mutation.
+
+      Validation:
+        - Caller must have a valid `sid` cookie.
+        - Caller's current password must verify.
+        - If the supplier is referenced by another table
+          (FK constraint) → 400
+          `AppError("Supplier is in use and cannot be deleted", 400)`.
+          The check is `isForeignKeyConstraintViolationError(error)`
+          in the repository's catch block.
+
+      Side effects:
+        - The supplier is **hard-deleted** (the FK CASCADE on
+          `SupplierContactPerson` / `SupplierPaymentInfo` cascades
+          the child rows).
+        - Logs the deletion via `activityLogger` (description:
+          "Deleted Supplier", action: "Delete", entity: "Supplier",
+          entityId: id).
+
+      **Response is `{ message: "..." }` only** — the deleted row
+      is not returned.
+
+      Source: `src/lib/trpc/routers/suppliers.ts:63-75`.
+    tags:
+      - Suppliers
+    operationId: trpc_suppliers_deleteSupplierById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-suppliers.yaml#/DeleteSupplierInput
+    responses:
+      "200":
+        description: |
+          Supplier deleted. Response body is
+          `{ message: "Supplier deleted successfully." }`.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  example: "Supplier deleted successfully."
+      "400":
+        description: Supplier is in use (FK constraint).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session, or caller's password verification failed.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-security-note: |
+      The router does
+        `deleteSupplierById: verifyPasswordProcedure.input(validateIdSchema)`
+      which **overrides** the base input schema. The base schema
+      requires `verifyPassword`, but the chained
+      `.input({ id })` does not include it. The middleware reads
+      `input.verifyPassword` directly, so at runtime the procedure
+      will read `undefined` from input and
+      `authService.checkPassword(userId, undefined)` will throw.
+
+      This is the **same pattern** as `auth.resetPassword`,
+      `departments.deleteDepartment`, and `stores.deleteStore`
+      (see their `x-security-note`s).
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all six procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **None** of the six procedures use `authorizeProcedure`. Any
+    authenticated user can create, read, update, and (with password
+    re-verification) delete suppliers. Suppliers are upstream of
+    GRN, purchase orders, and items, so this is a privileged surface.
+    Worth gating behind a `manage_suppliers` action subject.
+  - `deleteSupplierById` has the same input-schema-override bug as
+    `auth.resetPassword` / `departments.deleteDepartment` /
+    `stores.deleteStore`. The `verifyPasswordMiddleware` reads
+    `input.verifyPassword` from the input that does not include it.
+  - `revalidatePath("set-up/suppliers")` is called with a non-`/`
+    prefix, unlike `stores.updateStore` which uses
+    `revalidatePath("/set-up/stores")`. Both work in Next.js
+    (the leading slash is optional for plain path strings) but the
+    inconsistency is worth flagging.
+  - The `bankId` field on `PaymentInfo` is commented out in both the
+    Zod schema and the repository's `select` (the bank relation is
+    also commented out in `supplier-repository.ts:108-113`).
+    Looks like an in-progress feature; the Prisma column exists but
+    the wire shape doesn't surface it.
+  - **Mutation responses are message-only** — `createSupplier`,
+    `updateSupplierById`, and `deleteSupplierById` all return
+    `{ message: "..." }` and do NOT include the affected row. This
+    differs from `stores.updateStore` (returns `StoreBare`) and
+    `departments.updateDepartment` (returns `DepartmentBare`).
+    Callers needing the row should re-fetch via `getSupplierById`.

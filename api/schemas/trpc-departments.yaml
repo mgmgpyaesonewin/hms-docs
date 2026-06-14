@@ -1,0 +1,214 @@
+# docs/schemas/trpc-departments.yaml
+# Schemas for the tRPC `departments` router (src/lib/trpc/routers/departments.ts).
+# This module OWNS the canonical `Department` type and the `DepartmentSummary`
+# projection referenced by trpc-users.yaml (User.department).
+
+# =============================================================================
+# Summary types
+# =============================================================================
+
+DepartmentSummary:
+  type: object
+  description: |
+    Minimal Department projection. The shape referenced by
+    `User.department` in trpc-users.yaml (TS type
+    `User.department: { id; name } | null`). This is the
+    placeholder that was previously declared in trpc-users.yaml
+    — now resolved.
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateDepartmentInput:
+  type: object
+  description: |
+    Input for `departments.createDepartment`. Zod schema
+    `createDepartmentsSchema` in
+    `src/app/(dashboard)/common/user-management/departments/features/schemas/create-departments-schema.ts:3-6`.
+  required:
+    - name
+  properties:
+    name:
+      type: string
+      minLength: 1
+      description: Must be unique (case-insensitive).
+    description:
+      type: string
+      description: Optional free-text description.
+
+UpdateDepartmentInput:
+  type: object
+  description: |
+    Input for `departments.updateDepartment`. Zod schema
+    `updateDepartmentsSchema` in
+    `src/app/(dashboard)/common/user-management/departments/features/schemas/update-departments-schem.ts:3-7`
+    (note the misspelled filename in source — missing trailing `a`).
+  required:
+    - id
+    - name
+  properties:
+    id:
+      type: string
+      description: Department id. No UUID validation at the router layer.
+    name:
+      type: string
+      description: Required. Must be unique across other departments when changed.
+    description:
+      type: string
+
+DeleteDepartmentInput:
+  type: object
+  description: |
+    Input for `departments.deleteDepartment`. The router does
+    `verifyPasswordProcedure.input(z.object({ id: z.string() }))` —
+    see the x-security-note on `/api/trpc/departments.deleteDepartment`
+    for the input-schema conflict with the verifyPassword middleware.
+
+    This schema documents the **observed** input: just `{ id }`. If the
+    bug is fixed, callers will also need to include `verifyPassword`.
+  required:
+    - id
+  properties:
+    id:
+      type: string
+      description: Department id. No UUID validation at the router layer.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetDepartmentsResponse:
+  type: object
+  description: |
+    Response shape of `departments.getDepartments`. Service signature
+    (departments-repository.ts:8-9): `Promise<{ data: Department[]; count: number }>`.
+
+    Note the field name is `count`, not `totalCount` — this differs
+    from `users.getUsers` which uses `totalCount`.
+  required:
+    - data
+    - count
+  properties:
+    data:
+      type: array
+      items:
+        $ref: ./trpc-departments.yaml#/Department
+    count:
+      type: integer
+      minimum: 0
+      description: Total department count across all pages (via `prisma.department.count()`).
+
+Department:
+  type: object
+  description: |
+    Canonical department shape. TS type `Department` from
+    `src/app/(dashboard)/common/user-management/departments/features/type/index.ts:7-16`.
+
+    Maps to the Prisma `Department` model
+    (prisma/schema.prisma) with `createdBy` / `updatedBy` populated
+    only by the **read** methods. See `x-runtime-populated-by` below.
+  required:
+    - id
+    - name
+    - departmentCode
+    - createdAt
+    - updatedAt
+    - createdBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique (case-insensitive).
+    description:
+      type: string
+      nullable: true
+    departmentCode:
+      type: string
+      description: |
+        Auto-generated sequential code ("DID-001", "DID-002", ...).
+        Unique. Set by `DepartmentsService.generateDepartmentCode`
+        (service.ts:103-116) at create time.
+    createdById:
+      type: string
+      format: uuid
+      description: Always present in the bare record. (Prisma column.)
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+      description: Always present in the bare record. (Prisma column.)
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    updatedBy:
+      $ref: ./common.yaml#/Publisher
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    `createdBy` and `updatedBy` are **only** populated by:
+      - `departments.getDepartments` (with `createdBy: { select: { id, fullName, username } }`)
+      - `departments.getDepartmentById` (same select)
+
+    NOT populated by:
+      - `departments.createDepartment` (calls `prisma.department.create({ data })` with no `include`)
+      - `departments.updateDepartment` (calls `prisma.department.update({ where, data })` with no `include`)
+      - `departments.deleteDepartment` (calls `prisma.department.delete({ where })` with no `include`)
+
+    For these write methods, the response is a **bare** department record.
+    Use the `DepartmentBare` schema for those operations.
+
+DepartmentBare:
+  type: object
+  description: |
+    Bare Department record — the shape returned by `createDepartment`,
+    `updateDepartment`, and `deleteDepartment` (no `createdBy` / `updatedBy`
+    included). Differs from the full `Department` schema only in that
+    the `createdBy` and `updatedBy` fields are absent.
+  required:
+    - id
+    - name
+    - departmentCode
+    - createdAt
+    - updatedAt
+    - createdById
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+    description:
+      type: string
+      nullable: true
+    departmentCode:
+      type: string
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      type: string
+      format: uuid
+      nullable: true
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

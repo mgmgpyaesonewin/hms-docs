@@ -1,0 +1,267 @@
+# docs/schemas/trpc-default-setting.yaml
+# Schemas for the tRPC `defaultSetting` router
+# (src/lib/trpc/routers/default-setting.ts).
+#
+# NOTE — this is a "singleton settings" router. The application
+# treats the `DefaultSetting` Prisma model as a single config row
+# (one row total, in practice). The Prisma model itself does NOT
+# have a global unique constraint — but `storeId` is `@unique`,
+# so at most one `DefaultSetting` row exists per referenced Store.
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+CreateDefaultSettingInput:
+  type: object
+  description: |
+    Input for `defaultSetting.createDefaultSetting`. Zod schema
+    `createDefaultSettingSchema` in
+    `src/app/(dashboard)/common/default-setting/features/schemas/create-default-setting-schema.ts:3-15`.
+  required:
+    - rounding
+    - expiredAlertDuration
+    - paymentMethodId
+    - storeId
+    - displayTaxField
+    - displayFOCField
+  properties:
+    rounding:
+      type: string
+      description: |
+        Free-form string (not a number). Likely a textual rounding
+        specifier (e.g. "0", "0.5", "1") — the application
+        interprets it downstream. **No validation of the value
+        at the router layer.**
+    expiredAlertDuration:
+      type: integer
+      minimum: 1
+      description: |
+        Days before stock expiry to raise an alert. `z.coerce.number()`
+        so the JSON value is coerced from whatever the client sent
+        (string, number). Min 1.
+    paymentMethodId:
+      type: string
+      format: uuid
+      description: FK to `PaymentMethod.id`. **Not validated by the router** — the Prisma FK will throw at insert time.
+    storeId:
+      type: string
+      format: uuid
+      description: |
+        FK to `Store.id`. **Not validated by the router** — the
+        Prisma FK will throw at insert time. Note that `storeId` is
+        `@unique` in the Prisma model, so the same `storeId` can
+        only appear in one `DefaultSetting` row.
+    displayTaxField:
+      type: boolean
+      default: true
+      description: |
+        Toggled UI flag. Stored inside the `settings` JSON blob
+        on the row, **not** as a top-level column.
+    displayFOCField:
+      type: boolean
+      default: false
+      description: |
+        Toggled UI flag ("Free of Charge" field). Stored inside
+        the `settings` JSON blob.
+
+UpdateDefaultSettingInput:
+  type: object
+  description: |
+    Input for `defaultSetting.updateDefaultSetting`. The schema is
+    `createDefaultSettingSchema.merge(z.object({ id: z.string() }))`
+    (default-setting-service.ts:4-8), so the input is the same
+    fields as create plus an `id`. `id` is **not** a UUID-validated
+    string — it's `z.string()`.
+  required:
+    - id
+    - rounding
+    - expiredAlertDuration
+    - paymentMethodId
+    - storeId
+    - displayTaxField
+    - displayFOCField
+  properties:
+    id:
+      type: string
+      description: DefaultSetting row id. No UUID validation at the router layer.
+    rounding:
+      type: string
+    expiredAlertDuration:
+      type: integer
+      minimum: 1
+    paymentMethodId:
+      type: string
+      format: uuid
+    storeId:
+      type: string
+      format: uuid
+      description: |
+        Updating `storeId` will fail if another `DefaultSetting` row
+        already references the new store (because `storeId` is
+        `@unique`). A unique-constraint violation is the only
+        application-level safeguard against multiple rows.
+    displayTaxField:
+      type: boolean
+    displayFOCField:
+      type: boolean
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+DefaultSettingFull:
+  type: object
+  description: |
+    The shape returned by `defaultSetting.getDefaultSetting` (the
+    only "full" read in this module). TS type `DefaultSetting` from
+    `src/app/(dashboard)/common/default-setting/features/type/index.ts:9-31`.
+
+    Includes `paymentMethod: { id; name }` and `store: { id; name }`
+    partial projections. The `settings` field is the **whole JSON
+    blob** — it currently has the shape
+    `{ displayTaxField: boolean; displayFOCField: boolean }` (TS
+    interface `Settings`, `type/index.ts:4-7`) but is typed as
+    `JsonValue | null` to allow future expansion.
+
+    `billType` is **not** in the response even though the Prisma
+    model has `billTypeId` and the relation — the `include` clause
+    in the repository only selects `paymentMethod` and `store`
+    (`billType` is commented out in
+    default-setting-repository.ts:26-31).
+  required:
+    - id
+    - rounding
+    - expiredAlertDuration
+    - paymentMethodId
+    - storeId
+    - paymentMethod
+    - store
+    - settings
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    rounding:
+      type: string
+    expiredAlertDuration:
+      type: integer
+      minimum: 1
+    paymentMethodId:
+      type: string
+      format: uuid
+    paymentMethod:
+      type: object
+      description: |
+        PaymentMethod projection. Repository's
+        `select: { id: true, name: true }` (default-setting-repository.ts:14-19).
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    storeId:
+      type: string
+      format: uuid
+    store:
+      type: object
+      description: |
+        Store projection. Repository's
+        `select: { id: true, name: true }` (default-setting-repository.ts:20-25).
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    settings:
+      type: object
+      nullable: true
+      description: |
+        JSON blob. The Prisma column is `Json` with `@@default("{}")`
+        (so practically never null in the DB), but the TS type
+        declares it `JsonValue | null` for forward compatibility.
+
+        Current shape (TS interface `Settings`,
+        `type/index.ts:4-7`):
+        ```
+        { displayTaxField: boolean; displayFOCField: boolean }
+        ```
+        Note that the `Settings` type comment explicitly says it
+        "can't be used directly in DefaultSetting, but for type
+        casting with returned data from api endpoint" — the actual
+        returned value is `JsonValue`, not `Settings`.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+
+DefaultSettingBare:
+  type: object
+  description: |
+    The shape returned by `defaultSetting.createDefaultSetting` and
+    `defaultSetting.updateDefaultSetting`. Differs from
+    `DefaultSettingFull` in that:
+      - `paymentMethod` and `store` are **not** populated (the
+        repository's `create` and `update` Prisma calls have no
+        `include` directive).
+      - `displayTaxField` / `displayFOCField` are stored **inside**
+        `settings` and are not top-level fields on the returned
+        row.
+
+    The input had `displayTaxField` and `displayFOCField` as
+    top-level fields, but the repository destructures them out
+    (default-setting-repository.ts:38, 51) and writes them inside
+    the `settings` JSON. This is a **TS type / runtime mismatch
+    on the wire** — the input shape ≠ the output shape.
+  required:
+    - id
+    - rounding
+    - expiredAlertDuration
+    - paymentMethodId
+    - storeId
+    - settings
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    rounding:
+      type: string
+    expiredAlertDuration:
+      type: integer
+      minimum: 1
+    paymentMethodId:
+      type: string
+      format: uuid
+    storeId:
+      type: string
+      format: uuid
+    settings:
+      type: object
+      nullable: true
+      description: |
+        JSON blob, shape `{ displayTaxField: boolean; displayFOCField: boolean }` on write.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+  x-runtime-populated-by: |
+    Returned by the write methods only (create / update). `paymentMethod`
+    and `store` are **not** populated. To get the joined view, the
+    client must call `getDefaultSetting` separately (or follow the FK
+    ids manually).

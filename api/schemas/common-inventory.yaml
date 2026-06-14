@@ -1,0 +1,281 @@
+# docs/schemas/common-inventory.yaml
+# Schemas for the common-inventory sub-area of
+# the `common` REST module. 13 endpoints —
+# mostly small projections of the stock
+# domain. See docs/paths/common-inventory.yaml
+# for the endpoint list and per-route details.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetAllStocksCountResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/all-stocks-count`. The
+    service's `getAllStocksCount` returns
+    `{ totalStockQty }` (or `null` if no
+    stock). The route wraps it in
+    `{ success: true, result, message: "", error: null }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - type: object
+          required: [totalStockQty]
+          properties:
+            totalStockQty:
+              type: number
+        - type: "null"
+
+GetBatchStockQtyResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/batch-stock-qty`. The
+    service's `getBatchStockQty` returns
+    whatever shape the repository's
+    `getBatchStockQty` produces. The route
+    wraps it in
+    `{ success: true, result, error: null, message: "" }`.
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetStockAdjustmentResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-adjustment`. The
+    service's `getStockAdjustments` returns
+    `{ adjustments, totalCount }` (or
+    similar — see
+    `stock-adjustment.service.ts`). The route
+    wraps it in
+    `{ success: true, result, error: "" }` — no
+    `message` field on success.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetStockHighestPurchasedPriceResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-highest-purchased-price`.
+    The service's `getHighestPurchasedPrice`
+    returns a `number` (the highest
+    `pricePerUnit`) or `null` if no stock.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      oneOf:
+        - type: number
+        - type: "null"
+
+GetStockInfoResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-info`. The
+    service's `getStockInfo` returns a
+    paginated list of stock info rows.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetStockMovementsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-movements`. The
+    service's `getStockMovement` returns
+    whatever shape
+    `stock-movement.service.ts` produces
+    (typically
+    `{ movements, totalCount }`). The route
+    wraps it in
+    `{ success: true, result }` — no
+    `message` / `error` fields on success.
+  required:
+    - success
+    - result
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetStockMovementsSummaryResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-movements/summary/[itemId]`.
+    The service's
+    `getSummarizedStockMovementByItemId`
+    returns a per-`StockMovementType`
+    aggregate (e.g.,
+    `{ SALE, PURCHASE, ADJUSTMENT, TRANSFER_IN,
+    TRANSFER_OUT, EXPIRED }` keys with
+    numeric values).
+  required:
+    - success
+    - result
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties:
+        type: number
+
+GetStockRequestsResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-requests`. The
+    service's `getStockRequests` returns a
+    paginated list of stock requests. The
+    route wraps it in
+    `{ success: true, result, message: "", error: "" }`.
+  required:
+    - success
+    - result
+    - message
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetTargetStoreStockResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stock-requests/target-store-stock`.
+    The service's `targetStockStore` returns
+    stock info for the target store and item.
+  required:
+    - success
+    - result
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetStocksResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/stocks` and
+    `GET /api/inventory/store-stocks`. The
+    service's `getStocks` /
+    `getStoreStocks` returns a paginated
+    list of stock rows.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetTotalStockQtyResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/total-stock-qty`. The
+    service's `getTotalStockQty` returns a
+    paginated list of total-stock-qty rows.
+  required:
+    - success
+    - result
+    - error
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      additionalProperties: true
+
+GetUniqueBatchesResponse:
+  type: object
+  description: |
+    Response shape of
+    `GET /api/inventory/unique-batches`. The
+    service's `getUniqueBatches` returns a
+    list of stock rows (with
+    `distinct: ['batchId']` or similar) for
+    the given `itemId`.
+  required:
+    - success
+    - result
+    - error
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: array
+      items:
+        type: object
+        additionalProperties: true
+    error:
+      type: "null"
+    message:
+      type: string
+      example: ""

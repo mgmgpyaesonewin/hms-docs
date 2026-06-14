@@ -1,0 +1,327 @@
+# docs/paths/trpc-users.yaml
+# tRPC router: users (src/lib/trpc/routers/users.ts)
+# CRUD over the `User` model. All six procedures require an authenticated
+# session; **none** use `authorizeProcedure`, so any logged-in user can
+# call them. See the security notes at the bottom.
+x-trpc-source: src/lib/trpc/routers/users.ts
+x-trpc-router: users
+
+/api/trpc/users.getUsers:
+  post:
+    summary: List users (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated, filtered list of users.
+      The input is `getUserSchema` (baseQuerySchema merged with
+      `role` / `department` / `status` filters, then transformed via
+      `transformPaginationSchema`).
+
+      Implementation includes a deliberate 50 ms delay
+      (`await new Promise(setTimeout, 50)`) — assumed to be UI debouncing.
+      Source: `src/lib/trpc/routers/users.ts:11-17`.
+
+      Filters:
+        - `search` — case-insensitive substring match against `username`,
+          `fullName`, `userId`, `phoneNo`, `email`.
+        - `start` / `end` — applied to `createdAt` (both required for the
+          range to take effect).
+        - `role` — exact match on `roleId`.
+        - `department` — exact match on `departmentId`.
+        - `status` — `ACTIVE` or `INACTIVE` (UserStatus enum).
+
+      Response: `{ data: User[], totalCount: number }`. Each user includes
+      `department`, `role` (+ `role.permissions`), and trimmed
+      `createdBy` / `updatedBy` projections.
+    tags:
+      - Users
+    operationId: trpc_users_getUsers
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-users.yaml#/GetUsersInput
+    responses:
+      "200":
+        description: Paginated list of users.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-users.yaml#/GetUsersResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/users.getTotalUsersCount:
+  post:
+    summary: Get total user count
+    description: |
+      Authenticated query. Returns the unpaginated total count of users
+      in the database (`prisma.user.count()`). Source:
+      `src/lib/trpc/routers/users.ts:18-23`.
+    tags:
+      - Users
+    operationId: trpc_users_getTotalUsersCount
+    security:
+      - SessionAuth: []
+    responses:
+      "200":
+        description: Total user count.
+        content:
+          application/json:
+            schema:
+              type: integer
+              minimum: 0
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/users.createUser:
+  post:
+    summary: Create a new user
+    description: |
+      Authenticated mutation. Creates a user with a generated
+      `userId` ("UID-0001", "UID-0002", ...) and a freshly Argon2-hashed
+      `password`.
+
+      Side effects:
+        - Hashes the password with Argon2 before persisting.
+        - Translates the `isActive` boolean to `status: "ACTIVE" | "INACTIVE"`.
+        - Records `createdById` and `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/user-management/users")` to invalidate
+          the Next.js cache for the users page.
+        - Logs the creation via `activityLogger` (description: "Created User",
+          action: "Create", entity: "User").
+
+      Validation failures (HTTP 400):
+        - Username, email, or employeeId already in use.
+        - Weak password (fails `strongPasswordRegex`).
+
+      Service: `UserService.createUser`. Source:
+      `src/lib/trpc/routers/users.ts:24-30`.
+    tags:
+      - Users
+    operationId: trpc_users_createUser
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-users.yaml#/CreateUserInput
+    responses:
+      "200":
+        description: User created. **Response omits `password`** (the repository applies `omit: { password: true }`).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-users.yaml#/User
+      "400":
+        description: Validation failure (duplicate username/email/employeeId, weak password, etc.).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/users.getUserById:
+  post:
+    summary: Get a user by id
+    description: |
+      Authenticated query. Returns the user with the given id (or `null`).
+      Input is a raw string with no UUID validation (`z.string()`).
+
+      Includes `department`, `role` (+ `role.permissions`), and
+      `createdBy` / `updatedBy` (with `password` omitted by the repository).
+      Source: `src/lib/trpc/routers/users.ts:31-36`.
+    tags:
+      - Users
+    operationId: trpc_users_getUserById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            description: User id. Schema is `z.string()` (no UUID refinement).
+    responses:
+      "200":
+        description: The user, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-users.yaml#/User
+                - type: "null"
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/users.editUser:
+  post:
+    summary: Edit a user
+    description: |
+      Authenticated mutation. Updates the user identified by `id` with the
+      provided fields. The schema (`editUserSchema`) extends
+      `createUserSchema` with `id` and **omits** `username` and `password`
+      — those fields cannot be changed via this endpoint.
+
+      Constraints:
+        - Cannot deactivate a superadmin
+          (`AppError("Superadmin cannot be inactive", 400)`).
+        - Email and employeeId must remain unique (validated against
+          other users).
+        - User must exist (`AppError("User not found", 404)`).
+
+      Side effects:
+        - Translates `isActive` to `status: "ACTIVE" | "INACTIVE"`.
+        - Records `updatedById` as `ctx.user.id`.
+        - Calls `revalidatePath("/user-management/users")`.
+        - Logs the update via `activityLogger`.
+
+      **SECURITY:** the response includes the Argon2 `password` hash
+      (the repository's `updateUser` does not `omit` it). The response
+      schema below reflects what the server actually returns. See
+      `x-security-notes` at the bottom.
+
+      Service: `UserService.editUser`. Source:
+      `src/lib/trpc/routers/users.ts:37-44`.
+    tags:
+      - Users
+    operationId: trpc_users_editUser
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-users.yaml#/EditUserInput
+    responses:
+      "200":
+        description: Updated user. **Response includes the Argon2 `password` hash** (see security note).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-users.yaml#/UserWithPassword
+      "400":
+        description: Cannot deactivate superadmin, or duplicate email/employeeId.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: User not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/users.deleteUser:
+  post:
+    summary: Delete a user by id
+  # See full description below
+  description: |
+    Authenticated mutation. Deletes the user whose id matches the input.
+    Input is a raw string with no UUID validation (`z.string()`).
+
+    Constraints:
+      - Cannot delete a superadmin
+        (`AppError("Superadmin cannot be deleted", 400)`).
+      - Foreign-key references block deletion with
+        `AppError("User is in use and cannot be deleted", 400)`.
+
+    Side effects:
+      - Calls `revalidatePath("/user-management/users")`.
+      - Logs the deletion via `activityLogger` (description: "Deleted User",
+        action: "Delete", entity: "User").
+
+    **SECURITY:** the response includes the Argon2 `password` hash
+    (the repository's `deleteUser` does not `omit` it; the default Prisma
+    `delete` returns all scalar fields). The response schema below
+    reflects what the server actually returns. See `x-security-notes`
+    at the bottom.
+
+    Service: `UserService.deleteUser`. Source:
+    `src/lib/trpc/routers/users.ts:45-52`.
+  tags:
+    - Users
+  operationId: trpc_users_deleteUser
+  security:
+    - SessionAuth: []
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: string
+          description: User id. Schema is `z.string()` (no UUID refinement).
+  responses:
+    "200":
+      description: Deleted user. **Response includes the Argon2 `password` hash** (see security note).
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-users.yaml#/UserWithPassword
+    "400":
+      description: Cannot delete a superadmin, or user is in use (FK constraint).
+      content:
+        application/json:
+          schema:
+          $ref: ../schemas/common.yaml#/ErrorEnvelope
+    "401":
+      description: No valid session.
+      content:
+        application/json:
+        schema:
+          $ref: ../schemas/common.yaml#/ErrorEnvelope
+    "404":
+      description: User not found.
+      content:
+        application/json:
+        schema:
+          $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all six procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - Every procedure in this router uses `authProcedure` (not
+    `authorizeProcedure`). Any authenticated user can create, edit, or
+    delete users and read the full user directory. This is almost
+    certainly intentional for an admin-only section, but it's worth
+    confirming that an additional `authorizeProcedure` is not required.
+  - **`editUser` and `deleteUser` responses leak the Argon2 password
+    hash.** The repository's `updateUser` and `deleteUser` methods
+    (`src/app/(dashboard)/common/user-management/users/features/users-repository.ts:209-232`)
+    do not pass `omit: { password: true }` to the Prisma call, so the
+    hashed `password` field is included in the response. The two
+    `UserWithPassword` operations (`editUser`, `deleteUser`) document
+    the actual server behaviour; the safer `User` shape (omitting
+    `password`) is what `createUser` and `getUserById` return.
+  - `getUserById` and `deleteUser` accept raw strings with no UUID
+    validation; malformed ids are passed through to the service.

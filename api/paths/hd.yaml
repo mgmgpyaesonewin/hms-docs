@@ -1,0 +1,730 @@
+# docs/paths/hd.yaml
+# REST endpoints: hd (Hemodialysis) module under
+# `src/app/api/(hd)/`. 13 read endpoints, no mutations
+# on the REST surface (write operations are server-action
+# only — not in scope here).
+#
+# Endpoints exposed:
+#   - GET /api/hd/list
+#   - GET /api/hd/{id}
+#   - GET /api/hd/{id}/activities
+#   - GET /api/hd-appointments
+#   - GET /api/hd-confirmed-patients
+#   - GET /api/hd-requests
+#   - GET /api/hd-requests/{id}
+#   - GET /api/hd-requests-for-proxy
+#   - GET /api/hd-infection-screening
+#   - GET /api/appointments-for-hd
+#   - GET /api/patients-for-hd
+#   - GET /api/services-for-hd
+#
+# All 13 routes use `enhancedApiHandler` with
+# `auth: { required: true }` and **no RBAC**. They all
+# return the standard
+# `{ success: true, result, message: "", error: null }`
+# envelope.
+#
+# The module is organised around a `HdContainerService`
+# (see `shared/hd/services/hd-container.service.ts`) that
+# wires together an 8-dep composition tree: `HdService` ←
+# `HdRepository` + `ProxyBillRepository` +
+# `ProxyBillStockService` + 3 phlebotomy services +
+# `HDRequestService`. The container also re-exports the
+# 3 HD-specific EMR service singletons
+# (`opdEmrService`, `edEmrService`, `ipdEmrService` —
+# aliases for the HD-OPD, HD-ED, HD-IPD instances), but
+# those are not consumed at the route layer.
+#
+# `HdService` extends `ProxyBillTemplateService` with
+# `department = DepartmentEnum.HD` and
+# `pharmacyBillInvoicePrefix = "HD"` — so IPD daily bills
+# generated from HD bills get the `HD/...` invoice prefix.
+
+# =============================================================================
+# HD proxy-bill list / detail / activity
+# =============================================================================
+
+/api/hd/list:
+  get:
+    operationId: getHdList
+    summary: HD proxy-bill list
+    description: |
+      Authenticated query. Returns a paginated list of
+      `ProxyBill` rows scoped to `departmentType: HD`.
+      Service: `HdService.getProxyBillList` →
+      `ProxyBillRepository.getProxyBillList`
+      (inherited from `ProxyBillTemplateService`).
+      Validation: `getProxyBillListSchema`
+      (`billTypeId`, `patientType`, `patientGroup`,
+      `storeId`, `paymentStatus`, `departmentType`,
+      plus standard pagination). The repository forces
+      `departmentType: DepartmentEnum.HD` server-side.
+
+      Response shape: `{ proxyBills: ProxyBill[]; count:
+      number }`.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      No RBAC permissions declared. PII-heavy: the
+      join includes the full `Patient` row. Worth
+      gating behind a `manage_proxy_bill` action
+      subject.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: billTypeId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientType
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientGroup
+        required: false
+        schema: { type: string }
+      - in: query
+        name: storeId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        required: false
+        schema: { type: string }
+      - in: query
+        name: departmentType
+        required: false
+        schema: { type: string }
+        description: |
+          Accepted but ignored — the repository
+          always filters by `DepartmentEnum.HD`.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd/{id}:
+  get:
+    operationId: getHdById
+    summary: HD proxy-bill detail
+    description: |
+      Returns a single HD `ProxyBill` row by id.
+      Service: `HdService.getProxyBillById` (inherited
+      from `ProxyBillTemplateService`). The detail
+      payload is the full `ProxyBill` (including
+      `serviceBill.serviceBillItems`,
+      `procedureBill.procedureBillItem`,
+      `pharmacySale.items`, `ipdDailyBill.admission`).
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ProxyBill id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd/{id}/activities:
+  get:
+    operationId: getHdActivities
+    summary: HD proxy-bill activity log
+    description: |
+      Returns the activity-log entries for a single HD
+      `ProxyBill`. Service:
+      `HdService.getProxyBillActivites` →
+      `ProxyBillRepository.getProxyBillActivities`
+      (inherited from the proxy-bill template). Items
+      are written via `activityLogger.log` from the
+      various proxy-bill write paths.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: ProxyBill id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdActivitiesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# HD appointment & confirmed-patient lists
+# =============================================================================
+
+/api/hd-appointments:
+  get:
+    operationId: getHdAppointments
+    summary: HD appointment list
+    description: |
+      Paginated list of `Appointment` rows whose
+      `appointmentType.modules` includes `HD`. Service:
+      `HdService.getHdAppointments` →
+      `HdRepository.getHdAppointments`.
+
+      Validation: `getHdAppointmentSchema` (alias of
+      `getDayCareAppointmentSchema` from the shared
+      `daycare.schema.ts`). Supports standard
+      `baseAppointmentsSchema` filters: `search`,
+      `doctorId`, `patientId`, `status`, `gender`,
+      `isUpcoming`, `date`, `start`/`end`,
+      `appointmentTypeId`, plus pagination.
+
+      Search performs case-insensitive substring
+      matches on `appointmentId`, `patient.name`,
+      `patient.phoneNo`, `patient.patientId`, and
+      `doctor.title` / `doctor.user.fullName`. Referral
+      matches are also incorporated via a separate
+      `referral.findMany` lookup.
+
+      Response shape: `{ appointments: (Appointment &
+      referral)[], totalCount }`.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: search
+        required: false
+        schema: { type: string }
+      - in: query
+        name: doctorId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: status
+        required: false
+        schema: { type: string }
+      - in: query
+        name: gender
+        required: false
+        schema: { type: string }
+      - in: query
+        name: isUpcoming
+        required: false
+        schema: { type: string }
+      - in: query
+        name: date
+        required: false
+        schema: { type: string, format: date }
+      - in: query
+        name: start
+        required: false
+        schema: { type: string, format: date-time }
+      - in: query
+        name: end
+        required: false
+        schema: { type: string, format: date-time }
+      - in: query
+        name: appointmentTypeId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdAppointmentsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd-confirmed-patients:
+  get:
+    operationId: getHdConfirmedPatients
+    summary: HD confirmed patients
+    description: |
+      Returns the paginated list of patients with a
+      `CONFIRMED` HD appointment and no `Bill`.
+      Service: `HdService.getHdConfirmedPatients` →
+      `HdRepository.getHdConfirmedPatients`. Filter:
+      `appointmentType.modules has HD`,
+      `status: CONFIRMED`, `Bill: none`. The
+      `includePatientId` query (when set without
+      `search`) narrows to a single patient by id.
+
+      Response shape: `{ patients, totalCount }`. The
+      `patients` field is an array of `Appointment`
+      rows (with `patient`, `ProxyBill`,
+      `appointmentType`) — keys are camelCased via
+      `transformKeysToCamel`.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdConfirmedPatientsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# HD requests — the "request" layer above the proxy bill
+# =============================================================================
+#
+# `HDRequest` captures session date/time, AVF/neck-line/
+# femoral sides, screening serology. Status state
+# machine: `REQUESTED → APPROVED → COMPLETED`, with
+# `CANCELLED` as a terminal side-branch. Source
+# department: `OPD | IPD | ED`.
+
+/api/hd-requests:
+  get:
+    operationId: getHdRequestList
+    summary: HD request list
+    description: |
+      Paginated list of `HDRequest` rows. Service:
+      `HDRequestService.getHDRequestList` →
+      `HDRequestRepository.findHDRequests`.
+
+      Validation: `getHDRequestsSchema` (baseQuerySchema
+      + `sourceDepartment: HDRequestSourceDepartment`
+      defaulting to `IPD`, `isFromOPD: boolean`,
+      `status: HDRequestStatus?`, `gender?`,
+      `admissionId?`, `patientId?`,
+      `urgency: Urgency?`, plus pagination).
+
+      The `isFromOPD` flag, when `true`, forces the
+      filter to `patient.patientType IN (OPD,
+      EMERGENCY)` regardless of `sourceDepartment`.
+      The `start`/`end` query range filters on
+      `hdDate`.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: sourceDepartment
+        required: false
+        schema:
+          type: string
+          enum: [OPD, IPD, ED]
+        description: |
+          `HDRequestSourceDepartment`. Defaults to
+          `IPD`. The `isFromOPD` flag, when `true`,
+          forces the filter to OPD/EMERGENCY patient
+          types.
+      - in: query
+        name: isFromOPD
+        required: false
+        schema: { type: string }
+        description: |
+          String `"true"` coerces to `true`. Overrides
+          the `sourceDepartment` filter.
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum: [REQUESTED, APPROVED, COMPLETED, CANCELLED]
+      - in: query
+        name: gender
+        required: false
+        schema: { type: string }
+      - in: query
+        name: admissionId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string }
+      - in: query
+        name: urgency
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdRequestListResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/hd-requests/{id}:
+  get:
+    operationId: getHdRequestById
+    summary: HD request detail
+    description: |
+      Returns a single `HDRequest` by id. Service:
+      `HDRequestService.getHDRequestById` →
+      `HDRequestRepository.findHDRequestById`. The
+      payload is the full request with patient,
+      admission, appointment, appointmentType,
+      referral doctor, and referral clinic.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: HDRequest id.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: |
+          HD request not found. (The service returns
+          `null` and the route returns it in the
+          envelope — no `AppError` thrown here.)
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# IPD HD requests for proxy
+# =============================================================================
+
+/api/hd-requests-for-proxy:
+  get:
+    operationId: getHdRequestsForProxy
+    summary: IPD HD requests eligible to bill
+    description: |
+      Returns a tiny label/value picker of IPD
+      `HDRequest` rows eligible to be billed as a
+      proxy bill for the given `patientId` +
+      `admissionId`. Service:
+      `HdService.getBillableIpdHDRequestsForProxy` →
+      `HDRequestRepository.findBillableIpdHDRequestsForProxy`.
+
+      Filters: `sourceDepartment: IPD`, `status:
+      APPROVED`, `hasServicesAdded: false`, no active
+      (`isDeleted: false`) `ProxyBillRequestLink`. The
+      response is a list of `{ id, label: requestId ??
+      "Unknown Request ID" }`.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: admissionId
+        required: true
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdRequestsForProxyResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# HD infection screening — derived from HDRequest serology
+# =============================================================================
+
+/api/hd-infection-screening:
+  get:
+    operationId: getHdInfectionScreening
+    summary: HD infection-screening display
+    description: |
+      Returns the infection-screening display label
+      derived from a single HD request's serology
+      fields (HB Ag, HCV, HIV, VDRL,
+      `otherScreening`). Service:
+      `HdService.getInfectionScreening` (or
+      `getInfectionScreeningForBillingPatient` when
+      `patientId` is passed) →
+      `HDRequestService.getInfectionScreening` →
+      `getInfectionScreeningDisplay` (in
+      `src/utils/infection-screening.ts`).
+
+      Validation: the query MUST provide `patientId` or
+      `hdRequestId` (refine: "Provide patientId or
+      hdRequestId"). If neither is set, validation
+      fails with 400.
+
+      Response shape: `{ hasApprovedRequest,
+      hdRequestId, displayLabel: "Positive" |
+      "Negative" | "Pending" | null, isPositiveAlert }`.
+      When the request id is not found, all four fields
+      are `false` / `null`.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: query
+        name: patientId
+        required: false
+        schema: { type: string, format: uuid }
+        description: |
+          Optional. When set, looks up the most-recent
+          `APPROVED` `HDRequest` for this patient and
+          derives the screening display from it. Use for
+          billing-time patient previews.
+      - in: query
+        name: hdRequestId
+        required: false
+        schema: { type: string, format: uuid }
+        description: |
+          Optional. When set, looks up the request
+          directly. Use for per-request previews.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetHdInfectionScreeningResponse
+      "400":
+        description: |
+          Both `patientId` and `hdRequestId` are
+          missing — fails the `refine` check.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Appointments / patients / services lookup
+# =============================================================================
+
+/api/appointments-for-hd:
+  get:
+    operationId: getAppointmentsForHd
+    summary: Appointments eligible for HD (per patient)
+    description: |
+      Returns the appointments for a given patient
+      that are eligible for HD billing. Service:
+      `HdService.getAppointmentForHd` →
+      `HdRepository.getAppointmentForHd`.
+
+      Validation: `getAppointmentForProxySchema`
+      (`patientId` required). If `includeAppointmentId`
+      is provided, returns that single appointment;
+      otherwise returns all `CONFIRMED` appointments
+      for the patient with no `OPDEMR` and either an
+      `APPROVED` HD request with no active
+      `ProxyBillRequestLink` OR no HD request at all.
+
+      Note: the `appointmentType.modules has HD` filter
+      is currently commented out (TODO: confirm with
+      product team) — see
+      `hd.repository.ts:467-471`. So the result may
+      include non-HD appointment types.
+
+      Response is a list of `Appointment & { ProxyBill,
+      appointmentType }` (no `totalCount`); keys are
+      camelCased.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `appointmentType.modules has HD` filter is
+      commented out — see TODO in
+      `hd.repository.ts`. Today the result can include
+      any `CONFIRMED` appointment for the patient.
+    parameters:
+      - in: query
+        name: patientId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: includeAppointmentId
+        required: false
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetAppointmentsForHdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/patients-for-hd:
+  get:
+    operationId: getPatientsForHd
+    summary: Patients eligible for HD
+    description: |
+      Returns the paginated list of patients
+      eligible for HD. Service:
+      `HdService.getPatientForHd` →
+      `HdRepository.getPatientForHd`.
+
+      Validation: `getPatientsSchema` (the shared
+      patients schema). `includePatientId` (when set)
+      short-circuits to that single patient.
+
+      Filter is `OR`:
+        - `hdRequests` with `status: APPROVED`,
+          `hasServicesAdded: false`, no
+          `IPDEmrRequestLink` (for patients without
+          an IPD EMR), OR
+        - `appointments` that are `CONFIRMED`, no
+          `OPDEMR`, `appointmentType.modules has HD`.
+
+      Result includes each patient's `appointments`
+      filtered to `CONFIRMED` + HD-type + no
+      `ProxyBill`, with `appointmentType` and
+      `ProxyBill` included.
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      No RBAC. PII-heavy: name, phone, patientId, etc.
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetPatientsForHdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/services-for-hd:
+  get:
+    operationId: getServicesForHd
+    summary: Services for HD
+    description: |
+      Returns the paginated list of `Service` rows
+      whose `category.ServiceCategoryModuleMapping`
+      includes `HD` and `status: ACTIVE`. Service:
+      `HdService.getServicesForHd` →
+      `HdRepository.getServicesForHd`.
+
+      Validation: `getServicesSchema` (the shared
+      `opd/services` schema, with `search` +
+      pagination).
+
+      Response shape: `{ services, totalCount }`.
+      Includes the full `Service` row (with
+      `doctorServiceMappings`, `price`, etc., per
+      `serviceValidator`).
+    tags: [HD]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQuery
+      - in: query
+        name: search
+        required: false
+        schema: { type: string }
+        description: |
+          Case-insensitive substring match on
+          `serviceId` or `name`.
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "", error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/hd.yaml#/GetServicesForHdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

@@ -1,0 +1,456 @@
+# docs/paths/common-doctors.yaml
+# REST endpoints:
+#   GET /api/doctors
+#   GET /api/doctors/schedules
+#   GET /api/doctors/[id]
+# Source: src/app/api/(common)/doctors/route.ts
+# Source: src/app/api/(common)/doctors/schedules/route.ts
+# Source: src/app/api/(common)/doctors/[id]/route.ts
+#
+# This REST sub-area is read-only. The write
+# operations (create / update / delete) are reached
+# via server actions (doctors.actions.ts) — they
+# are NOT exposed as REST routes here.
+
+/api/doctors:
+  get:
+    summary: List doctors (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      doctors with the total row count.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            doctors: Doctor[],
+            totalCount: number,
+          },
+          message: "",
+          error: null
+        }
+        ```
+
+      Filters (from `getDoctorsSchema`, interpreted
+      by `findDoctorsAndCount`):
+        - `search` — split by whitespace; each term
+          must match (`AND` over `OR`-per-term)
+          against `doctorId`, `title`, joined
+          `user.fullName`, or joined
+          `specialization.name`.
+        - `includeDoctorId` — `where.id =
+          query.includeDoctorId`, but **only
+          applied when `search` is empty**.
+        - `specializationId` —
+          `where.specializationId`.
+        - `departmentId` —
+          `where.user = { departmentId }`.
+        - `doctorType` — exact match.
+        - `status` — applied via
+          `where.user = { ..., status }` —
+          **overwrites** the `departmentId`
+          branch's `where.user` rather than
+          merging. If both are set, `departmentId`
+          is silently dropped (see security
+          notes).
+        - `withNoSchedules` — doctors with no
+          schedules AND no appointments.
+        - `withNoMappedServices` — doctors with no
+          `DoctorService` rows.
+        - `isConsultDoctor` — doctors mapped to at
+          least one consultation service.
+        - `start` / `end` — `createdAt` range,
+          with the end bound being `lt`
+          (exclusive) rather than `lte`
+          (inclusive).
+
+      Repository ordering: `createdAt: desc`.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` (no
+      `permissions`).
+
+      Source:
+      `src/app/api/(common)/doctors/route.ts:6-17`.
+    tags:
+      - Common / Doctors
+    operationId: rest_common_doctors_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: includeDoctorId
+        schema:
+          type: string
+        description: |
+          When `search` is empty, pins the result
+          to a single doctor by id. Ignored when
+          `search` is set.
+      - in: query
+        name: specializationId
+        schema:
+          type: string
+      - in: query
+        name: departmentId
+        schema:
+          type: string
+      - in: query
+        name: doctorType
+        schema:
+          type: string
+          enum: [IN_SERVICE, OUT_SERVICE]
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+      - in: query
+        name: withNoSchedules
+        schema:
+          type: boolean
+      - in: query
+        name: withNoMappedServices
+        schema:
+          type: boolean
+      - in: query
+        name: isConsultDoctor
+        schema:
+          type: boolean
+    responses:
+      "200":
+        description: Paginated list of doctors.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-doctors.yaml#/GetDoctorsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/doctors/schedules:
+  get:
+    summary: List doctors with their schedules (paginated, filterable)
+    description: |
+      Authenticated query. Returns a paginated list
+      of **active** doctors that have at least one
+      schedule, with the schedule rows inlined.
+      Designed for the appointment-booking flow.
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: {
+            doctorsWithSchedules: DoctorWithSchedules[],
+            totalCount: number,
+          },
+          message: ""
+        }
+        ```
+
+      Filters (from
+      `getDoctorsWithSchedulesSchema`,
+      interpreted by
+      `findDoctorsWithSchedules`):
+        - `search` — multi-term `AND` over
+          `title`, `user.fullName`,
+          `specialization.name`, `doctorId`.
+        - `dayOfWeek` — narrows the
+          `where.schedules.some.dayOfWeek`
+          clause.
+        - `isConsultDoctor` — doctors with at least
+          one consultation service.
+        - `withAvailableTimeslots` —
+          `timeslotWhere.appointments = { every: {
+          status: CANCELLED } }` — a timeslot
+          counts as "available" iff all of its
+          appointments are cancelled (or it has
+          none).
+        - `status` — accepted but **always
+          overridden** by the hard-coded
+          `where.user.status = ACTIVE` filter. A
+          non-`ACTIVE` value matches no rows.
+
+      **Implicit filters** (always applied):
+        - `where.schedules = { some: {} }`
+        - `where.user.status = ACTIVE`
+
+      Repository ordering: **not specified**
+      (`findMany` does not set `orderBy`); Prisma
+      applies its default order.
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` (no
+      `permissions`).
+
+      Source:
+      `src/app/api/(common)/doctors/schedules/route.ts:6-19`.
+    tags:
+      - Common / Doctors
+    operationId: rest_common_doctors_with_schedules_list
+    security:
+      - SessionAuth: []
+    parameters:
+      - $ref: ../schemas/common.yaml#/PaginationQueryParams
+      - in: query
+        name: dayOfWeek
+        schema:
+          type: string
+          enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
+      - in: query
+        name: isConsultDoctor
+        schema:
+          type: boolean
+      - in: query
+        name: withAvailableTimeslots
+        schema:
+          type: boolean
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        description: |
+          Accepted but **overridden** by the
+          hard-coded `where.user.status = ACTIVE`
+          filter.
+    responses:
+      "200":
+        description: |
+          Paginated list of doctors with their
+          schedules.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-doctors.yaml#/GetDoctorsWithSchedulesResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/doctors/{id}:
+  get:
+    summary: Get a doctor by id
+    description: |
+      Authenticated query. Returns a single doctor by
+      its primary key (UUID), or `null` if not
+      found.
+
+      Path parameters:
+        - `id` — the doctor's primary key (UUID
+          string).
+
+      Response shape:
+        ```
+        {
+          success: true,
+          result: Doctor | null,
+          error: "",
+          message: ""
+        }
+        ```
+
+      The route uses `enhancedApiHandler` with
+      `auth: { required: true }` (no
+      `permissions`). The handler signature
+      `(req, _, { params }: { params: Promise<{
+      id: string }> })` is **legitimate** (the
+      route has a `[id]` segment).
+
+      Source:
+      `src/app/api/(common)/doctors/[id]/route.ts:5-21`.
+    tags:
+      - Common / Doctors
+    operationId: rest_common_doctors_get_by_id
+    security:
+      - SessionAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: The doctor's primary key (UUID).
+    responses:
+      "200":
+        description: The doctor, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-doctors.yaml#/GetDoctorByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **No RBAC permissions declared** — all three
+    routes declare only `auth: { required: true }`,
+    no `permissions` array. Any authenticated user
+    can read the full doctor list, the
+    doctors-with-schedules list, and any doctor's
+    detail.
+  - **The list endpoint leaks substantial PII and
+    capability info** — the `doctorValidator`
+    includes the joined `user.role` with
+    `permissions: true`. So every list response
+    item carries the doctor's role name, the
+    full `Permission[]` for that role, the
+    doctor's email, phone, employeeId, etc. The
+    `createdBy` / `updatedBy` projection is the
+    2-field `{ fullName, username }` (no `id`)
+    — narrower than the canonical 3-field
+    `Publisher`. See
+    [[common-suppliers]] for the same 2-field
+    pattern.
+  - **`includeDoctorId` is silently ignored when
+    `search` is set** — the repository's
+    `if (query.includeDoctorId && !query.search)`
+    guard means the intended "include this
+    specific doctor alongside the search results"
+    UX only works when `search` is empty
+    (doctors.repository.ts:218-220). When
+    `search` is non-empty, the filter is dropped.
+    This is a subtle UX bug — the front-end
+    likely intends to combine the two.
+  - **`departmentId` and `status` are mutually
+    exclusive** — both are applied via
+    `where.user = { ... }`, but the `status`
+    branch does `(where.user && {})` then
+    re-assigns `where.user = { ...status }`,
+    overwriting the `departmentId` assignment
+    (doctors.repository.ts:233-248). If both are
+    set, only `status` is applied.
+  - **`withAvailableTimeslots` uses
+    `appointments: { every: { status: CANCELLED }}`**
+    — the `every` predicate means a timeslot
+    counts as "available" iff **all** of its
+    appointments are cancelled, OR it has zero
+    appointments. This is a subtle Prisma
+    semantic. A timeslot with 1 cancelled + 1
+    active appointment is NOT considered
+    available; a timeslot with 0 appointments
+    IS available. Likely intended: "no
+    non-cancelled appointments", which would
+    be `appointments: { none: { status: {
+    not: CANCELLED } } }` (or similar). Worth
+    confirming.
+  - **`status` filter is overridden in
+    `/api/doctors/schedules`** — the repository
+    hard-codes `where.user.status = ACTIVE`
+    (doctors.repository.ts:329-332), so any
+    `status` query param is silently ignored.
+    The endpoint effectively has no `status`
+    filter. The front-end may not realize this.
+  - **No `orderBy` on the schedules endpoint** —
+    `findDoctorsWithSchedules` does not set
+    `orderBy`, so Prisma's default order applies.
+    Unusual among the `common-*` sub-areas,
+    which all explicitly order by `createdAt:
+    desc` (or `updatedAt: desc`).
+  - **End bound is `lt`, not `lte`** — same
+    subtle inconsistency as
+    [[common-suppliers]]: a doctor created at
+    exactly `end` is excluded from the filtered
+    count.
+  - **Inconsistent response envelopes** — the
+    three endpoints emit three different success
+    shapes:
+      - `GET /api/doctors` →
+        `{ success: true, result, message: "",
+        error: null }`.
+      - `GET /api/doctors/[id]` →
+        `{ success: true, result, error: "",
+        message: "" }` (note: `error` before
+        `message`).
+      - `GET /api/doctors/schedules` →
+        `{ success: true, result, message: "" }`
+        (no `error` field).
+    Three endpoints under the same sub-area
+    emit three different shapes.
+  - **Write path uses server actions, not REST** —
+    `createDoctor` / `editDoctor` /
+    `deleteDoctor` are reached via
+    `doctors.actions.ts` server actions. Notable
+    details:
+      - `createDoctor` always creates a
+        **paired `User` row** (the doctor and
+        user are 1:1). It auto-generates a
+        random `username` and a random
+        `password` if the request omits them
+        (doctors.service.ts:22-28, 35-36). The
+        default `isActive` is `true`. The default
+        role is the alphabetically-first
+        non-superadmin role
+        (`findDefaultRole`).
+      - `createDoctor` uses `argon2.hash`
+        (doctors.service.ts:50) to hash the
+        password before insert.
+      - `editDoctor` only updates the
+        `Doctor` row + the joined `User` row's
+        `email`, `phoneNo`, `fullName`,
+        `departmentId`, `roleId`, `status`,
+        `joiningDate`. The username is not
+        updatable.
+      - `deleteDoctor` deletes the paired
+        `User` row (doctors.repository.ts:439-462).
+        The `Doctor` row is FK-Cascade-deleted
+        via `onDelete: Cascade` on the
+        `Doctor.user User @relation` line. FK
+        violations surface as 400
+        (`AppError("Doctor is in use and cannot
+        be deleted", 400)`).
+  - **`doctorId` is sequential and guessable** —
+    the `DRID-NNN` pattern. Same probe-by-duplicate
+    pattern as
+    [[common-departments]],
+    [[common-roles]],
+    [[common-selling-price-groups]],
+    [[common-clinic]].
+  - **Service uses 400 for "username/email
+    already exists"** — `checkDoctorValidation`
+    throws `AppError(\`${key} already exists\`,
+    400)` (doctors.service.ts:202) — inconsistent
+    with the 409 standard.
+  - **Update uses 404 for "Doctor not found"** —
+    `deleteById` does
+    `prisma.doctor.findUnique` first and throws
+    `AppError("Doctor not found", 404)` if not
+    found (doctors.repository.ts:447). Inconsistent
+    with the 400 used by
+    `updateClinic` /
+    `updatePaymentMethod` / etc.
+  - **Repository uses `prisma.doctor.delete({...
+    cascade...})` indirectly** — the
+    `Doctor.user @relation(... onDelete:
+    Cascade)` ensures the `Doctor` row is removed
+    when the paired `User` is deleted. So the
+    `User` row is the parent; deleting the user
+    cascades to delete the doctor.
+  - **`specialization` field has dual
+    representation** — the Prisma `Doctor` model
+    declares both `specializationId String?` (FK
+    to `Specialization`) and
+    `specializationName String @default("")` (a
+    denormalized string column). The list
+    endpoint's response uses the joined
+    `Specialization.name` (via
+    `specialization: { select: { name: true } }`
+    in the schedules endpoint, or
+    `specialization: true` in the list). The
+    `specializationName` column is set by
+    triggers or external code; the response does
+    not expose it.

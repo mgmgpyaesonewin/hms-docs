@@ -1,0 +1,907 @@
+# docs/paths/common-reports-financial.yaml
+# Financial & sales-side report endpoints of the
+# `common` REST module. 15 endpoints covering
+# sales, payment method, daily profit,
+# purchasing, GRN, top products, supplier
+# payment, batch item, payment method detail.
+# All are GET-only, all require an authenticated
+# session, none declare explicit RBAC permissions.
+# Source files under src/app/api/(common)/reports/
+# {sale-reports, payment-method-report, daily-profit-reports,
+# purchasing-items, grn-*, top-products, supplier-payment,
+# batch-item-reports, pharmacy-sale-reports,
+# pharmacy-sale-return-items, used-items-report,
+# stock-damage-item, stock-request-item, stock-transfer-report,
+# stock-summary/export, expiry-update-activity-logs,
+# foc-items-activity-logs, item-summary, supplier-items}.
+
+# =============================================================================
+# Sale reports
+# =============================================================================
+
+/api/reports/sale-reports:
+  get:
+    operationId: getSalesReport
+    summary: Per-item sales rows
+    description: |
+      Returns one row per sold item with
+      `date`, `itemId`, `itemName`, `invoiceNo`,
+      `patientName`, `patientId`, `doctorName`,
+      `doctorTitle`, `doctorId`, `billType`,
+      `billTypeId`, `qty`, `unit`, `focQty`,
+      `taxAmount`, `taxPercentage`,
+      `discountAmount`, `discountPercentage`,
+      `paymentStatus`, `maximumRetailPrice`. Row
+      shape per `salesReportSchema`. Filters by
+      `storeId`, `doctorId`, `billTypeId`,
+      `paymentStatus` (`PENDING` / `PAID`).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      **No `permissions` declared**. `storeId`
+      filter is `.nullable().optional()` — clients
+      can omit it to see all stores. Worth
+      confirming with the team that the route
+      enforces store scoping server-side.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: storeId
+        schema: { type: string, nullable: true }
+      - in: query
+        name: doctorId
+        schema: { type: string }
+      - in: query
+        name: billTypeId
+        schema: { type: string }
+      - in: query
+        name: paymentStatus
+        schema:
+          type: string
+          enum: [PENDING, PAID]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`. **PII exposure**: patient
+          name + id per row.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetSalesReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Payment method report
+# =============================================================================
+
+/api/reports/payment-method-report:
+  get:
+    operationId: getPaymentMethodReport
+    summary: Payment-method aggregation
+    description: |
+      Returns aggregated payment-method totals
+      for the given `modules` (`["OPD", "IPD"]`
+      by default).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: modules
+        description: |
+          Repeated query string. Defaults to
+          `["OPD", "IPD"]`. The route treats
+          this as a Zod array of enum values.
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+            enum: [OPD, IPD]
+        style: form
+        explode: true
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/payment-method-report/{id}:
+  get:
+    operationId: getPaymentMethodReportDetail
+    summary: Payment-method detail rows
+    description: |
+      Per-payment-method detail rows. Wraps
+      `paymentMethodReportService.getPaymentMethodReportDetail(id, query)`.
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: modules
+        schema:
+          type: array
+          items:
+            type: string
+            enum: [OPD, IPD]
+        style: form
+        explode: true
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: null }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Daily profit reports
+# =============================================================================
+
+/api/reports/daily-profit-reports:
+  get:
+    operationId: getDailyProfitReport
+    summary: Daily profit summary
+    description: |
+      Returns aggregated daily profit
+      (revenue, cost, profit) for the requested
+      date range. Schema is
+      `getDailyProfitReportsSchema` (just the
+      baseQuerySchema). Service:
+      `dailyProfitReportsService.getDailyProfitReport(query)`.
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/daily-profit-reports/{date}:
+  get:
+    operationId: getDailyProfitReportByDate
+    summary: Daily profit snapshot for a date
+    description: |
+      Returns the daily profit snapshot for the
+      supplied `date` path parameter. The handler
+      applies **timezone conversion** with
+      `dayjs.utc(date).tz(timezone).toDate()`
+      using the `X-Timezone` request header
+      (defaults to `"Asia/Rangoon"`). Note the
+      `process.env.TZ = "America/New_York"`
+      side-effect at the top of the handler —
+      this mutates the Node.js process TZ for
+      the rest of the request and is not
+      restored. Request-thread side-effect —
+      concurrent requests under the same Node
+      worker will see this flip.
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      `process.env.TZ = "America/New_York"` is
+      executed on every request. The header-based
+      timezone is then layered on top. The
+      effective timezone for downstream date
+      math depends on which line runs first in
+      the JS event loop — concurrent requests
+      under the same Node worker will see the
+      process env flipped while a sibling request
+      is still in flight. Worth refactoring to
+      not mutate the process env at all.
+    parameters:
+      - in: path
+        name: date
+        required: true
+        schema: { type: string, description: "ISO date or YYYY-MM-DD" }
+      - in: header
+        name: X-Timezone
+        required: false
+        schema:
+          type: string
+          default: Asia/Rangoon
+    responses:
+      "200":
+        description: |
+          `{ success: true, error: null, message:
+          "", result }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Purchasing / GRN / supplier
+# =============================================================================
+
+/api/reports/purchasing-items:
+  get:
+    operationId: getPurchasingItemsReport
+    summary: Purchasing items by PO
+    description: |
+      Returns purchasing-order line items with
+      `status` (`purchaseOrderStatus`),
+      `paymentTerm` (`purchaseOrderPaymentTerm`),
+      `supplier` filters.
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, RECEIVED, CANCELLED]
+      - in: query
+        name: paymentTerm
+        schema: { type: string }
+      - in: query
+        name: supplier
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/grn-item-reports:
+  get:
+    operationId: getGRNItemReport
+    summary: GRN item rows
+    description: |
+      Returns GRN item rows with the joined
+      `grn`, `item`, `purchaseOrder`, `store`,
+      `supplier` projections. Row shape per
+      `grnItemReportSchema` (grnId, grn: { id,
+      grnId, date, status, purchaseOrder, store,
+      supplier }, purchasingId, itemId, item: {
+      id, itemId, name, supplier, unit }, unit,
+      purchasedPricePerUnit, qty, amount,
+      status). Filters: `storeId` (.nullable),
+      `supplierId`, `status` (`PENDING` /
+      `APPROVED` / `REJECTED`).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      The repository's
+      `getGRNItemReport` does not appear to
+      enforce a `storeId` filter at the SQL
+      level when `storeId` is `null` — clients
+      who omit it will see all stores' GRN
+      items. Multi-tenant hazard.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: storeId
+        schema: { type: string, nullable: true }
+      - in: query
+        name: supplierId
+        schema: { type: string }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`. Supplier-side business
+          data: purchase prices, qty, amounts.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGRNItemReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/grn-return-item-reports:
+  get:
+    operationId: getGRNReturnItemReport
+    summary: GRN return item rows
+    description: |
+      Returns the rows of a returned GRN
+      (returned_qty, grnReturn, grnItem.item).
+      Row shape per `grnReturnItemReportSchema`.
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: storeId
+        schema: { type: string, nullable: true }
+      - in: query
+        name: itemId
+        schema: { type: string }
+      - in: query
+        name: supplierId
+        schema: { type: string }
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGRNReturnItemReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/purchase-request-items:
+  get:
+    operationId: getPurchaseRequestItemsReport
+    summary: Purchase-request item rows
+    description: |
+      Returns purchase-request line items
+      filtered by `status` (`Status` enum from
+      purchase-request.types) and `priorityStatus`
+      (`PriorityStatus` enum).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: status
+        schema: { type: string }
+      - in: query
+        name: priorityStatus
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/supplier-payment:
+  get:
+    operationId: getSupplierPaymentReport
+    summary: Supplier payment rows
+    description: |
+      Returns supplier payment rows filtered by
+      `paymentTerm` (`purchaseOrderPaymentTerm`
+      enum). Schema: `getSupplierPaymentSchema`.
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: paymentTerm
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Top products
+# =============================================================================
+
+/api/reports/top-products:
+  get:
+    operationId: getTopProductsReport
+    summary: Top-selling products
+    description: |
+      Returns the top N products by some
+      aggregate (the service chooses). Schema is
+      `getTopProductsReportSchema` (just
+      baseQuerySchema).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+      No storeId scoping in the schema.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, message: "", result }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Pharmacy
+# =============================================================================
+
+/api/reports/pharmacy-sale-reports:
+  get:
+    operationId: getPharmacySaleReport
+    summary: Pharmacy sale invoices with profit
+    description: |
+      Returns pharmacy sale invoices enriched
+      with profit data. Service:
+      `dailyProfitReportsService.getInvoicesWithProfit(query)`
+      — i.e., the **same** service object as
+      `daily-profit-reports` (the variable name
+      is a leftover).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, error: null, message:
+          "", result }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/pharmacy-sale-return-items:
+  get:
+    operationId: getPharmacySaleReturnItemsReport
+    summary: Pharmacy sale-return item rows
+    description: |
+      Returns sale-return item rows filtered by
+      `batchNo`, `billType`, `status`
+      (`saleReturnStatus` enum).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: batchNo
+        schema: { type: string }
+      - in: query
+        name: billType
+        schema: { type: string }
+      - in: query
+        name: status
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Batch items
+# =============================================================================
+
+/api/reports/batch-item-reports:
+  get:
+    operationId: getBatchItemReport
+    summary: Batch-item report
+    description: |
+      Returns batch-item aggregate rows filtered
+      by `categoryId`. Service:
+      `BatchItemReportService(prisma).getBatchItemReports(query)`
+      — instantiates the service with a
+      constructor injection of `prisma` (the
+      only route in this module to do so; the
+      rest use a module-scope singleton).
+    tags: [Reports - Financial]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: categoryId
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Expiry / FOC activity logs
+# =============================================================================
+
+/api/reports/expiry-update-activity-logs:
+  get:
+    operationId: getExpiryUpdateActivityLogs
+    summary: Expiry-update activity log rows
+    description: |
+      Returns the per-row activity log for
+      `ExpiryUpdateStock` (the records that
+      update a stock row's expiry). Schema is
+      `defaultQuerySchema` (just pagination +
+      search + date range).
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: null,
+          message: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/foc-items-activity-logs:
+  get:
+    operationId: getFOCItemsActivityLogs
+    summary: FOC-item activity log rows
+    description: |
+      Returns the per-row activity log for FOC
+      (free-of-charge) items. Schema is
+      `defaultQuerySchema`.
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Stock damage / request / transfer
+# =============================================================================
+
+/api/reports/stock-damage-item:
+  get:
+    operationId: getStockDamageItemReport
+    summary: Stock-damage item rows
+    description: |
+      Returns stock-damage rows with
+      `damagedDate`, `itemId`, `itemName`,
+      `unit`, `pricePerUnit`, `damagedQuantity`,
+      `totalCost`, `status`, `storeName`,
+      `storeId`. Row shape per
+      `stockDamageItemReportSchema`.
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      Bare `apiHandler` + manual `verifyApiAuth()`.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+      - in: query
+        name: storeId
+        schema: { type: string, nullable: true }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetStockDamageItemReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/stock-request-item:
+  get:
+    operationId: getStockRequestItemReport
+    summary: Stock-request item rows
+    description: |
+      Returns stock-request line items with
+      `stockRequestId`, `itemId`, `itemName`,
+      `unit`, `requestedDate`, `requestedFromStore`,
+      `requestedToStore`, `approvalStatus`,
+      `requestedQty`. Row shape per
+      `stockRequestItemReportSchema`.
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+      - in: query
+        name: requestedFromStoreId
+        schema: { type: string, format: uuid }
+      - in: query
+        name: requestedToStoreId
+        schema: { type: string, format: uuid }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetStockRequestItemReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/stock-transfer-report:
+  get:
+    operationId: getStockTransferReport
+    summary: Stock-transfer rows
+    description: |
+      Returns stock-transfer rows with
+      `transferredDate`, `requestedDate`,
+      `stockRequestId`, `batchNo`, `batchId`,
+      `itemId`, `itemName`, `unit`,
+      `requestedFrom`, `requestedTo`,
+      `fromStoreId`, `toStoreId`, `requestedQty`,
+      `transferredQty`, `itemBatchNo`. Row shape
+      per `stockTransferReportSchema`.
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: batchId
+        schema: { type: string }
+      - in: query
+        name: requestedFromId
+        schema: { type: string }
+      - in: query
+        name: requestedToId
+        schema: { type: string }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetStockTransferReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/reports/stock-summary/export:
+  get:
+    operationId: exportStockSummary
+    summary: Stock summary export (with auth-store scoping)
+    description: |
+      Returns the stock-item-summary export.
+      Unlike the rest of the reports tree, this
+      route explicitly resolves the current
+      user's session via `AuthService` and
+      forwards `session.storeId` to the service
+      call (`stockSummaryService.stockItemSummaryExport(storeId, query)`).
+      If the user has no `storeId` on their
+      session, the call proceeds with `null` —
+      the service is responsible for the
+      fallback semantics.
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    x-security-note: |
+      One of the few reports routes that pulls
+      the session at all — most just call
+      `verifyApiAuth()` and pass the query
+      straight through. This is **correct** and
+      shows the right pattern; the rest of the
+      module is the outlier.
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetGenericObjectResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# =============================================================================
+# Used items report
+# =============================================================================
+
+/api/reports/used-items-report:
+  get:
+    operationId: getUsedItemsReport
+    summary: Used-items rows (consumption)
+    description: |
+      Returns rows for items consumed (used)
+      internally, with `usedItemDate`,
+      `itemId`, `itemName`, `purchasedPricePerUnit`,
+      `unit`, `usedItemQty`, `username`,
+      `userId`, `status`, `storeName`, `storeId`.
+      Row shape per `usedItemReportSchema`.
+      **PII**: `username` + `userId` per row.
+    tags: [Reports - Operational]
+    security:
+      - cookieAuth: []
+    parameters:
+      - $ref: ./common.yaml#/PaginationQuery
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+      - in: query
+        name: storeId
+        schema: { type: string, nullable: true }
+    responses:
+      "200":
+        description: |
+          `{ success: true, result, message: "",
+          error: "" }`.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common-reports.yaml#/GetUsedItemsReportResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope

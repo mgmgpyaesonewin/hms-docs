@@ -1,0 +1,278 @@
+# docs/paths/trpc-auth.yaml
+# tRPC router: auth (src/lib/trpc/routers/auth.ts)
+# All procedures are mounted under /api/trpc/<router>.<procedure> per the
+# tRPC fetch adapter at src/app/api/trpc/[trpc]/route.ts. Mutations are POST,
+# queries are GET.
+x-trpc-source: src/lib/trpc/routers/auth.ts
+x-trpc-router: auth
+
+/api/trpc/auth.login:
+  post:
+    summary: Log in
+    description: |
+      Public mutation. Verifies `username` / `password` against the
+      Prisma `User` (Argon2 hash), creates a new `Session` row, and sets
+      the `sid` httpOnly cookie.
+
+      Validation:
+        - `username` and `password` are non-empty (loginSchema).
+        - User must exist and have `status = "ACTIVE"`.
+        - Password must verify against the stored Argon2 hash.
+
+      Side effects:
+        - **Deletes all other sessions for the same user** — only one
+          concurrent session per user is allowed. If an active session
+          already exists, the call fails with HTTP 403.
+        - Cleans up inactive/expired sessions for the user
+          (see `AuthService.cleanupInactiveSessions`).
+        - Logs the login event via `activityLogger` (description: "Logged In").
+
+      Cookie attributes set on `sid`:
+        - `httpOnly`, `path=/`, `sameSite=Lax`, `secure` (only when request is HTTPS, detected via `x-forwarded-proto`).
+
+      Source: `src/lib/trpc/routers/auth.ts:16-18` → `AuthService.login`.
+    tags:
+      - Auth
+    operationId: trpc_auth_login
+    security: []     # public — no SessionAuth required
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-auth.yaml#/LoginInput
+    responses:
+      "200":
+        description: Login succeeded. Sets the `sid` cookie.
+        headers:
+          Set-Cookie:
+            description: '`sid=<hex>; Path=/; HttpOnly; SameSite=Lax; Secure` (when HTTPS).'
+            schema:
+              type: string
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-auth.yaml#/Session
+      "400":
+        description: Invalid credentials (user not found or password mismatch).
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "403":
+        description: |
+          - User is not active.
+          - Another active session exists for this user on a different device.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/auth.getSession:
+  get:
+    summary: Get the current session (with user tree)
+    description: |
+      Public query. Returns the active session **including the `user`
+      relationship** (role + permissions, department, createdBy, updatedBy)
+      when the `sid` cookie is valid. Returns `null` in all other cases.
+
+      Conditions for `null`:
+        - `sid` cookie missing.
+        - No matching row in the `sessions` table.
+        - Session is expired (`expiresAt < now`).
+        - Session is inactive (`lastSeenAt` older than
+          `SESSION_INACTIVE_TIMEOUT_MINUTES`).
+
+      When null is returned for an expired/inactive session, the service
+      also clears the `sid` cookie server-side.
+
+      Source: `src/lib/trpc/routers/auth.ts:19-21` → `AuthService.getSession`.
+    tags:
+      - Auth
+    operationId: trpc_auth_getSession
+    security: []     # public — but the response depends on whether a valid `sid` cookie is present
+    responses:
+      "200":
+        description: Session payload, or `null` when not authenticated.
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: ../schemas/trpc-auth.yaml#/Session
+                - type: "null"
+
+/api/trpc/auth.changePassword:
+  post:
+    summary: Change the current user's password
+    description: |
+      Authenticated mutation. Verifies `currentPassword` against the
+      caller's Argon2 hash, then updates to `newPassword` (must equal
+      `confirmPassword`).
+
+      Password strength (`newPassword`): ≥ 8 chars; must include at least
+      one uppercase letter, one lowercase letter, one number, and one
+      special character (`strongPasswordRegex`, defined in
+      `src/app/(dashboard)/common/user-management/users/features/schemas/create-user-schema.ts`).
+
+      Side effects:
+        - Hashes and persists the new password.
+        - Deletes all sessions for the user **except the current one**
+          (preserved by `sid != currentSid`).
+        - Logs the change via `activityLogger` (description: "Password changed").
+
+      Auth: requires valid `sid` cookie (enforced by `authProcedure`).
+      Source: `src/lib/trpc/routers/auth.ts:22-26` → `AuthService.changePassword`.
+    tags:
+      - Auth
+    operationId: trpc_auth_changePassword
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-auth.yaml#/ChangePasswordInput
+    responses:
+      "200":
+        description: Password changed successfully.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-auth.yaml#/SuccessMessage
+      "400":
+        description: |
+          - `newPassword` and `confirmPassword` do not match.
+          - `newPassword` fails the strongPasswordRegex check.
+          - `currentPassword` is wrong.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: User not found. Should not normally occur with a valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/auth.resetPassword:
+  post:
+    summary: Reset another user's password (superadmin only)
+    description: |
+      Authenticated mutation. Resets the password for an arbitrary user
+      identified by `id`. Requires the caller to be a superadmin.
+
+      `AuthService.resetPassword` checks `currentUser.isSuperadmin` and
+      throws `AppError("Unauthorized", 403)` otherwise.
+
+      Password strength: same `strongPasswordRegex` as `changePassword`.
+
+      The procedure is built on `verifyPasswordProcedure` which adds
+      middleware that re-verifies the **caller's** own current password
+      (`authService.checkPassword`) before running the mutation. See the
+      security note below for an input-schema conflict that affects this
+      procedure.
+
+      Side effects:
+        - Hashes and persists the new password for the target user.
+        - Logs the reset via `activityLogger` (description: "Reset Password",
+          userId = current user's id).
+
+      Source: `src/lib/trpc/routers/auth.ts:27-31` → `AuthService.resetPassword`.
+    tags:
+      - Auth
+    operationId: trpc_auth_resetPassword
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: ../schemas/trpc-auth.yaml#/ResetPasswordInput
+              - description: |
+                  Some callers (or repaired code) may include both
+                  `ResetPasswordInput` and a `verifyPassword` field that the
+                  verifyPasswordMiddleware reads. See the security note.
+    responses:
+      "200":
+        description: Password reset successfully.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-auth.yaml#/SuccessMessage
+      "400":
+        description: |
+          `newPassword` and `confirmPassword` do not match, or
+          `newPassword` fails the strongPasswordRegex check.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session, or caller's own password verification failed.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "403":
+        description: Caller is not a superadmin, or caller's password is invalid.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "404":
+        description: Target user not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+    x-security-note: |
+      The router does
+        `resetPassword: verifyPasswordProcedure.input(resetPasswordSchema)`
+      which **overrides** the base input schema. The base schema requires
+      `verifyPassword`, but `resetPasswordSchema` does not include it. The
+      middleware reads `input.verifyPassword` directly, so at runtime the
+      procedure will read `undefined` from input. This is a known
+      inconsistency between `src/lib/trpc/routers/auth.ts:27-31` and
+      `src/lib/trpc/trpc.ts:148-154` and should be reconciled before this
+      endpoint is consumed externally. Documented for awareness.
+
+/api/trpc/auth.logout:
+  post:
+    summary: Log out
+    description: |
+      Public mutation. Reads the `sid` cookie, deletes the matching
+      `Session` row, and clears the cookie. Logs "Logged Out" via
+      `activityLogger` if a user was resolved from the session.
+
+      Idempotent: returns successfully even when no session exists.
+
+      Source: `src/lib/trpc/routers/auth.ts:32-34` → `AuthService.logout`.
+    tags:
+      - Auth
+    operationId: trpc_auth_logout
+    security: []     # public — works whether or not a session is present
+    responses:
+      "200":
+        description: Logout completed (or no-op if no session). Clears the `sid` cookie when one was set.
+        headers:
+          Set-Cookie:
+            description: 'When a session existed: `sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax` (clears the cookie).'
+            schema:
+              type: string
+        content:
+          application/json:
+            schema:
+              description: |
+                `AuthService.logout` returns `void`; the tRPC client receives
+                `null` in the `result.data` field.
+              type: "null"

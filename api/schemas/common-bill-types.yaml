@@ -1,0 +1,130 @@
+# docs/schemas/common-bill-types.yaml
+# Schemas for the common-bill-types sub-area of the `common`
+# REST module. Single endpoint:
+#   GET /api/bill-types
+# Source: src/app/api/(common)/bill-types/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetBillTypesQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        Filter extensions from `getBillTypesSchema`
+        (src/app/(dashboard)/common/set-up/bill-types/features/schemas/get-bill-types.schema.ts:7-11).
+        `.extend({ module: z.string().optional() }).transform(transformPaginationSchema)` —
+        post-transform: `{ page, limit, offset, search?, start?, end?, module? }`.
+      properties:
+        module:
+          type: string
+          description: |
+            Prisma string-array contains filter
+            (`where.modules = { has: query.module }`,
+            bill-type-repository.ts:21-25). Matches against
+            the `modules` array (not `defaultModules`).
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetBillTypesResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/bill-types`. Repository
+    signature (bill-type-repository.ts:63):
+    `Promise<{ billTypes: BillType[]; totalCount: number }>`.
+
+    Note the field is named `billTypes`, **not** `data`.
+  required:
+    - billTypes
+    - totalCount
+  properties:
+    billTypes:
+      type: array
+      items:
+        $ref: ./common-bill-types.yaml#/BillType
+    totalCount:
+      type: integer
+      minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+BillType:
+  type: object
+  description: |
+    Canonical bill-type shape. TS type `BillType` from
+    `src/app/(dashboard)/common/set-up/bill-types/features/types/index.ts:1-19`.
+
+    Maps to the Prisma `BillType` model
+    (prisma/schema.prisma:1799-1811). `modules` and
+    `defaultModules` are string arrays — `defaultModules` is
+    a subset of `modules`, enforced by the service-layer
+    check `getDefaultBillTypeByModule` (no more than one
+    `isDefault: true` per module, across all BillTypes).
+
+    `remark` is a non-null string in the Prisma model
+    (despite no `?`). The TS type also declares it
+    non-null. In practice the create/update schemas may
+    pass an empty string.
+
+    The list endpoint includes `createdBy` / `updatedBy`
+    as a `Publisher` projection
+    (`select: { id: true, fullName: true, username: true }`).
+  required:
+    - id
+    - name
+    - remark
+    - modules
+    - defaultModules
+    - createdAt
+    - updatedAt
+    - createdBy
+    - updatedBy
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: Unique among bill types (case-insensitive contains-match, per `getBillTypeByName`).
+    remark:
+      type: string
+      description: |
+        Non-null string. The Prisma column is `String` (no
+        `?`); default is empty string at the application
+        layer. The TS type declares it as required
+        non-null.
+    modules:
+      type: array
+      items:
+        type: string
+      description: |
+        The set of modules this bill type applies to.
+        `defaultModules` is a subset of this list (enforced
+        by service-layer check at create/update time).
+    defaultModules:
+      type: array
+      items:
+        type: string
+      description: |
+        Subset of `modules` flagged as "default for this
+        module". The service enforces uniqueness — only
+        one BillType can have a given module in its
+        `defaultModules` array at a time. The repository's
+        `getDefaultBillTypeByModule` lookup is used to
+        detect collisions on create and on update.
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time
+    createdBy:
+      $ref: ./common.yaml#/Publisher
+    updatedBy:
+      $ref: ./common.yaml#/Publisher

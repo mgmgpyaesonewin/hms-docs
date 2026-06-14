@@ -1,0 +1,150 @@
+# docs/schemas/common-payment-methods.yaml
+# Schemas for the common-payment-methods sub-area of the
+# `common` REST module. Single endpoint:
+#   GET /api/payment-methods
+# Source: src/app/api/(common)/payment-methods/route.ts
+
+# =============================================================================
+# Input schemas
+# =============================================================================
+
+GetPaymentMethodsQuery:
+  allOf:
+    - $ref: ./common.yaml#/PaginationQuery
+    - type: object
+      description: |
+        The route uses `apiHandler` with manual
+        `validateSearchParams(defaultQuerySchema, ...)`.
+        `defaultQuerySchema` is the base
+        `search + start + end + page + limit` schema;
+        the repository's `buildWhereQuery` interprets
+        only `query.search` (case-insensitive substring
+        match on `name`), ignoring `start` / `end`
+        (payment-methods-repository.ts:94-105). Ordering
+        is `createdAt: desc`.
+
+# =============================================================================
+# Response schemas
+# =============================================================================
+
+GetPaymentMethodsResponse:
+  type: object
+  description: |
+    Response shape of `GET /api/payment-methods`. The
+    repository returns
+    `Promise<{ paymentMethods: PaymentMethod[]; count: number }>`
+    (payment-methods-repository.ts:8-33) and the route
+    wraps it in
+    `{ success: true, result, message: "" }` — no
+    `error` field on success (see security notes).
+  required:
+    - success
+    - result
+    - message
+  properties:
+    success:
+      type: boolean
+      enum: [true]
+    result:
+      type: object
+      required: [paymentMethods, count]
+      properties:
+        paymentMethods:
+          type: array
+          items:
+            $ref: ./common-payment-methods.yaml#/PaymentMethod
+        count:
+          type: integer
+          minimum: 0
+
+# =============================================================================
+# Entity schemas
+# =============================================================================
+
+PaymentMethod:
+  type: object
+  description: |
+    Canonical payment-method shape. TS type `PaymentMethod`
+    from
+    `src/app/(dashboard)/common/set-up/payment-method/features/type/index.ts:1-18`.
+
+    Maps to the Prisma `PaymentMethod` model
+    (prisma/schema.prisma, @@map("payment_methods")).
+
+    The list endpoint's repository `findPaymentMethods`
+    uses `include: { createdBy: true, updatedBy: true }`
+    — the FULL `User` row, not the canonical 3-field
+    `Publisher` projection. This means the response
+    includes the user's `password` hash, `email`, and
+    other PII. The TS type asserts a `Publisher`-like
+    shape (id, fullName, username), so the type
+    system hides the leak.
+
+    The model has many FK relations (10+): the service
+    `deletePaymentMethod` only checks
+    `DefaultSetting`, `SupplierPaymentInfo`, and
+    `OPDBilling` for usage before deleting — see
+    security notes.
+  required:
+    - id
+    - name
+    - createdById
+    - createdBy
+    - createdAt
+    - updatedAt
+  properties:
+    id:
+      type: string
+      format: uuid
+    name:
+      type: string
+      description: |
+        `@unique` in the Prisma model. Duplicate-name
+        check enforced by the service via
+        `findPaymentMethodByName` (case-insensitive
+        equality, payment-methods-service.ts:17-22).
+    createdById:
+      type: string
+      format: uuid
+    updatedById:
+      oneOf:
+        - type: string
+          format: uuid
+        - type: "null"
+    createdBy:
+      type: object
+      description: |
+        The full `User` row, as returned by
+        `include: { createdBy: true }` (no `select`
+        projection). The TS type asserts
+        `{ id, fullName, username }`, but the underlying
+        response carries additional columns (e.g.
+        `password`, `email`, `status`).
+      required: [id, fullName, username]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        username:
+          type: string
+    updatedBy:
+      oneOf:
+        - type: object
+          required: [id, fullName, username]
+          properties:
+            id:
+              type: string
+              format: uuid
+            fullName:
+              type: string
+            username:
+              type: string
+        - type: "null"
+    createdAt:
+      type: string
+      format: date-time
+    updatedAt:
+      type: string
+      format: date-time

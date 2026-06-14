@@ -1,0 +1,290 @@
+# docs/paths/trpc-purchase-requests.yaml
+# tRPC router: purchaseRequests
+# (src/lib/trpc/routers/purchase-requests.ts). The router
+# exposes only **3 procedures**:
+#   - `createPurchaseRequest` — create with nested
+#     `purchaseRequestItems[]`.
+#   - `getPurchaseRequests` — paginated, searchable list.
+#   - `getPurchaseRequestById` — single row.
+# All 3 use `authProcedure` (no `authorizeProcedure`).
+# The service has additional `updatePurchaseRequestById` and
+# `deletePurchaseRequestById` methods but those are NOT
+# exposed on this tRPC router — they're reached via REST +
+# server actions. See the security notes at the bottom.
+x-trpc-source: src/lib/trpc/routers/purchase-requests.ts
+x-trpc-router: purchaseRequests
+
+/api/trpc/purchaseRequests.createPurchaseRequest:
+  post:
+    summary: Create a purchase request
+    description: |
+      Authenticated mutation. Creates a new `PurchaseRequest`
+      row with a server-generated `purchaseRequestId` (e.g.
+      `PR-202601-0001`) and the nested `PurchaseRequestItem`
+      rows. The id is generated via
+      `generateMonthlyResetId("PR", ...)` — it resets every
+      month and looks up the most recent id for the current
+      month via
+      `findLastPurchaseRequestIdForMonth(date)`.
+
+      Server-side augmentation of the input:
+        - `purchaseRequestId` — generated monthly-reset id.
+        - `createdById` / `updatedById` — stamped from
+          `ctx.user?.id`.
+        - Each `purchaseRequestItem` row gets
+          `remainingRequestedQty: item.requestedStockQty` (initial
+          value, decremented later as goods are received).
+
+      Side effects:
+        - Calls `activityLogger.log({ description: "Created
+          Purchase Request", action: "Create", entity:
+          "Purchase Request", entityId })` after the create.
+        - Does NOT call `revalidatePath` for any cached pages
+          (the read endpoints are server-rendered, but no
+          cache invalidation is done here).
+
+      Source: `src/lib/trpc/routers/purchase-requests.ts:13-20`.
+    tags:
+      - PurchaseRequests
+    operationId: trpc_purchaseRequests_createPurchaseRequest
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-purchase-requests.yaml#/CreatePurchaseRequestInput
+    responses:
+      "200":
+        description: |
+          The procedure returns a plain
+          `{ message: "Purchase request added successfully." }`
+          envelope, NOT the persisted row. Clients must call
+          `getPurchaseRequestById` (or refetch the list) to
+          see the created row with its generated id.
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message
+              properties:
+                message:
+                  type: string
+                  example: Purchase request added successfully.
+      "400":
+        description: |
+          Validation failure (Zod) — e.g.
+          `requestedStockQty` is not a positive integer, or a
+          required field is missing.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/purchaseRequests.getPurchaseRequests:
+  post:
+    summary: List purchase requests (paginated, searchable)
+    description: |
+      Authenticated query. Returns a paginated list of
+      purchase requests with the post-filter, pre-pagination
+      total count.
+
+      Response shape:
+        ```
+        { purchaseRequests: PurchaseRequest[], count: number }
+        ```
+
+      Search filter (from `buildWhereFilter`):
+        - `search` — case-insensitive **contains** match
+          (union of three):
+            - `purchaseRequestId` (the human-friendly id, e.g.
+              `PR-202601-0001`)
+            - `createdBy.username`
+            - `updatedBy.username`
+          The repository does NOT search on item names /
+          itemIds on this endpoint. Different from
+          `trpc-items.getItems` which searches item fields.
+        - `status` — `PENDING` | `APPROVED` | `REJECTED`.
+        - `priorityStatus` — `HIGH` | `MEDIUM` | `LOW`.
+        - `start` / `end` — `requestedDate` window
+          (`gte: start`, `lt: end` — **exclusive** upper
+          bound. Same as `trpc-suppliers.getSuppliers`,
+          different from `trpc-items.getItems` which uses
+          `lte`).
+
+      Ordering: `orderBy: { createdAt: "desc" }`.
+
+      Pagination: `take: limit` if `limit > 0`, otherwise
+      unlimited; `skip: offset`. The `count` is computed via
+      `prisma.purchaseRequest.count({ where })` in the same
+      `Promise.all` block (lines 119-126).
+
+      Source: `src/lib/trpc/routers/purchase-requests.ts:22-26`.
+    tags:
+      - PurchaseRequests
+    operationId: trpc_purchaseRequests_getPurchaseRequests
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-purchase-requests.yaml#/QueryPurchaseRequestsInput
+    responses:
+      "200":
+        description: Paginated list of purchase requests.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-purchase-requests.yaml#/GetPurchaseRequestsResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+/api/trpc/purchaseRequests.getPurchaseRequestById:
+  post:
+    summary: Get a purchase request by id
+    description: |
+      Authenticated query. Returns the purchase request (with
+      the full side-relation tree — `createdBy`, `updatedBy`,
+      `purchaseRequestItems[]`) or `null` if not found.
+
+      The `id` is the **uuid** (the Prisma PK), not the
+      human-friendly `purchaseRequestId`. The Zod schema is
+      `validateIdSchema` (`z.object({ id: z.string() })`) —
+      no UUID refinement at the router layer.
+
+      Returns `null` if the id is unknown (no tRPC throw /
+      404 envelope). The repository does
+      `prisma.purchaseRequest.findUnique({ where: { id } })`
+      and returns `null` if the result is null.
+
+      Source: `src/lib/trpc/routers/purchase-requests.ts:28-32`.
+    tags:
+      - PurchaseRequests
+    operationId: trpc_purchaseRequests_getPurchaseRequestById
+    security:
+      - SessionAuth: []
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/trpc-purchase-requests.yaml#/GetPurchaseRequestByIdInput
+    responses:
+      "200":
+        description: The purchase request, or `null` if not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/trpc-purchase-requests.yaml#/GetPurchaseRequestByIdResponse
+      "401":
+        description: No valid session.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ErrorEnvelope
+
+# -----------------------------------------------------------------------------
+# Security notes (apply to all 3 procedures above)
+# -----------------------------------------------------------------------------
+x-security-notes: |
+  - **All 3 procedures use `authProcedure` (not
+    `authorizeProcedure`)**. Any authenticated user can
+    create, list, and read purchase requests. The
+    `createPurchaseRequest` is a privileged operation (it
+    commits inventory demand to the system) but is not
+    permission-gated.
+  - **`createPurchaseRequest` does NOT use
+    `verifyPasswordProcedure`** — unlike `auth.resetPassword`
+    or `trpc-suppliers.deleteSupplierById`, no password
+    re-verification is done for this mutation.
+  - **Update / delete are NOT on this tRPC router** — the
+    service has `updatePurchaseRequestById` and
+    `deletePurchaseRequestById` methods
+    (purchase-requests.service.ts:68-167), but they are
+    reached via:
+      - The REST surface under
+        `src/app/api/(pharmacy)/purchase-request/*` (out of
+        OpenAPI scope here; documented as the
+        `pharmacy-purchase-request` sub-area when the
+        pharmacy module is documented).
+      - `next-safe-action` server actions invoked from RSC
+        (out of OpenAPI scope).
+    The tRPC router is essentially **read-mostly**: only
+    `create` is a mutation. This is an architectural choice
+    — REST is the canonical surface for the mutating flow,
+    tRPC is used for read + create.
+  - **The service DOES call `activityLogger.log`** on
+    `createPurchaseRequest` (and on its own `update` and
+    `delete` service methods). Activity logging IS present
+    here, unlike `trpc-hospital-info`. But it's worth
+    noting that the tRPC `create` IS logged but the REST
+    / server-action updates are not (or are logged
+    elsewhere).
+  - **State-machine enforcement on update** (service-level,
+    not tRPC): the service's `updatePurchaseRequestById`
+    enforces a `PENDING → APPROVED|REJECTED` transition —
+    any other status change throws 400 "Purchase request
+    can only be updated on pending status". This is NOT
+    exposed via tRPC, but the REST / server-action paths
+    inherit the same guard.
+  - **Delete guard** (service-level): the service's
+    `deletePurchaseRequestById` requires the PR to be
+    `PENDING` — throws 400 otherwise. Inherited by the
+    REST / server-action paths.
+  - **Full-replacement pattern on update** (service-level):
+    `updatePurchaseRequestById`'s repository method uses
+    `prisma.$transaction([deleteMany on
+    PurchaseRequestItem, createMany on PurchaseRequestItem,
+    update on PurchaseRequest])` (lines 285-310). The join
+    table is **always fully replaced** on update — clients
+    that send a partial items list will silently drop the
+    missing items.
+  - **No unique constraint on `purchaseRequestId`** — the
+    column is `String?` with a per-month uniqueness
+    enforced only by the application code via
+    `generateMonthlyResetId` (which looks at the current
+    month). Two PRs in the same month with the same id
+    would be rejected by the application but NOT by the DB
+    layer. Same singleton-style gap as
+    `trpc-hospital-info.createHospitalInfo` (no DB-level
+    enforcement of application invariants).
+  - **Module-level singleton service** — the router does
+    `const purchaseRequestsService = new
+    PurchaseRequestsService(new
+    PurchaseRequestsRepository(prisma))` at module scope
+    (lines 9-11). The repository is constructed once with
+    a per-module `winstonLogger.child({ context:
+    "purchase-request-repo" })`. The singleton is shared
+    across all tRPC calls.
+  - **`advancedSearchItems` on the create input is silently
+    ignored** — the Zod schema accepts it but the
+    service / repository's `createPurchaseRequest` does
+    not persist it. It is an artifact of the form schema
+    being shared with the advanced-search UI.
+  - **The `create` response is NOT the persisted row** —
+    the procedure returns
+    `{ message: "Purchase request added successfully." }`,
+    not the created `PurchaseRequest` object. Clients must
+    refetch (via `getPurchaseRequestById` or the list) to
+    get the generated `purchaseRequestId` and the joined
+    rows. The service DOES return the row internally
+    (lines 49), but the router drops the return value.
+  - **Manifest drift** — the original `routes_count: ~5`
+    was a placeholder. The actual count is **3** (the
+    service has more methods but the tRPC router only
+    exposes 3). The mutating surface (update + delete) is
+    reached via REST + server actions, not tRPC.
