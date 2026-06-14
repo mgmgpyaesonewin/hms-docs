@@ -33,7 +33,7 @@ model EventOutbox {
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   completedAt     DateTime? @map("completed_at") @db.Timestamptz(6)
 
-  @@index([nextAttemptAt], name: "idx_outbox_pending", where: "status = 'PENDING'")
+  @@index([nextAttemptAt], name: "idx_outbox_pending")
   @@index([tenantId, createdAt(sort: Desc)], name: "idx_outbox_tenant_created")
   @@index([status], name: "idx_outbox_status")
   @@index([aggregateId], name: "idx_outbox_aggregate")
@@ -96,7 +96,7 @@ model ConsultationFeesInvoice {
   @@index([tenantId, counterId, billingDate(sort: Desc)], name: "idx_cfi_tenant_counter_date")
   @@index([tenantId, doctorId, billingDate(sort: Desc)], name: "idx_cfi_tenant_doctor_date")
   @@index([tenantId, status], name: "idx_cfi_tenant_status")
-  @@index([tenantId, paidAt(sort: Desc)], name: "idx_cfi_tenant_paid_at", where: "paid_at IS NOT NULL")
+  @@index([tenantId, paidAt(sort: Desc)], name: "idx_cfi_tenant_paid_at")
   @@map("consultation_fees_invoices")
 }
 

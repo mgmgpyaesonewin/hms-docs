@@ -47,7 +47,7 @@ docs/summary-service/
 For a senior engineer who has not seen this project before:
 
 1. `../summary-service-architecture-prompt.md` — the brief (Context, Requirements, Constraints, Decisions)
-2. `adrs/0001-trigger-mechanism.md` through `adrs/0014-cfi-invariants.md` — the 13 decisions in detail
+2. `adrs/0001-trigger-mechanism.md` through `adrs/0014-cfi-invariants.md` — the 14 decisions in detail
 3. `diagrams/c4-context.md` → `diagrams/c4-container.md` → `diagrams/c4-component.md` → `diagrams/c4-deployment.md` — visualise the system
 4. `diagrams/sequences.md` — see the four critical flows
 5. `data-model/schema.sql` → `data-model/er-diagram.md` → `data-model/prisma-additions.prisma` — the schema
@@ -108,7 +108,7 @@ A future implementer adding the payout workflow will add a new table, not modify
 
 - ✅ Brief: complete (21 of 21 decisions resolved or assumed)
 - ✅ Trigger mechanism: **Postgres transactional outbox** (HMS inserts a row in the same tx as the OPD billing; worker polls with `FOR UPDATE SKIP LOCKED`; stale-claim reaper resets stuck rows)
-- ✅ ADRs: 13 written
+- ✅ ADRs: 14 written
 - ✅ C4 diagrams: 4 written
 - ✅ Sequence diagrams: 4 written (happy path, worker crash + reaper, summary load, status update)
 - ✅ Data model: DDL + ER + Prisma additions (includes the new `event_outbox` table)

@@ -436,9 +436,9 @@ One Express process with two roles (API + inbox worker) running as two systemd u
 
 ### 7.8 Redis cache model
 
-- **What is cached:** aggregate counters only. The summary list page reads from Postgres; the dashboard counters read from Redis.
-- **Key shape:** `summary:consultation_fees:{tenantId}:{YYYY-MM-DD}:{counterId|"all"}` → HSET with fields `total`, `paid_total`, `paid_count`, `unpaid_total`, `unpaid_count`, `void_total`, `void_count`.
-- **Update:** `HINCRBY` on every event (CFI creation, status change). Idempotent under at-least-once delivery if the worker uses a Redis Lua script to compare-and-update based on event_id.
+- **What is cached:** aggregate counters only. The summary list page reads from Postgres; the dashboard counters read from Redis (when unfiltered). v1 only ships a single `:all` bucket per (tenant, day) — per-counter bucketing was a v1+ idea that was deferred.
+- **Key shape:** `summary:consultation_fees:{tenantId}:{YYYY-MM-DD}:all` → HSET with fields `total`, `paid_total`, `paid_count`, `unpaid_total`, `unpaid_count`, `void_total`, `void_count`.
+- **Update:** plain `HINCRBY` / `HINCRBYFLOAT` pipelines on every event (CFI creation, status change). No Lua. Idempotency is provided by the DB UNIQUE constraints on `consultation_fees_invoices (event_id)` and `(tenant_id, opd_invoice_id)` — re-delivery of the same outbox event is rejected at the DB level (Prisma P2002), so the Redis counter is updated exactly once per actual CFI row. See ADR 0009 for the full rationale.
 - **Read fallback:** if Redis is down, the API computes the counter from Postgres (`SELECT status, COUNT(*), SUM(amount) FROM consultation_fees_invoices WHERE tenantId = ? AND created_at::date = ? GROUP BY status`). Slower but correct.
 - **TTL:** every key has an expiry — `EXPIRE 86400` (24h) for the active day's buckets, `EXPIRE 604800` (7d) for past-day buckets. The TTL forces periodic refresh from Postgres via cache-aside; cold days are eventually re-read and refreshed; the active day is bounded against drift.
 - **No reconciliation job.** Drift heals itself on the read path. A daily cron rebuilding Redis would race with active writes (e.g. a 02:00 cron can clobber a 01:59:30 status change). Cache-aside is simpler and race-free: the next read either sees a value that was correctly written by the most recent writer, or computes fresh from Postgres.

@@ -143,7 +143,7 @@ erDiagram
 
 8. **Audit tables are append-only.** `consultation_fees_invoice_status_changes` and `consultation_fees_invoice_adjustments` are never UPDATEd. The current state is on the CFI row; the history is in the audit table. The `invoice_version_at_change` column cross-references the version on the CFI at the time of the change.
 
-9. **FK to `opd_billings` is composite on `(tenant_id, id)`.** This assumes the HMS has a unique index on `(tenant_id, id)` on `opd_billings` (or that `id` is globally unique, in which case the `tenant_id` part can be dropped). Designer to verify before applying the migration.
+9. **FK to `opd_billings` is `(opd_invoice_id) REFERENCES opd_billings(id)`.** Non-composite: the HMS is single-tenant in practice, so `opd_billings.id` is globally unique and the simple FK is enough. (Earlier drafts of the brief described a composite `(tenant_id, opd_invoice_id) → (tenant_id, id)` FK, but `opd_billings` has no `tenant_id` column on the on-prem HMS, so the DDL in `schema.sql:130-131` uses the simple form.)
 
 10. **Search uses `pg_trgm` substring match on `lower(invoice_no)`.** One GIN index with the `gin_trgm_ops` operator class. Doctor name is intentionally NOT substring-searchable (doctor lookup goes through the `doctorId` filter); patient name is intentionally NOT searchable (handled by the HMS's existing patient search). See ADR 0010.
 

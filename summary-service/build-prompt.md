@@ -52,36 +52,42 @@
           tenant-guard.ts       # tenantId enforcement (per ADR 0007)
           error-handler.ts      # central error formatter
         routes/
-          summary.routes.ts     # GET endpoints from openapi.yaml
-          cfi.routes.ts         # status + adjustment endpoints
+          cfi.routes.ts         # all 5 business routes (list, aggregates, detail, status, adjustment)
+          health.routes.ts      # GET /healthz (no auth)
       workers/
+        index.ts                # worker entry: poller + reaper + pruner
         outbox-poller.ts        # the polling loop (--mode=worker)
         stale-claim-reaper.ts   # resets stuck rows every 5 min
+        outbox-pruner.ts        # deletes old DONE/DEAD rows daily
         handlers/
           opd-invoice-created.ts  # the CFI creation handler
       services/
         cfi-service.ts          # CFI business logic (create, status change, adjustment)
         cfi-payout.ts           # payout formula: payout = amount - adjustment
-        redis-counters.ts       # HINCRBY logic for aggregate buckets
       db/
         prisma.ts               # Prisma client singleton
-        outbox.ts               # claim / mark-done / mark-dead helpers
+        outbox.ts               # claim / mark-done / mark-dead / reap / prune helpers
         tenant-scope.ts         # Prisma extension enforcing tenantId
       lib/
         logger.ts               # pino instance, child loggers
         errors.ts               # AppError + status code mapping
         hmac.ts                 # signing + verification primitives
-      cli.ts                    # entrypoint: parses --mode=api|worker
+        redis.ts                # ioredis singleton
+        redis-counters.ts       # HINCRBY logic for aggregate buckets
+        validators/cfi.ts       # Zod schemas for query / body of all routes
+      types/
+        express.d.ts            # Request augmentation (tenantId, rawBody, prisma, serviceId)
+      index.ts                  # entrypoint: parses --mode, bootstraps API or worker
 
 The brief is silent on repo shape but the design has its own systemd units and own deploy (ADR 0002), so a separate repo is the natural fit. If the implementation lands inside the YCare-HMS monorepo instead, mirror the layout under `src/app/(services)/summary/` and reuse the existing `src/lib/db.ts` Prisma singleton.
 
 ## Two entrypoints, one binary
 
-`cli.ts` reads `--mode=api` or `--mode=worker` and boots the corresponding role. The systemd unit files in `ops/` invoke the binary with the right flag.
+`index.ts` reads `--mode=api` or `--mode=worker` and boots the corresponding role. The systemd unit files in `ops/` invoke the binary with the right flag.
 
 - One `npm run build` produces one `dist/`
-- `dist/cli.js --mode=api` starts the HTTP server on `127.0.0.1:4000`
-- `dist/cli.js --mode=worker` starts the outbox poller + reaper
+- `dist/index.js --mode=api` starts the HTTP server on `127.0.0.1:4000`
+- `dist/index.js --mode=worker` starts the outbox poller + reaper + pruner
 - API and worker share the same build — only the boot mode differs
 - A worker crash does not take down the API and vice versa
 
@@ -104,10 +110,11 @@ The brief is silent on repo shape but the design has its own systemd units and o
    - Insert the `consultation_fees_invoices` row with denormalized fields (`invoice_no`, `patient_name`, `doctor_name`, `counter_name`, `amount`).
    - Compute `payout_amount = amount - adjustment` (`cfi-payout.ts`, brief §7.14).
    - Update Redis aggregate counters via HINCRBY (per ADR 0009).
-3. Implement the HTTP routes per `api/openapi.yaml`:
-   - `GET /summary/consultation-fees` (list with filters, paginated)
-   - `GET /summary/consultation-fees/{id}` (detail)
-   - `POST /consultation-fees-invoices/{id}/status` (status change with audit row, optimistic-lock `version`)
+3. Implement the HTTP routes per `api/openapi.yaml` (all under `/consultation-fees-invoices`):
+   - `GET /consultation-fees-invoices` (list with filters, paginated)
+   - `GET /consultation-fees-invoices/aggregates` (daily aggregates; Redis-backed when unfiltered, Postgres-fallback otherwise)
+   - `GET /consultation-fees-invoices/{id}` (detail, with statusHistory + adjustmentHistory)
+   - `PATCH /consultation-fees-invoices/{id}/status` (status change with audit row, optimistic-lock `version`)
    - `POST /consultation-fees-invoices/{id}/adjustment` (adjustment with audit row, locked when status ≠ `UNPAID`)
 4. Implement HMAC verification middleware per `api/hmac-auth.md`. Reject requests missing `X-Service-Id`, `X-Signature`, `X-Timestamp`, or `X-Tenant-Id`. Reject timestamp skew > 5 min.
 5. Implement multi-tenant defense-in-depth (ADR 0007):
@@ -118,7 +125,7 @@ The brief is silent on repo shape but the design has its own systemd units and o
 
 1. `npm run typecheck` and `npm run lint` pass with zero errors.
 2. The Prisma migration produces schema identical to `data-model/schema.sql` (or its delta is intentional and documented).
-3. `cli.ts --mode=api` boots and `curl http://127.0.0.1:4000/health` returns 200 with `{ status: "ok", db: "up", redis: "up" }`.
+3. `index.ts --mode=api` boots and `curl http://127.0.0.1:4000/healthz` returns 200 with `{ status: "ok", db: "up", redis: "up" }`.
 4. `cli.ts --mode=worker` starts the outbox poll loop; inserting a row into `event_outbox` with status `PENDING` results in a `consultation_fees_invoices` row within 2 poll cycles.
 5. The stale-claim reaper resets an `IN_PROGRESS` row whose `locked_at` is older than 5 min back to `PENDING`.
 6. HMAC middleware rejects a request with a missing signature (401), bad signature (401), and stale timestamp (401).

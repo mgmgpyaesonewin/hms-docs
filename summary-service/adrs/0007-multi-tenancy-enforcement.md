@@ -27,7 +27,7 @@ The HMS is multi-tenant by design. The on-prem install is single-tenant in pract
 
 - **Layer 1 — API edge:** the BFF passes `X-Tenant-Id: <tenantId>` as an HMAC-signed header (see ADR 0008). The Summary Service reads the tenant from the verified JWT/JWS-claim (not from the request body), validates it's present, and uses it for the entire request.
 - **Layer 2 — Query layer:** a Prisma client extension injects `where: { tenantId: <verifiedTenantId> }` into every query. A test suite asserts that no query can omit the filter — every test runs against a two-tenant fixture and verifies that a query scoped to tenant A cannot return tenant B's rows.
-- **Layer 3 — Redis key namespace:** all keys are prefixed `summary:consultation_fees:{tenantId}:...`. The service refuses to read or write a key whose prefix doesn't match the verified tenant.
+- **Layer 3 — Redis key namespace:** all keys are prefixed `summary:consultation_fees:{tenantId}:...` and are constructed with the verified `tenantId` from Layer 1 (`src/lib/redis-counters.ts:17-19`). There is no runtime cross-check that the key prefix matches the verified tenant — correctness relies on every Redis-touching code path going through this factory. A future code path that constructs a key by hand would bypass this; a code-review checklist item is the primary guard.
 - **Layer 4 — Logs:** every log line carries `tenantId` as a required field. Pino binding ensures the field is set; missing-field is a startup config error.
 
 ## Threat model coverage

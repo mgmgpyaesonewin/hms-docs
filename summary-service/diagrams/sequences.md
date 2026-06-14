@@ -43,8 +43,8 @@ sequenceDiagram
 - The HMS and Postgres are the only actors in the publish path. Redis is **not** on the publish path (the HMS does not touch Redis at all in this design).
 - The outbox row is committed in the same transaction as the OPD billing. There is no window where the OPD billing exists without a corresponding outbox row.
 - The worker's claim is transactional: claim a batch, then process each event in its own transaction. A crash mid-batch leaves the IN_PROGRESS rows to be reset by the reaper.
-- The `ON CONFLICT (event_id) DO NOTHING` is the idempotency guard (see ADR 0003). If the reaper reset the row and the worker re-processes it, the insert is a no-op.
-- The Redis Lua script `apply event` is atomic and idempotent.
+- The `ON CONFLICT (event_id) DO NOTHING` is the idempotency guard (see ADR 0003). If the reaper reset the row and the worker re-processes it, the CFI insert is a no-op (or, with the live code, a Prisma P2002 caught and treated as a skip), so the Redis counter is updated at most once per actual CFI row.
+- (Earlier drafts of ADR 0009 described a Redis Lua script + `seen_events` set for additional Redis-side idempotency. v1 ships without it; correctness relies on the DB UNIQUE constraints.)
 - End-to-end latency from `opd_billings` commit to `consultation_fees_invoices` insert: typically 1-2s (limited by the poll interval).
 
 ---
@@ -84,7 +84,7 @@ sequenceDiagram
     PG-->>W: 1 row (event A, attempt_count=2)
     W->>PG: BEGIN; INSERT INTO consultation_fees_invoices (event_id, ...) ON CONFLICT (event_id) DO NOTHING; COMMIT
     PG-->>W: 0 rows (no-op — CFI already exists)
-    W->>R: HINCRBY (idempotent via seen_events set in Lua)
+    W->>R: HINCRBY (counter update)
     R-->>W: OK
     W->>PG: UPDATE event_outbox SET status='DONE' WHERE id=$1
 ```
@@ -92,8 +92,7 @@ sequenceDiagram
 **Notes:**
 - The crash is between the CFI insert and the Redis update. The CFI is on disk; the outbox is stuck.
 - The reaper resets the row to `PENDING` after 5 minutes of `locked_at` age.
-- Re-processing the event is safe because the CFI's `(tenant_id, opd_invoice_id)` UNIQUE constraint plus the `event_id` UNIQUE constraint make the second insert a no-op.
-- The Redis Lua script uses a `seen_events` set keyed by `event_id` to skip duplicate `HINCRBY`s.
+- Re-processing the event is safe because the CFI's `(tenant_id, opd_invoice_id)` UNIQUE constraint plus the `event_id` UNIQUE constraint make the second insert a no-op. Because the second insert is a no-op, the worker's Redis HINCRBY is never called twice for the same event — DB-level idempotency makes Redis-level idempotency unnecessary.
 - Net effect: the CFI shows up within 5 minutes of the worker crash, and the Redis aggregate catches up. No data loss.
 
 ---
