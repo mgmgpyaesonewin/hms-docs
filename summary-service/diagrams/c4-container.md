@@ -19,7 +19,7 @@ C4Container
     Rel(admin, nextjs, "Uses", "HTTPS")
 
     Rel(nextjs, postgres, "INSERT INTO opd_billings + event_outbox in one transaction", "Prisma / 127.0.0.1:5432")
-    Rel(nextjs, api, "Reads CFI; updates status/adjustment", "HMAC-signed HTTP / 127.0.0.1:4000")
+    Rel(nextjs, api, "Reads CFI; updates status/adjustment", "HTTP / 127.0.0.1:4000 (no auth in v1)")
 
     Rel(api, postgres, "Reads CFI; updates status/adjustment", "Prisma / 127.0.0.1:5432")
     Rel(api, redis, "HGET aggregate counters", "ioredis / 127.0.0.1:6379")
@@ -43,7 +43,7 @@ C4Container
 ## Inter-container communication
 
 - **Next.js → Postgres:** HMS writes `opd_billings` and `event_outbox` in a single transaction. This is the only way the HMS talks to the Summary Service's data layer (ADR 0001).
-- **Next.js → Summary API:** HMAC-signed HTTP. The BFF mints the headers, the API validates them. Localhost only.
+- **Next.js → Summary API:** HTTP. v1 has no auth; the BFF and the API trust the localhost bind. (v2 will add a real service-to-service auth.)
 - **Worker → Postgres:** `SELECT ... FOR UPDATE SKIP LOCKED` on `event_outbox` to claim a batch; `INSERT` to create a CFI; periodic reaper to reset stuck claims; periodic pruner to delete old `DONE` rows.
 - **API / Worker → Redis:** ioredis. Localhost only. Read-side cache only; Redis is never on the publish path.
 

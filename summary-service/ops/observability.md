@@ -94,7 +94,7 @@ export const logger = pino({
     level: (label) => ({ level: label }),
   },
   redact: {
-    paths: ["req.headers.authorization", "req.headers['x-signature']", "*.hmacSecret"],
+    paths: ["req.headers.authorization", "*.hmacSecret"],
     censor: "[REDACTED]",
   },
 });

@@ -16,8 +16,7 @@
 2. `adrs/0001-trigger-mechanism.md` — the worker is a **Postgres transactional outbox** poller. Not BullMQ, not Redis Streams, not pg-boss. ADR 0001 explains why.
 3. `adrs/0002-service-decomposition.md` — single Express binary with `--mode=api` or `--mode=worker`; one codebase, two systemd units.
 4. `adrs/0007-multi-tenancy-enforcement.md` — `tenantId` discipline at the edge, query layer, Redis keys, and logs.
-5. `adrs/0008-service-to-service-auth.md` + `api/hmac-auth.md` — HMAC-SHA256 signing and verification.
-6. `adrs/0009-redis-cache-model.md` — Redis is **aggregate counters only** (cache-aside, no reconciliation job).
+5. `adrs/0009-redis-cache-model.md` — Redis is **aggregate counters only** (cache-aside, no reconciliation job).
 7. `data-model/schema.sql` and `data-model/prisma-additions.prisma` — the tables to migrate and the Prisma models to add.
 8. `api/openapi.yaml` — the HTTP surface to implement.
 9. `ops/ycare-summary-api.service`, `ops/ycare-summary-worker.service` — the systemd units the runtime must satisfy.
@@ -32,7 +31,7 @@
 - **Cache:** ioredis client. Redis runs locally on `127.0.0.1:6379`, used **only** for aggregate counters (ADR 0009)
 - **Logger:** pino, structured JSON to stdout and `/var/log/ycare-summary/app.log` (logrotate)
 - **Worker loop:** `SELECT ... FOR UPDATE SKIP LOCKED LIMIT N` against `event_outbox`, claim → process → mark `DONE` (or `DEAD` after 5 attempts). Stale-claim reaper every 5 min resets rows whose `locked_at` is > 5 min old (ADR 0001).
-- **Auth:** HMAC-SHA256 over `(method, path, body, timestamp)` with shared secret at `/etc/ycare-summary/shared-secret` (mode 0400). Reject requests with timestamp skew > 5 min.
+- **Auth:** **none in v1.** The service binds to `127.0.0.1` only and trusts the HMS BFF. (v2 will add a real service-to-service auth; out of scope here.)
 - **Process supervision:** systemd, two units. **No docker-compose.** The service binds to `127.0.0.1` only.
 - **Test framework:** Jest (matches HMS conventions)
 
@@ -48,7 +47,6 @@
       http/
         server.ts               # express bootstrap (--mode=api)
         middleware/
-          hmac-auth.ts          # HMAC verification (per api/hmac-auth.md)
           tenant-guard.ts       # tenantId enforcement (per ADR 0007)
           error-handler.ts      # central error formatter
         routes/
@@ -71,7 +69,6 @@
       lib/
         logger.ts               # pino instance, child loggers
         errors.ts               # AppError + status code mapping
-        hmac.ts                 # signing + verification primitives
         redis.ts                # ioredis singleton
         redis-counters.ts       # HINCRBY logic for aggregate buckets
         validators/cfi.ts       # Zod schemas for query / body of all routes
@@ -116,8 +113,7 @@ The brief is silent on repo shape but the design has its own systemd units and o
    - `GET /consultation-fees-invoices/{id}` (detail, with statusHistory + adjustmentHistory)
    - `PATCH /consultation-fees-invoices/{id}/status` (status change with audit row, optimistic-lock `version`)
    - `POST /consultation-fees-invoices/{id}/adjustment` (adjustment with audit row, locked when status ≠ `UNPAID`)
-4. Implement HMAC verification middleware per `api/hmac-auth.md`. Reject requests missing `X-Service-Id`, `X-Signature`, `X-Timestamp`, or `X-Tenant-Id`. Reject timestamp skew > 5 min.
-5. Implement multi-tenant defense-in-depth (ADR 0007):
+4. Implement multi-tenant defense-in-depth (ADR 0007):
    - `tenant-guard` middleware injects `tenantId` from the verified header into `req.tenantId`.
    - `tenant-scope.ts` Prisma extension forces every query to filter by `tenantId`. Add a test that asserts no query can omit it.
 
@@ -128,8 +124,7 @@ The brief is silent on repo shape but the design has its own systemd units and o
 3. `index.ts --mode=api` boots and `curl http://127.0.0.1:4000/healthz` returns 200 with `{ status: "ok", db: "up", redis: "up" }`.
 4. `cli.ts --mode=worker` starts the outbox poll loop; inserting a row into `event_outbox` with status `PENDING` results in a `consultation_fees_invoices` row within 2 poll cycles.
 5. The stale-claim reaper resets an `IN_PROGRESS` row whose `locked_at` is older than 5 min back to `PENDING`.
-6. HMAC middleware rejects a request with a missing signature (401), bad signature (401), and stale timestamp (401).
-7. Cross-tenant access (request with `X-Tenant-Id: A` querying a row owned by tenant B) returns 404.
+6. Cross-tenant access (request querying a row owned by tenant B) returns 404.
 8. Status change from `UNPAID → PAID` writes an audit row and updates Redis counters; subsequent change attempts return 409 (terminal state).
 9. Adjustment on a `PAID` CFI returns 409 `ADJUSTMENT_LOCKED`.
 10. Every env var in `ops/env.template` is documented in `.env.example`; no secrets are committed.

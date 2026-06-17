@@ -51,9 +51,8 @@ that explains the folder layout, reading order, and the v1/v2 split.
 Read it as the entry point.
 
 In short: 14 ADRs, the canonical DDL + Prisma additions, the OpenAPI
-spec, the HMAC auth spec, C4 + sequence diagrams, and a complete ops
-package (systemd units, observability, security review, cutover plan,
-runbook, capacity plan).
+spec, C4 + sequence diagrams, and a complete ops package (systemd units,
+observability, security review, cutover plan, runbook, capacity plan).
 
 The most-recent code lives in the `hms-summary-service/` repo in the
 parent workspace; the `api/api-smoke-test.md` file in that folder

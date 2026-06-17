@@ -269,7 +269,7 @@ This avoids re-running the formula on every read and keeps the displayed value c
 | **Latency** | Summary list page p95 < 800ms; aggregate counters p95 < 100ms (Redis hit). Status update p95 < 500ms. |
 | **Throughput** | Initial target: 1k OPD invoices / day, 50 concurrent admin users. Must scale 10x without redesign. |
 | **Multi-tenancy** | Every query, every Redis key, every log line scoped by `tenantId`. Defense-in-depth. |
-| **Security** | Service binds to localhost only. Service-to-service auth: shared HMAC secret (file-based) for v1. No public exposure. |
+| **Security** | Service binds to localhost only. No service-to-service auth in v1 (rely on localhost bind). Auth is a follow-up. |
 | **Observability** | Structured JSON logs to a local file (`/var/log/ycare-summary/*.log`) with rotation. Prometheus-format metrics on `/metrics` (optional). Audit log table for every state transition. |
 | **Compliance** | Audit history of status changes retained indefinitely (or per hospital policy). |
 | **Backup** | Postgres is backed up via the existing hospital backup policy. Redis state is recoverable from Postgres lazily, on the first read of each affected bucket (cache-aside). |
@@ -429,10 +429,9 @@ One Express process with two roles (API + inbox worker) running as two systemd u
 
 ### 7.7 Service-to-service auth
 
-- **Recommended for v1:** HMAC-SHA256 over `(method, path, body, timestamp)` with a shared secret in `/etc/ycare-summary/shared-secret` (mode 0400, owned by the service user). Service rejects requests with timestamps > 5 minutes old (replay protection).
-- The BFF adds headers: `X-Service-Id: hms-bff`, `X-Signature: <hmac>`, `X-Timestamp: <unix-secs>`, `X-Tenant-Id: <tenantId>`.
-- The service validates all four headers on every request and 401s otherwise.
-- Secret rotation: file-based; new secret deployed via ops procedure (place new file, restart service with new env var pointing at it, keep old secret valid for a grace period for in-flight requests).
+- **v1:** **No auth.** The service trusts the localhost bind; only the HMS BFF (running on the same host) can reach it.
+- **v2 (planned):** introduce a service-to-service auth mechanism — TBD. Candidates: shared HMAC, mTLS, or short-lived service JWTs. The auth shape is intentionally left unspecified so v1 doesn't pay for a model that may not be the right one.
+- For v1, every call from the HMS BFF to the Summary Service is plaintext HTTP over `127.0.0.1:4000`. Do not expose the service on a LAN-reachable interface.
 
 ### 7.8 Redis cache model
 
@@ -569,14 +568,13 @@ The design output should include:
    - Admin updates status (DB transaction, Redis update, audit row)
    - Worker crash + reaper recovery
 4. **Data model** — DDL for `consultation_fees_invoices` (with the new `adjustment`, `payout_amount`, `paid_at`, `voided_at`, denormalized `invoice_no` / `patient_name` / `doctor_name` / `counter_name` columns), `consultation_fees_invoice_status_changes` (audit), `consultation_fees_invoice_adjustments` (audit — new for Section 3.5), `event_outbox` (Section 7.1). Indexes, constraints, foreign keys, Mermaid ER diagram.
-5. **API specification** — OpenAPI 3.1 for the Summary Service's HTTP surface. Auth header spec. Error model.
-6. **HMAC auth spec** — exact signing algorithm, header names, timestamp skew window, replay-protection rule, secret rotation procedure.
+5. **API specification** — OpenAPI 3.1 for the Summary Service's HTTP surface. Error model. (No auth in v1 — see §7.7.)
 7. **Prisma schema additions** — the new models, with relations to existing HMS models (use `@@schema` or `@@map` to avoid name collisions with HMS conventions).
 8. **systemd unit files** — `ycare-summary-api.service` and `ycare-summary-worker.service`. `ExecStart` with the right `--mode` flag, restart policy, environment file.
 9. **Observability spec** — log fields, metric names/labels, logrotate config.
 10. **Security review** — threat model for the on-prem deployment (STRIDE), auth model, secret handling, file permissions, network isolation, what an attacker with shell access on the host could do.
 11. **Migration / cutover plan** — how the new service goes live (backfill decision from Q7, feature flag in HMS, canary test plan, rollback procedure).
-12. **Runbook** — operational procedures for: restarting the service, rotating the HMAC secret, rebuilding Redis from scratch, recovering from a worker crash with an unprocessed outbox, scaling (if/when the host can't keep up).
+12. **Runbook** — operational procedures for: restarting the service, rebuilding Redis from scratch, recovering from a worker crash with an unprocessed outbox, scaling (if/when the host can't keep up).
 13. **Capacity plan** — given host specs (Q8), expected daily OPD invoice volume, and expected admin concurrency: is the host sized correctly for Postgres + Redis + Summary Service + HMS simultaneously? If not, what to add.
 
 ---

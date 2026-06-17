@@ -113,10 +113,9 @@ sequenceDiagram
     activate HMS
     HMS->>BFF: query summaryList({ from, to, counterId?, doctorId?, status?, search?, limit, cursor })
     activate BFF
-    BFF->>API: GET /consultation-fees-invoices?from=...&to=...&counterId=...&status=...&search=...&limit=25&cursor=...  (+HMAC headers)
+    BFF->>API: GET /consultation-fees-invoices?from=...&to=...&counterId=...&status=...&search=...&limit=25&cursor=...  (no auth in v1)
     activate API
-    API->>API: Verify HMAC signature, timestamp, replay
-    API->>API: Extract verified tenantId from X-Tenant-Id
+    API->>API: Resolve tenantId (v1: from request header X-Tenant-Id; v2: from auth context)
 
     par Aggregate counters (Redis)
         API->>R: HGETALL summary:consultation_fees:{tenantId}:{date}:{counterId|"all"}
@@ -158,9 +157,9 @@ sequenceDiagram
     activate HMS
     HMS->>BFF: mutation statusUpdate({ id, status: "PAID", reason?: null, version: 3 })
     activate BFF
-    BFF->>API: PATCH /consultation-fees-invoices/{id}/status  { status: "PAID" }  If-Match: 3  (+HMAC headers)
+    BFF->>API: PATCH /consultation-fees-invoices/{id}/status  { status: "PAID" }  If-Match: 3  (no auth in v1)
     activate API
-    API->>API: Verify HMAC
+    API->>API: Resolve tenantId (v1: from X-Tenant-Id header)
     API->>PG: SELECT id, status, version FROM consultation_fees_invoices WHERE id=$1 AND tenant_id=$2
     PG-->>API: { id, status: "UNPAID", version: 3 }
     API->>API: Check transition: UNPAID → PAID ✓<br/>Check version: 3 === 3 ✓

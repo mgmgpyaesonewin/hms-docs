@@ -8,12 +8,11 @@ info:
     HTTP API for the Summary Service. Internal-only — bound to 127.0.0.1:4000.
     Called by the YCare HMS Next.js BFF.
 
-    All endpoints (except `GET /healthz`) require HMAC-SHA256 authentication
-    with a shared secret (see `hmac-auth.md`). The BFF signs each request;
-    the service validates the signature, timestamp, and replay window.
+    **Auth: none.** v1 trusts the localhost-only bind. No headers are required
+    to authenticate. (Auth is a follow-up; see the Summary Service brief.)
 
-    All multi-tenant data is scoped by the verified `X-Tenant-Id` header
-    (signed as part of the HMAC), not by any value in the request body.
+    Multi-tenant data is scoped by a future auth mechanism (TBD) or, until
+    that ships, by direct agreement between the BFF and this service.
 
     `status` on the CFI reflects the **patient's payment to the hospital** for
     the consultation fee, NOT the doctor's receipt of payout. See README → Future work → Doctor payout workflow.
@@ -24,12 +23,9 @@ servers:
 
 tags:
   - name: health
-    description: Health check (no auth)
+    description: Health check
   - name: consultation-fees-invoices
     description: CFI list, detail, status, and adjustment endpoints
-
-security:
-  - HmacAuth: []
 
 paths:
   /healthz:
@@ -39,7 +35,6 @@ paths:
       description: |
         Returns 200 OK if the API process is running and can answer HTTP.
         Does NOT check Postgres or Redis (use `/readyz` for that, if added in v2).
-      security: []
       responses:
         "200":
           description: Service is alive
@@ -53,14 +48,10 @@ paths:
       tags: [consultation-fees-invoices]
       summary: List consultation fees invoices (paginated)
       description: |
-        Returns CFIs for the verified tenant, filtered by date range, counter,
-        doctor, status, and substring search on the OPD/IPD invoice number.
-        Sorted by `billing_date DESC` by default.
+        Returns CFIs, filtered by date range, counter, doctor, status, and
+        substring search on the OPD/IPD invoice number. Sorted by
+        `billing_date DESC` by default.
       parameters:
-        - $ref: "#/components/parameters/XTenantId"
-        - $ref: "#/components/parameters/XTimestamp"
-        - $ref: "#/components/parameters/XSignature"
-        - $ref: "#/components/parameters/XServiceId"
         - name: from
           in: query
           required: false
@@ -125,7 +116,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/CfiListResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /consultation-fees-invoices/aggregates:
     get:
@@ -173,17 +163,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CfiAggregatesResponse"
-        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /consultation-fees-invoices/{id}:
     get:
       tags: [consultation-fees-invoices]
       summary: Get one CFI with full history
       parameters:
-        - $ref: "#/components/parameters/XTenantId"
-        - $ref: "#/components/parameters/XTimestamp"
-        - $ref: "#/components/parameters/XSignature"
-        - $ref: "#/components/parameters/XServiceId"
         - name: id
           in: path
           required: true
@@ -196,7 +181,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/CfiDetailResponse"
         "404": { $ref: "#/components/responses/NotFound" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /consultation-fees-invoices/{id}/status:
     patch:
@@ -244,7 +228,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/Cfi"
         "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: |
@@ -266,10 +249,6 @@ paths:
         The `If-Match` header carries the version; returns 409 VERSION_MISMATCH
         on conflict.
       parameters:
-        - $ref: "#/components/parameters/XTenantId"
-        - $ref: "#/components/parameters/XTimestamp"
-        - $ref: "#/components/parameters/XSignature"
-        - $ref: "#/components/parameters/XServiceId"
         - name: id
           in: path
           required: true
@@ -311,7 +290,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: |
@@ -325,42 +303,6 @@ paths:
                 $ref: "#/components/schemas/ConflictResponse"
 
 components:
-  securitySchemes:
-    HmacAuth:
-      type: "apiKey"
-      in: "header"
-      name: "X-Signature"
-      description: |
-        HMAC-SHA256 signature. See `hmac-auth.md` for the exact algorithm.
-
-        Required headers on every request (except /healthz):
-        - `X-Service-Id: hms-bff`
-        - `X-Timestamp: <unix-seconds>` (within ±5 minutes of server time)
-        - `X-Tenant-Id: <uuid>` (the verified tenant identity)
-        - `X-Signature: <hex>` (HMAC of `METHOD || "\n" || path || "\n" || sha256(body) || "\n" || timestamp || "\n" || serviceId || "\n" || tenantId`)
-
-  parameters:
-    XTenantId:
-      name: X-Tenant-Id
-      in: header
-      required: true
-      schema: { type: "string", format: "uuid" }
-    XTimestamp:
-      name: X-Timestamp
-      in: header
-      required: true
-      schema: { type: "integer", description: "Unix seconds" }
-    XSignature:
-      name: X-Signature
-      in: header
-      required: true
-      schema: { type: "string", description: "Hex-encoded HMAC-SHA256" }
-    XServiceId:
-      name: X-Service-Id
-      in: header
-      required: true
-      schema: { type: "string", enum: ["hms-bff"] }
-
   schemas:
     HealthResponse:
       type: "object"
@@ -524,12 +466,6 @@ components:
   responses:
     BadRequest:
       description: Validation error
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    Unauthorized:
-      description: HMAC signature missing, invalid, expired, or replayed
       content:
         application/json:
           schema:

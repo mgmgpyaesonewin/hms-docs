@@ -98,7 +98,7 @@ The on-prem install is **single-tenant in practice** (one hospital), so the tena
 1. **Tune Postgres.** Default settings are conservative. Bumping `shared_buffers` to 4 GB and `effective_cache_size` to 12 GB gives the planner more room. Requires a Postgres restart, low risk.
 2. **Tune the API CPU/memory limits** in the systemd units. Default is 100% CPU / 512 MB. Bump to 200% / 1 GB.
 3. **Upgrade the host.** Add CPU cores and RAM. Cheapest and safest.
-4. **Add a second host for the API.** Read-only scale-out: the API is stateless. Requires the HMAC secret to be shared between hosts.
+4. **Add a second host for the API.** Read-only scale-out: the API is stateless.
 5. **Shard by tenant.** If the hospital wants to deploy multi-tenant in the future, each tenant's data can go to a separate Postgres schema. The data model supports this with a small change.
 
 ---
@@ -119,7 +119,7 @@ If it grows to 10x (20,000/day):
 
 At 10x, the host needs to be upgraded. Two options:
 - **Vertical:** 8 vCPU, 32 GB RAM, 500 GB SSD. ~$1-2k one-time cost.
-- **Horizontal:** add a second host for the API. Worker stays on the primary. Requires shared HMAC secret.
+- **Horizontal:** add a second host for the API. Worker stays on the primary.
 
 ---
 

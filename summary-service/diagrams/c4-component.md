@@ -10,10 +10,9 @@ C4Component
     title Component View: Summary Service (single codebase, two systemd units)
 
     Container_Boundary(c1, "Summary Service codebase") {
-        Component(http_server, "HTTP Server", "Express bootstrap", "src/http/server.ts. Mounted under --mode=api. Wires helmet, cors, rawBody capture, HMAC, tenant guard, error handler, routes.")
+        Component(http_server, "HTTP Server", "Express bootstrap", "src/http/server.ts. Mounted under --mode=api. Wires helmet, cors, rawBody capture, tenant guard, error handler, routes. (No auth in v1.)")
         Component(inbox_worker, "Inbox Worker", "Outbox poller loop", "src/workers/. Polls event_outbox with FOR UPDATE SKIP LOCKED; creates CFIs; updates Redis. Mounted under --mode=worker.")
-        Component(hmac_auth, "HMAC Auth Middleware", "Express middleware", "src/http/middleware/hmac-auth.ts. Validates X-Signature, X-Timestamp, X-Service-Id, X-Tenant-Id; ±5 min skew; 10k-LRU replay cache.")
-        Component(tenant_guard, "Tenant Guard", "Express middleware", "src/http/middleware/tenant-guard.ts. Reads verified tenantId from req, attaches req.prisma = tenant-scoped Prisma client.")
+        Component(tenant_guard, "Tenant Guard", "Express middleware", "src/http/middleware/tenant-guard.ts. Reads tenantId from req (set by BFF or request), attaches req.prisma = tenant-scoped Prisma client.")
         Component(tenant_scope, "Tenant-scope Prisma Extension", "Prisma extension", "src/db/tenant-scope.ts. Forces where: { tenantId } on every query on the CFI model.")
 
         Component(cfi_routes, "CFI Routes", "Express handlers", "src/http/routes/cfi.routes.ts. All 5 business routes in one file: list, aggregates, detail, PATCH /:id/status, POST /:id/adjustment.")
@@ -38,8 +37,7 @@ C4Component
     ContainerDb_Ext(postgres, "PostgreSQL", "")
     ContainerDb_Ext(redis, "Redis", "")
 
-    Rel(http_server, hmac_auth, "Wraps every /consultation-fees-invoices/* request")
-    Rel(http_server, tenant_guard, "After HMAC; attaches tenant-scoped Prisma to req")
+    Rel(http_server, tenant_guard, "Attaches tenant-scoped Prisma to req")
     Rel(http_server, cfi_routes, "Mounts")
     Rel(http_server, health_routes, "Mounts (no auth)")
 
@@ -88,12 +86,12 @@ src/
   config/
     index.ts                      ← Zod-validated env (cached)
   http/
-    server.ts                     ← createApp(): helmet + cors + rawBody + pino + HMAC + tenant + error handler + routes
+    server.ts                     ← createApp(): helmet + cors + rawBody + pino + tenant + error handler + routes
     routes/
       health.routes.ts            ← GET /healthz (no auth)
       cfi.routes.ts               ← 5 business routes: list, aggregates, detail, PATCH /:id/status, POST /:id/adjustment
     middleware/
-      hmac-auth.ts                ← 4 headers + 6-field canonical + SHA-256, ±5 min skew, 10k LRU replay
+      hmac-auth.ts                ← (reserved for v2 service-to-service auth)
       tenant-guard.ts             ← attaches req.prisma = createTenantScopedPrisma(req.tenantId, prisma)
       error-handler.ts            ← (currently inlined in server.ts)
   workers/
@@ -115,7 +113,7 @@ src/
   lib/
     logger.ts                     ← pino instance + child loggers
     errors.ts                     ← AppError, NotFoundError, ConflictError, ValidationError
-    hmac.ts                       ← HMAC-SHA256 primitives (loadSecret, computeSignature, safeEqual, sha256Hex, buildCanonical)
+    hmac.ts                       ← (reserved for v2 service-to-service auth)
     redis.ts                      ← ioredis singleton (lazy-init)
     redis-counters.ts             ← HINCRBY / HINCRBYFLOAT for the daily aggregate buckets (no Lua)
     validators/

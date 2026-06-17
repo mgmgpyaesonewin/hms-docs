@@ -17,30 +17,22 @@ How the Summary Service goes from "code on disk" to "live in production serving 
    ```
    This creates the new tables (event_outbox + CFI + audit tables) and the `pg_trgm` GIN index on `lower(invoice_no)`. Idempotent. The migration enables the `pg_trgm` extension if it isn't already.
 
-2. Generate the HMAC secret:
-   ```bash
-   openssl rand -hex 32 > /etc/ycare-summary/shared-secret
-   chmod 0440 /etc/ycare-summary/shared-secret
-   chown root:ycare-summary /etc/ycare-summary/shared-secret
-   ```
-   Copy the secret value to a secure place — the BFF will need it.
+2. Write `/etc/ycare-summary/env` from the template in `ops/env.template`. The HMS team owns this file.
 
-3. Write `/etc/ycare-summary/env` from the template in `ops/env.template`. The HMS team owns this file.
-
-4. Install the systemd units:
+3. Install the systemd units:
    ```bash
    cp ops/ycare-summary-api.service /etc/systemd/system/
    cp ops/ycare-summary-worker.service /etc/systemd/system/
    systemctl daemon-reload
    ```
 
-5. Start the services:
+4. Start the services:
    ```bash
    systemctl enable --now ycare-summary-api.service
    systemctl enable --now ycare-summary-worker.service
    ```
 
-6. Verify they're running:
+5. Verify they're running:
    ```bash
    systemctl status ycare-summary-api.service
    systemctl status ycare-summary-worker.service
@@ -48,7 +40,7 @@ How the Summary Service goes from "code on disk" to "live in production serving 
    # Expected: {"status":"ok","uptimeSeconds":<n>}
    ```
 
-7. **Verify the worker is polling the (empty) outbox:**
+6. **Verify the worker is polling the (empty) outbox:**
    ```bash
    journalctl -u ycare-summary-worker.service -n 50
    # Expected: log lines about poll claims, no events yet
@@ -181,7 +173,6 @@ How the Summary Service goes from "code on disk" to "live in production serving 
    - Outbox `PENDING` and `IN_PROGRESS` counts stay near 0 (worker is keeping up).
    - `DEAD` count is 0 (no poison events).
    - Worker CPU and memory are within expected ranges.
-   - No `BAD_SIGNATURE` or `STALE_TIMESTAMP` errors in the API log.
 
 **Rollback:** disable the admin tab in the HMS UI. Keep the worker running to drain any in-flight events. After 1 day of inactivity, the worker can be stopped.
 
@@ -255,5 +246,4 @@ This is a v2 feature.
 ## Open questions for the cutover
 
 - **Who owns the HMS code change at the OPD invoice insertion site?** The brief assumes the HMS team. If the Summary Service team owns it, the coordination changes.
-- **When can we use the production HMAC secret for testing?** Phase 1 needs a way to test the BFF-to-Summary-Service auth without a real secret in the test environment. A test-only secret in the BFF's test config works.
 - **What is the rollback SLA?** "Reverting the feature flag" takes <5 minutes. "Reverting the DB migration" takes longer (manual SQL). Decide in advance which is the rollback of record for each phase.

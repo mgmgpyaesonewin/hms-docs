@@ -36,7 +36,6 @@ C4Deployment
         }
 
         Deployment_Node(fs, "Filesystem", "ext4 / btrfs") {
-            ContainerDb(secret, "/etc/ycare-summary/shared-secret", "Mode 0400, owner root:ycare-summary")
             ContainerDb(logs, "/var/log/ycare-summary/", "api.log, worker.log, error.log. logrotate daily, 90d retention")
             ContainerDb(env, "/etc/ycare-summary/env", "DATABASE_URL, REDIS_URL, LOG_LEVEL, HOSTNAME_SHORT, OUTBOX_*, PRUNER_*")
         }
@@ -82,12 +81,11 @@ C4Deployment
 | `/opt/ycare-summary/` | `root:ycare-summary` | 0750 | App install dir |
 | `/opt/ycare-summary/dist/` | `root:ycare-summary` | 0750 | Compiled JS |
 | `/etc/ycare-summary/env` | `root:ycare-summary` | 0640 | Env vars (DATABASE_URL etc.) |
-| `/etc/ycare-summary/shared-secret` | `root:ycare-summary` | 0440 | HMAC shared secret |
 | `/var/log/ycare-summary/` | `ycare-summary:ycare-summary` | 0750 | Log files |
 
 ## Backup hooks
 
-- The HMS BFF reads `/etc/ycare-summary/shared-secret` at startup. A backup of `/etc/ycare-summary/` (with the secret redacted) is taken nightly.
+- A backup of `/etc/ycare-summary/` is taken nightly.
 - A backup of `/var/log/ycare-summary/` is taken weekly (longer retention than the on-host logrotate).
 - The Postgres backup (existing hospital policy) covers all DB state.
 
@@ -96,5 +94,5 @@ C4Deployment
 If the host becomes a bottleneck (see `ops/capacity-plan.md`):
 
 - **Vertical:** upgrade CPU/RAM. Easiest.
-- **Horizontal (read API only):** add a second Summary API process on a second host. The API is stateless (the DB has all the data); the HMAC secret is shared via a config-management tool (or rsync from the primary). The worker stays on the primary to avoid two workers racing on the outbox.
+- **Horizontal (read API only):** add a second Summary API process on a second host. The API is stateless (the DB has all the data). The worker stays on the primary to avoid two workers racing on the outbox.
 - **Horizontal (worker):** possible with `FOR UPDATE SKIP LOCKED` guaranteeing no double-processing, but Postgres connection count becomes the bottleneck before worker count does. Only worth it if outbox processing rate is the constraint.

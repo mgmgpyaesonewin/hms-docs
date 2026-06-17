@@ -25,7 +25,7 @@ The HMS is multi-tenant by design. The on-prem install is single-tenant in pract
 
 ## Consequences
 
-- **Layer 1 — API edge:** the BFF passes `X-Tenant-Id: <tenantId>` as an HMAC-signed header (see ADR 0008). The Summary Service reads the tenant from the verified JWT/JWS-claim (not from the request body), validates it's present, and uses it for the entire request.
+- **Layer 1 — API edge:** the BFF passes `X-Tenant-Id: <tenantId>` as a request header. v1 has no auth, so this header is trusted on the wire; v2 will add a real service-to-service auth and bind the tenant to the auth context. The Summary Service validates the header is a valid UUID and uses it for the entire request (a body/query `tenantId` is ignored).
 - **Layer 2 — Query layer:** a Prisma client extension injects `where: { tenantId: <verifiedTenantId> }` into every query. A test suite asserts that no query can omit the filter — every test runs against a two-tenant fixture and verifies that a query scoped to tenant A cannot return tenant B's rows.
 - **Layer 3 — Redis key namespace:** all keys are prefixed `summary:consultation_fees:{tenantId}:...` and are constructed with the verified `tenantId` from Layer 1 (`src/lib/redis-counters.ts:17-19`). There is no runtime cross-check that the key prefix matches the verified tenant — correctness relies on every Redis-touching code path going through this factory. A future code path that constructs a key by hand would bypass this; a code-review checklist item is the primary guard.
 - **Layer 4 — Logs:** every log line carries `tenantId` as a required field. Pino binding ensures the field is set; missing-field is a startup config error.
@@ -39,6 +39,6 @@ The HMS is multi-tenant by design. The on-prem install is single-tenant in pract
 
 ## Related
 
-- ADR 0008 (Service-to-service auth)
 - ADR 0009 (Redis cache model)
 - ADR 0011 (Observability)
+- (Service-to-service auth is a v2 follow-up; no ADR in v1.)

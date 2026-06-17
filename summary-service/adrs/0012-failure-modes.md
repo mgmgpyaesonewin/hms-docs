@@ -37,12 +37,11 @@ These cases have a defensive design but are not expected to fire under normal op
 
 | # | Failure | Response |
 |---|---|---|
-| 6 | Status update requested on a CFI from a different tenant | API returns `404 Not Found` (not `403 Forbidden` — don't leak the existence of a cross-tenant row). Defense comes from the HMAC `X-Tenant-Id` being part of the canonical string (ADR 0008), the `tenantId` on every query (Prisma extension, ADR 0007), and the per-tenant Redis key prefix. This case should be unreachable in practice. |
+| 6 | Status update requested on a CFI from a different tenant | API returns `404 Not Found` (not `403 Forbidden` — don't leak the existence of a cross-tenant row). Defense comes from the `tenantId` on every query (Prisma extension, ADR 0007) and the per-tenant Redis key prefix. This case should be unreachable in practice — v1 has no auth, so trust in the `X-Tenant-Id` header is by client agreement; v2 will bind the tenant to the auth context. |
 | 7 | Two workers running simultaneously (split-brain) | The outbox poll uses `FOR UPDATE SKIP LOCKED`, so two workers cannot process the same outbox row. The CFI insert uses the unique `event_id` constraint, so a race between two workers processing different events for the same OPD invoice (shouldn't happen, but defensively) results in one insert winning. No data corruption. v1 runs a single worker; this defense supports a future horizontal scale. |
-| 10 | Host clock skew between BFF and service | The ±5-minute HMAC timestamp window (ADR 0008) tolerates up to 5 minutes of skew. Larger skew breaks auth. systemd-timesyncd (or chrony) is configured on the host to keep time in sync via NTP — the hospital's network setup is expected to provide an NTP source. |
+| 10 | (was) Host clock skew between BFF and service | Removed in v1 — the HMAC timestamp window is gone with the auth. NTP sync is still required for general operations (outbox polling, audit `changed_at` correctness, etc.) and is configured the same way. |
 
 ## Related
 
 - ADR 0009 (Redis cache model — covers failure modes 3, 4)
-- ADR 0008 (HMAC auth — covers failure mode 10)
 - ADR 0001 (Outbox — covers failure mode 8)

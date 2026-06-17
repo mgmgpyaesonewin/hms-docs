@@ -19,7 +19,7 @@ C4Context
     Rel(doctor, ycare_hms, "Uses OPD workflow", "HTTPS / browser")
     Rel(op_staff, ycare_hms, "Generates OPD invoice", "HTTPS / browser")
 
-    Rel(ycare_hms, summary, "Submits outbox events; reads summary; updates status", "HMAC-signed HTTP / 127.0.0.1:4000")
+    Rel(ycare_hms, summary, "Submits outbox events; reads summary; updates status", "HTTP / 127.0.0.1:4000 (no auth in v1)")
 
     Rel(summary, postgres, "Reads/writes CFI rows, status, adjustments, outbox", "TCP 5432")
     Rel(summary, redis, "Reads/writes aggregate counters", "TCP 6379 / 127.0.0.1")
@@ -31,7 +31,7 @@ C4Context
 
 - **Admin** interacts only with the HMS; the HMS proxies to the Summary Service. The admin never talks to the Summary Service directly.
 - **OPD staff** generates OPD invoices in the HMS. The Summary Service does not see the staff directly — it only sees the resulting outbox events in the DB.
-- The **HMS → Summary Service** link is the only call surface. It is local (127.0.0.1:4000) and HMAC-signed (see `api/hmac-auth.md`).
+- The **HMS → Summary Service** link is the only call surface. It is local (127.0.0.1:4000). v1 has no service-to-service auth; trust relies on the localhost bind. Auth is a v2 follow-up.
 - **PostgreSQL** is shared between HMS and Summary Service. Both write to the same DB, in different tables.
 - **Redis** is new, local-only, used only by the Summary Service.
 

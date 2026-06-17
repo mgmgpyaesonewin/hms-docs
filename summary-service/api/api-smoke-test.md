@@ -2,14 +2,13 @@
 
 - **Generated:** 2026-06-14T11:52:01Z
 - **API base:** http://localhost:4000
-- **Service ID:** hms-bff
 - **Test data:** 2 UNPAID CFIs in the dev DB (from earlier end-to-end worker tests)
   - CFI 1: `019ec55a-d656-72f0-ae65-c8e474905518` — tenant `00000000-0000-0000-0000-000000000001`, amount 3000.00
   - CFI 2: `019ec570-f8a3-7360-8d5f-50583c9328d8` — tenant `00000000-0000-0000-0000-000000000003`, amount 245000.00
 
-Auth scheme: HMAC-SHA256 over `METHOD\nPATH\nSHA256(BODY)\nTIMESTAMP\nSERVICE_ID\nTENANT_ID`
-(per `hms-docs/summary-service/api/hmac-auth.md`). Every signed request below
-includes the actual `X-Signature` and `X-Timestamp` that was used.
+Auth: **none in v1.** The service binds to `127.0.0.1` and trusts the BFF. No
+`X-Signature` / `X-Timestamp` / `X-Service-Id` / `X-Tenant-Id` headers are
+required to call any endpoint. (Auth is a v2 follow-up.)
 
 ---
 
@@ -42,96 +41,6 @@ DEL summary:consultation_fees:00000000-0000-0000-0000-000000000004:2026-06-13:al
 
 ---
 
-## Section 1 — Auth enforcement (negative tests)
-
-The HMAC middleware must reject: missing headers, unknown service, bad
-signature, stale timestamp, non-UUID tenant, and replayed signatures.
-
-
-### 1.1 No auth headers
-
-**Request:**
-
-```http
-GET /consultation-fees-invoices HTTP/1.1
-Host: localhost:4000
-```
-**Status:** 401
-
-```json
-{
-    "code": "MISSING_AUTH_HEADERS",
-    "message": "One or more required auth headers are missing"
-}
-```
-
-
-### 1.2 Wrong `X-Service-Id`
-
-**Request:**
-
-```http
-GET /consultation-fees-invoices HTTP/1.1
-Host: localhost:4000
-X-Service-Id: not-the-bff
-X-Signature: 00
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
-```
-**Status:** 401
-
-```json
-{
-    "code": "UNKNOWN_SERVICE",
-    "message": "Unknown service id: not-the-bff"
-}
-```
-
-
-### 1.3 Stale `X-Timestamp` (1 hour old)
-
-**Request:**
-
-```http
-GET /consultation-fees-invoices HTTP/1.1
-Host: localhost:4000
-X-Service-Id: hms-bff
-X-Signature: 344edf25eec96dea1466c301c4d788bb46f35fb4ae2c0a8679a9df1857a2e2b5
-X-Timestamp: 1781434321
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
-```
-**Status:** 401
-
-```json
-{
-    "code": "STALE_TIMESTAMP",
-    "message": "X-Timestamp is outside the acceptable \u00b15-minute window"
-}
-```
-
-
-### 1.4 Non-UUID `X-Tenant-Id`
-
-**Request:**
-
-```http
-GET /consultation-fees-invoices HTTP/1.1
-Host: localhost:4000
-X-Service-Id: hms-bff
-X-Signature: 680684c862c1341789e26a0f58df4ed1fda5f24bffa9d47cd8a305a118fa72e0
-X-Timestamp: 1781437921
-X-Tenant-Id: not-a-uuid
-```
-**Status:** 401
-
-```json
-{
-    "code": "INVALID_TENANT_ID",
-    "message": "X-Tenant-Id is not a valid UUID"
-}
-```
-
----
 
 ## Section 2 — Read flow (happy path)
 
@@ -147,10 +56,6 @@ Tenant 1 should see only its own CFIs; filtering by status=UNPAID should narrow 
 GET /consultation-fees-invoices?status=UNPAID&limit=5 HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 120e82803813a8820ebf8eb4d49329798156f11f85f08eb0644151f72120e917
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 ```
 
 **Response:**
@@ -176,10 +81,6 @@ Tenant 3 should see only its own CFIs.
 GET /consultation-fees-invoices?status=UNPAID&limit=5 HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 3c696ec36ce47e593570ee1b57c69ddcbc07353c3d92a984d4ede4160878b836
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000003
 ```
 
 **Response:**
@@ -205,10 +106,6 @@ Tenant 3 listing should not include tenant 1's `019ec55a-d656-72f0-ae65-c8e47490
 GET /consultation-fees-invoices?limit=10 HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: d0d766e1f90e0a4930a0d0723b461af73186413c37128af3b7dbf1cfac2fba32
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000003
 ```
 
 **Response:**
@@ -257,10 +154,6 @@ Should return the full payload with `statusHistory` and `adjustmentHistory` arra
 GET /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518 HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: ddf7ac5f8625c6830ec7413df6e32610ec5995394a1e4cf49afd721c11891b02
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 ```
 
 **Response:**
@@ -316,10 +209,6 @@ ADR 0012 failure mode 6: cross-tenant access returns 404 to not leak existence.
 GET /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518 HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: c9c366ea179de269c4275534dd37f6f92370c332a7850f3f74b22e9d290cd36b
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000003
 ```
 
 **Response:**
@@ -345,10 +234,6 @@ Unfiltered request should hit Redis (ADR 0009 §"Read fallback"). The `X-Cache-S
 GET /consultation-fees-invoices/aggregates HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: c73260e4b404462a1e8c5486c2bfc232ec6439be93652d7c90c5ad5c00cbf4e6
-X-Timestamp: 1781437921
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 ```
 
 **Response:**
@@ -396,10 +281,6 @@ Any filter bypasses Redis. The aggregator runs the GROUP BY against Postgres and
 GET /consultation-fees-invoices/aggregates?status=UNPAID HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 8fc39d398edee812119c848d43a91c65c109a1ef90d78d76533f247be0da66be
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 ```
 
 **Response:**
@@ -451,10 +332,6 @@ ADR 0005 (state machine) + ADR 0006 (optimistic lock via `version`). Should bump
 PATCH /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518/status HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: dfea2a79bdc4ea1296274253177c766efaeab6c5a6494f7edfb81930351d9ec9
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 If-Match: 1
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -490,10 +367,6 @@ Should show status=PAID, paidAt set, version=2, statusHistory with one entry.
 GET /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518 HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 285a9ada76a79ff20ccfe3b0d534222cf8cf64c6274695993290dd65c369ef4c
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 ```
 
 **Response:**
@@ -549,10 +422,6 @@ ADR 0005: PAID is a terminal state. Already-PAID → PAID must be rejected.
 PATCH /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518/status HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: c8103e3090ca782486af145af54dbbce30cbf9a0d2b832d68ea3dbb2dc2fecbb
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 If-Match: 2
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -588,10 +457,6 @@ ADR 0014: adjustment is locked when status ≠ UNPAID.
 POST /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518/adjustment HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: b8ad8f5c0614da95177b459bca60fc2625f541e131c969a96c5302489bedb70c
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 If-Match: 2
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -627,10 +492,6 @@ VOID is the other terminal state. Should set `voidedAt` (not `paidAt`).
 PATCH /consultation-fees-invoices/019ec570-f8a3-7360-8d5f-50583c9328d8/status HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: a47adc641681f226357929bec053b2c97f66ef546eb92cac939dcf055315cde9
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000003
 If-Match: 1
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -666,10 +527,6 @@ Same lock — both terminal states block adjustment.
 POST /consultation-fees-invoices/019ec570-f8a3-7360-8d5f-50583c9328d8/adjustment HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: fc2c4d5ca58e917f711a31af8b7c054ac711ed1ffde560f35784f040242a7af0
-X-Timestamp: 1781437922
-X-Tenant-Id: 00000000-0000-0000-0000-000000000003
 If-Match: 2
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -726,10 +583,6 @@ Should succeed: amount=500, payout = amount - adjustment = 2000 - 500 = 1500, ve
 POST /consultation-fees-invoices//adjustment HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: d9aec052ed9e324d960a161ccd8bd28a82e49c00ce7601036b839b7afe5013b6
-X-Timestamp: 1781437927
-X-Tenant-Id: 00000000-0000-0000-0000-000000000004
 If-Match: 1
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -762,10 +615,6 @@ Should show `adjustment=500`, `payoutAmount=1500`, `adjustmentHistory` with one 
 GET /consultation-fees-invoices/ HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 1ed189585fe9c2278c7ed8b05d73f7cbbe900beb169c7a883c532e9ba9db742b
-X-Timestamp: 1781437927
-X-Tenant-Id: 00000000-0000-0000-0000-000000000004
 ```
 
 **Response:**
@@ -814,10 +663,6 @@ Constraint: 0 ≤ adjustment ≤ amount. The CFI amount is 2000; 99999 violates 
 POST /consultation-fees-invoices//adjustment HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 2c001868d168ad20d56dd4f398698a2c19bddcc4840029d67a8e609cbf2b3d90
-X-Timestamp: 1781437928
-X-Tenant-Id: 00000000-0000-0000-0000-000000000004
 If-Match: 2
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -854,10 +699,6 @@ CFI 1 is now at version=2 (after the earlier PATCH); passing `If-Match: 99` trig
 PATCH /consultation-fees-invoices/019ec55a-d656-72f0-ae65-c8e474905518/status HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: 29b5f5cefb744e3ce4ef835f52fd0f196bcc89260fbdcaaf18274e4b87c9121c
-X-Timestamp: 1781437928
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 If-Match: 99
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 
@@ -896,10 +737,6 @@ Tenant 1 trying to mutate tenant 3's CFI. The tenant-scoped Prisma extension on 
 PATCH /consultation-fees-invoices/019ec570-f8a3-7360-8d5f-50583c9328d8/status HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-X-Service-Id: hms-bff
-X-Signature: e8507ac6a547ae5518bb38eabccedda9fe985a6908406c47fad9979e521b302b
-X-Timestamp: 1781437928
-X-Tenant-Id: 00000000-0000-0000-0000-000000000001
 If-Match: 2
 X-User-Id: 019a290f-bdc0-7a12-a374-0264e6b53414
 

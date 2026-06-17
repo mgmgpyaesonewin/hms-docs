@@ -27,7 +27,6 @@ Operational procedures for the Summary Service. Each section is a self-contained
    - **Postgres is unreachable:** see section 2.
    - **Redis is unreachable:** see section 3.
    - **Missing env file:** `/etc/ycare-summary/env` doesn't exist or has wrong permissions.
-   - **Missing HMAC secret:** `/etc/ycare-summary/shared-secret` doesn't exist.
    - **Bad config:** typo in `DATABASE_URL` or `REDIS_URL`.
 4. Once the root cause is fixed, the systemd unit will auto-restart. To force a restart:
    ```bash
@@ -183,39 +182,9 @@ If the admin disputes this and the hospital's policy is different, this is a v2 
 
 ---
 
-## 7. Rotate the HMAC shared secret
+## 7. (reserved — was "Rotate the HMAC shared secret", removed in v1)
 
-**When:** every 90 days, or on suspected compromise.
-
-**Steps:**
-
-1. Generate a new secret on a workstation:
-   ```bash
-   openssl rand -hex 32
-   ```
-2. On the host, install the new secret as the "current":
-   ```bash
-   echo "<new-secret>" > /etc/ycare-summary/shared-secret.new
-   chmod 0440 /etc/ycare-summary/shared-secret.new
-   chown root:ycare-summary /etc/ycare-summary/shared-secret.new
-   ```
-3. **Plan a brief outage** (5-10 seconds is enough). Notify any in-flight BFF requests to retry.
-4. Restart the Summary Service and the HMS BFF:
-   ```bash
-   systemctl restart ycare-summary-api.service
-   systemctl restart ycare-summary-worker.service
-   # Restart the HMS app per its own process model (e.g., pm2 restart, systemctl restart nextjs-hms)
-   ```
-5. **In-flight requests during the restart will fail with `BAD_SIGNATURE`** if they were signed with the old secret. The BFF should retry on `401`; the UI should show a brief "reconnecting" message.
-6. Once both are restarted, the new secret is in use. Old secret is forgotten.
-7. Clean up:
-   ```bash
-   rm /etc/ycare-summary/shared-secret.new
-   ```
-
-**Verify:** the API accepts a request signed with the new secret. A request signed with the old secret returns `401 BAD_SIGNATURE`.
-
-**For zero-downtime rotation** (e.g., if the hospital cannot tolerate a 10-second outage), see the dual-secret procedure in `api/hmac-auth.md` (not yet implemented in v1; v1 requires a brief restart).
+v1 has no service-to-service auth, so there is no secret to rotate. If auth is added in a future version, this section will be replaced with the rotation procedure.
 
 ---
 
@@ -405,7 +374,7 @@ If the admin disputes this and the hospital's policy is different, this is a v2 
    # Use the NodeSource binary distribution
    ```
 5. Install the Summary Service (section 12).
-6. Restore `/etc/ycare-summary/` from the config backup. This includes the HMAC secret — if the BFF on the new server doesn't have the matching secret, all requests will fail. Coordinate with the HMS team.
+6. Restore `/etc/ycare-summary/` from the config backup.
 7. Start the services. The first admin page-load of each affected day repopulates Redis via cache-aside. No startup hook, no cron.
 
 **Verify:** the admin summary page shows the recent CFIs. The OPD counter flow works end-to-end.
