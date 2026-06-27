@@ -11,6 +11,11 @@ schemas, the API contracts, the operational runbooks.
 
 ```
 hms-docs/
+├── ONBOARDING.md                  workspace onboarding (start here)
+├── onboarding/                    per-service onboarding packets
+│   ├── hms-app.md
+│   ├── hms-summary-service.md
+│   └── infra.md
 ├── api/                REST API surface for the HMS (the Next.js monolith)
 ├── etc/                Miscellaneous design notes / TODOs
 └── summary-service/    Detailed design for the Summary Service microservice
@@ -72,6 +77,7 @@ should be brought back into line.
 
 ## How to use this repo
 
+- **New to the repo** → start with [`ONBOARDING.md`](./ONBOARDING.md), then the per-service packet that matches your task: [`onboarding/hms-app.md`](./onboarding/hms-app.md), [`onboarding/hms-summary-service.md`](./onboarding/hms-summary-service.md), [`onboarding/infra.md`](./onboarding/infra.md).
 - New engineer joining the Summary Service → start with
   [`summary-service/README.md`](./summary-service/README.md) (it has a
   guided reading order).
