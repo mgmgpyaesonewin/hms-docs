@@ -1,49 +1,61 @@
 # YCare HMS — Design Artifacts
 
-This repository holds the design documentation for YCare HMS (the
-Next.js hospital management system) and its companion services. The
-authoritative source for how the system is built is the code in the
-sibling repos (`hms-app/`, `hms-summary-service/`, `infra/`); this repo
-captures the *why* — Architecture Decision Records, the canonical
-schemas, the API contracts, the operational runbooks.
+This repository holds the design documentation for YCare HMS and its
+companion services. The authoritative source for *how* the system is
+built is the code in the sibling repos (`hms-app/`,
+`hms-summary-service/`, `infra/`); this repo captures the *why* —
+architecture decisions, schemas, API contracts, operational runbooks.
 
 ## Layout
 
 ```
 hms-docs/
-├── ONBOARDING.md                  workspace onboarding (start here)
-├── onboarding/                    per-service onboarding packets
+├── README.md                       this file — start here
+├── ONBOARDING.md                   workspace onboarding (sibling repos)
+│
+├── onboarding/                     per-service onboarding packets
 │   ├── hms-app.md
 │   ├── hms-summary-service.md
 │   └── infra.md
-├── api/                REST API surface for the HMS (the Next.js monolith)
-├── etc/                Miscellaneous design notes / TODOs
-└── summary-service/    Detailed design for the Summary Service microservice
+│
+├── hms-app/                        design home for the HMS monolith
+│   ├── README.md
+│   ├── api/                        REST + tRPC surface (manifest, paths/, schemas/)
+│   ├── onboarding/                 phased Solution Architect checklist
+│   └── *.md                        cross-cutting design notes
+│
+├── summary-service/                design home for the Summary Service microservice
+│   └── README.md                   guided reading order
+│
+├── code-reviews/                   historical PR reviews, by-month/
+│   └── README.md
+│
+├── prompts/                        reusable AI / process prompts
+│   ├── README.md
+│   ├── build/
+│   ├── review/
+│   ├── audit/
+│   ├── debug/
+│   └── ux/
+│
+├── ops/                            cross-cutting operational artifacts
+│   ├── README.md
+│   ├── incidents/
+│   └── deploy/
+│
+├── diagrams/                       cross-cutting diagrams
+│
+└── archive/                        superseded docs (not authoritative)
 ```
 
-### `api/` — HMS REST API surface
+### `hms-app/` — the HMS monolith design
 
-The external HTTP API exposed by `hms-app`. Generated from a manifest,
-not from the live Next.js routes — kept here so the contract is
-reviewable independently of code.
+The Next.js hospital management system. This tree holds the API
+surface (OpenAPI generation state lives in `api/manifest.yaml`),
+the Solution Architect onboarding plan, and standalone design notes
+(pricing, cost methods).
 
-- `manifest.yaml` — the full OpenAPI-style manifest of every route
-  the HMS exposes (paths, methods, request/response shapes)
-- `paths/`, `schemas/` — split-out path and schema files (referenced
-  from the manifest)
-- `openapi-generator-prompt.md` — the brief for generating the
-  client SDK / type definitions from the manifest
-
-This folder is read-only reference. The code that *implements* the
-API lives in `hms-app/src/app/api/`.
-
-### `etc/` — Miscellaneous
-
-Loose notes that don't belong in the structured design folders.
-
-- `TODO.md` — open questions and known gaps
-
-### `summary-service/` — the Summary Service design (the most detailed folder)
+### `summary-service/` — the Summary Service design
 
 The newest and most actively maintained design in this repo. The
 **Summary Service** is an Express + TypeScript microservice that
@@ -51,41 +63,54 @@ auto-creates `Consultation Fees Invoice` rows from HMS OPD billings
 (via a Postgres transactional outbox) and serves the admin summary
 API.
 
-This folder is comprehensive and has its own [README](./summary-service/README.md)
-that explains the folder layout, reading order, and the v1/v2 split.
-Read it as the entry point.
+This folder is comprehensive and has its own
+[README](./summary-service/README.md) that explains the folder layout,
+reading order, and the v1/v2 split. Read it as the entry point.
 
 In short: 14 ADRs, the canonical DDL + Prisma additions, the OpenAPI
-spec, C4 + sequence diagrams, and a complete ops package (systemd units,
-observability, security review, cutover plan, runbook, capacity plan).
+spec, C4 + sequence diagrams, and a complete ops package (systemd
+units, observability, security review, cutover plan, runbook,
+capacity plan).
 
-The most-recent code lives in the `hms-summary-service/` repo in the
-parent workspace; the `api/api-smoke-test.md` file in that folder
-captures a live end-to-end run of the API for review.
+### `code-reviews/`, `prompts/`, `ops/`, `diagrams/`
+
+Cross-cutting artifacts. See each folder's README for what's inside
+and the naming convention.
+
+### `archive/`
+
+Old or superseded docs (e.g. `redis-events-as-service.md` — replaced
+by the transactional-outbox pattern in `summary-service/`). Not
+authoritative.
 
 ## Doc-vs-code state
 
 The `summary-service/` folder was audited against the live code in
-November 2026. The audit closed 9 of 14 findings (3 critical + 6
-medium). Five low-priority findings remain as backlog and are listed
-in the audit-fix commit message.
+November 2026. The audit closed 9 of 14 findings (3 critical +
+6 medium). Five low-priority findings remain as backlog.
 
-For the HMS REST API (`api/`), the manifest is the source of truth
-and is updated when routes change. If a route in `hms-app/src/app/api/`
-diverges from the manifest, the manifest is right and the code
-should be brought back into line.
+For the HMS REST API (`hms-app/api/`), the `manifest.yaml` is the
+source of truth and is updated when routes change. If a route in
+`hms-app/src/app/api/` diverges from the manifest, the manifest is
+right and the code should be brought back into line.
 
 ## How to use this repo
 
-- **New to the repo** → start with [`ONBOARDING.md`](./ONBOARDING.md), then the per-service packet that matches your task: [`onboarding/hms-app.md`](./onboarding/hms-app.md), [`onboarding/hms-summary-service.md`](./onboarding/hms-summary-service.md), [`onboarding/infra.md`](./onboarding/infra.md).
-- New engineer joining the Summary Service → start with
-  [`summary-service/README.md`](./summary-service/README.md) (it has a
-  guided reading order).
-- Reviewing the HMS REST contract → start with
-  [`api/manifest.yaml`](./api/manifest.yaml).
-- Looking for the rationale behind a specific decision → `adrs/`
-  inside the relevant service folder. Each ADR is self-contained
-  (Context, Options, Decision, Rationale, Consequences, Related).
-- Operational questions (how to deploy, how to recover, how the
-  on-prem hospital host is sized) → `ops/` inside the relevant
-  service folder.
+- **New to the workspace** → start with [`ONBOARDING.md`](./ONBOARDING.md),
+  then the per-service packet that matches your task:
+  [`onboarding/hms-app.md`](./onboarding/hms-app.md),
+  [`onboarding/hms-summary-service.md`](./onboarding/hms-summary-service.md),
+  [`onboarding/infra.md`](./onboarding/infra.md).
+- **Reviewing the HMS REST contract** → start with
+  [`hms-app/api/manifest.yaml`](./hms-app/api/manifest.yaml).
+- **New engineer on the Summary Service** → start with
+  [`summary-service/README.md`](./summary-service/README.md) (it has
+  a guided reading order).
+- **Rationale behind a specific decision** → `adrs/` inside the
+  relevant service folder. Each ADR is self-contained.
+- **Operational questions** (deploy, recovery, on-prem sizing) →
+  `ops/` inside the relevant service folder, or the top-level
+  [`ops/`](./ops/) for repo-wide items.
+- **Looking for a past PR review** →
+  [`code-reviews/by-month/`](./code-reviews/).
+- **Feeding a prompt to an AI tool** → [`prompts/`](./prompts/).
