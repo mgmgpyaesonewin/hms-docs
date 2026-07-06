@@ -5,3 +5,5 @@
 *.swp
 
 .claude-flow/
+.claude/
+.scratch/

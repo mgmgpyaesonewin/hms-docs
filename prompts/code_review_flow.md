@@ -1,2 +1,5 @@
-From this repo https://github.com/MyanCare/Ycare-HMS, review PR #2770, #2772, #2775, #2784, #2831
-and write feedback per PR into /Users/pyaesonewin/Documents/work/hms-system/hms-docs/code-reviews by spwaning subagents for each PR.
+Skill Name: /pr-batch-review
+
+Repo - https://github.com/MyanCare/Ycare-HMS
+PRs - #2876, #2875, #2873, #2869, #2863, #2852, #2878, #2877
+Feedback location - /Users/pyaesonewin/Documents/work/hms-system/hms-docs/code-reviews
