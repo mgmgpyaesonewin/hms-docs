@@ -114,3 +114,15 @@ right and the code should be brought back into line.
 - **Looking for a past PR review** →
   [`code-reviews/by-month/`](./code-reviews/).
 - **Feeding a prompt to an AI tool** → [`prompts/`](./prompts/).
+
+## Document conventions
+
+- **`SPEC.md` files are exempt from the workspace 500-line rule — kept
+  detailed for AI + human readers.** Per-service `SPEC.md`s (e.g.
+  [`hms-app/SPEC.md`](./hms-app/SPEC.md),
+  [`summary-service/SPEC.md`](./summary-service/SPEC.md)) are the
+  long-form, detailed specs of record; they prioritise completeness over
+  brevity. Other markdown in this repo follows the general 500-line
+  guidance. If a `SPEC.md` grows past a comfortable read, prefer
+  extracting a self-contained topic into `spec/{topic}.md` rather than
+  trimming — keep the numbered `§N` index stable.
