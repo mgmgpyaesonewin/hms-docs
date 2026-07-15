@@ -32,12 +32,12 @@ The Summary Service runs on a single on-prem host with no external observability
   - `/var/log/ycare-summary/api.log` — API logs
   - `/var/log/ycare-summary/worker.log` — worker logs
   - `/var/log/ycare-summary/error.log` — error-level lines from both, for grep-friendly alerting
-- **Log rotation:** `logrotate` config in `ops/observability.md`. Daily rotation, 90-day retention, gzip compression. Reopen-on-rotate via `pino` + `logrotate`'s `copytruncate` directive (or `SIGUSR1`-based reopen — `pino` supports this).
+- **Log rotation:** `logrotate` config in [[ops/observability|ops/observability.md]]. Daily rotation, 90-day retention, gzip compression. Reopen-on-rotate via `pino` + `logrotate`'s `copytruncate` directive (or `SIGUSR1`-based reopen — `pino` supports this).
 - **Audit tables:** `consultation_fees_invoice_status_changes` and `consultation_fees_invoice_adjustments` are the audit trail. Indefinite retention (covered by Postgres backup).
 - **No automated alerting in v1.** systemd's `Restart=on-failure` brings the unit back on a crash; the operator monitors health via `journalctl -u ycare-summary-api -u ycare-summary-worker -f` and the structured log files under `/var/log/ycare-summary/`. If the hospital later wants push-based alerts (webhook, email, pager), they can drop in `monit`, a healthchecks.io ping, or a Nagios check against `/healthz` — none of which are designed now. The system already produces the right signal in logs; the alerting delivery is a v2 concern.
 - **No metrics in v1.** If the operator needs a counter (e.g., "how many CFIs created today"), they query Postgres directly: `SELECT count(*) FROM consultation_fees_invoices WHERE created_at::date = current_date;`. Good enough for v1.
 
 ## Related
 
-- `ops/observability.md` for the full spec
-- ADR 0012 (Failure modes — the structured logs are how we diagnose these)
+- [[ops/observability|ops/observability.md]] for the full spec
+- [[0012-failure-modes|ADR 0012]] (Failure modes — the structured logs are how we diagnose these)

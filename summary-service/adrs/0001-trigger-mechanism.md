@@ -180,7 +180,7 @@ WHERE status = 'DONE'
 - **Atomicity.** The OPD billing insert and the outbox row commit in the same DB transaction. There is no window where one exists without the other. Redis Streams had a "crash between commit and XADD" window that required a reconciliation safety net.
 - **Debuggability.** `SELECT * FROM event_outbox WHERE status='DEAD'` finds stuck jobs. `SELECT * FROM event_outbox WHERE aggregate_id='<opd_invoice_id>'` finds every event for a given OPD invoice. `SELECT count(*), status FROM event_outbox GROUP BY status` is the health dashboard. None of these require learning a new tool.
 - **No new infra.** The HMS already has Postgres. pg-boss would require running a second job-runtime pointed at the same DB; Redis Streams would require Redis to be available for the publish path.
-- **At-least-once + idempotency = exactly-once effect.** The outbox is at-least-once (a claim can be reaped and re-processed). The `(tenant_id, opd_invoice_id)` UNIQUE constraint on the CFI (ADR 0004) plus the `event_id` UNIQUE constraint (ADR 0003) make re-processing a no-op.
+- **At-least-once + idempotency = exactly-once effect.** The outbox is at-least-once (a claim can be reaped and re-processed). The `(tenant_id, opd_invoice_id)` UNIQUE constraint on the CFI ([[0004-uniqueness-for-cfis|ADR 0004]]) plus the `event_id` UNIQUE constraint ([[0003-idempotency|ADR 0003]]) make re-processing a no-op.
 
 The trade-off accepted: **1-second poll latency** instead of sub-second `XREADGROUP` delivery. For an admin summary dashboard, 1s is invisible.
 
@@ -192,7 +192,7 @@ The trade-off accepted: **1-second poll latency** instead of sub-second `XREADGR
 - **Worker code:** ~150 lines for the poll loop, plus the stale-claim reaper and the daily pruner. Uses raw SQL for the `FOR UPDATE SKIP LOCKED` claim (Prisma's query API does not expose `SKIP LOCKED` directly).
 - **Polling latency:** ~1s in steady state. Tunable via `POLL_INTERVAL_MS`.
 - **Outbox size:** with daily pruning, the table stays under 2,000 rows in steady state. Even at 100x growth it's under 200,000 rows — the partial index keeps the poll query fast.
-- **Multi-tenant safety:** the outbox carries `tenant_id`; the worker reads it and includes it in the CFI payload. The `payload` JSONB includes the full event context, so the worker can re-create the CFI without an additional query to `opd_billings` (though it does query to compute the consultation fee; see ADR 0002 for the fee-computation flow).
+- **Multi-tenant safety:** the outbox carries `tenant_id`; the worker reads it and includes it in the CFI payload. The `payload` JSONB includes the full event context, so the worker can re-create the CFI without an additional query to `opd_billings` (though it does query to compute the consultation fee; see [[0002-service-decomposition|ADR 0002]] for the fee-computation flow).
 - **No "lost event" failure mode.** The outbox either committed with the OPD billing or it didn't. The previous Streams design had to add a 5-minute reconciliation job to compensate for the lost-event window; that is no longer needed.
 
 ## Future evolution: when to add pub/sub
@@ -249,10 +249,10 @@ Stay with outbox for v1. Re-evaluate when the second consumer lands, not before.
 
 ## Related
 
-- ADR 0002 (Service decomposition — the worker is the consumer of this outbox)
-- ADR 0003 (Idempotency — the `event_id` UNIQUE constraint on the CFI)
-- ADR 0004 (Uniqueness for CFIs — the `(tenant_id, opd_invoice_id)` constraint that makes re-processing safe)
-- ADR 0012 (Failure modes — the "stuck IN_PROGRESS" case)
-- ADR 0011 (Observability — outbox counters in logs)
-- `diagrams/sequences.md` — the "create CFI" sequence diagram uses this design
+- [[0002-service-decomposition|ADR 0002]] (Service decomposition — the worker is the consumer of this outbox)
+- [[0003-idempotency|ADR 0003]] (Idempotency — the `event_id` UNIQUE constraint on the CFI)
+- [[0004-uniqueness-for-cfis|ADR 0004]] (Uniqueness for CFIs — the `(tenant_id, opd_invoice_id)` constraint that makes re-processing safe)
+- [[0012-failure-modes|ADR 0012]] (Failure modes — the "stuck IN_PROGRESS" case)
+- [[0011-observability|ADR 0011]] (Observability — outbox counters in logs)
+- [[diagrams/sequences|diagrams/sequences.md]] — the "create CFI" sequence diagram uses this design
 - Section 3.1, 7.1 in the brief

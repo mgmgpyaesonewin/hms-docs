@@ -21,7 +21,7 @@ The admin summary dashboard's "totals" panel must load in <100ms. Computing tota
 ## Rationale
 
 - The aggregate counters are the only thing that benefits from a cache. The filterable list is well-indexed in Postgres and is fast enough.
-- HINCRBY updates are atomic, O(1), and survive at-least-once delivery because **idempotency is enforced at the DB level, not Redis**: the `(event_id) UNIQUE` and `(tenant_id, opd_invoice_id) UNIQUE` constraints on `consultation_fees_invoices` (ADR 0003, ADR 0004) cause re-delivery of the same outbox event to fail with Prisma P2002, which the service catches and treats as a no-op (`cfi-service.ts:102`). So the CFI is never created twice, and the Redis counter is therefore updated exactly once per actual CFI row.
+- HINCRBY updates are atomic, O(1), and survive at-least-once delivery because **idempotency is enforced at the DB level, not Redis**: the `(event_id) UNIQUE` and `(tenant_id, opd_invoice_id) UNIQUE` constraints on `consultation_fees_invoices` ([[0003-idempotency|ADR 0003]], [[0004-uniqueness-for-cfis|ADR 0004]]) cause re-delivery of the same outbox event to fail with Prisma P2002, which the service catches and treats as a no-op (`cfi-service.ts:102`). So the CFI is never created twice, and the Redis counter is therefore updated exactly once per actual CFI row.
 - Cache invalidation is straightforward: the source of truth is Postgres; the cache is rebuildable.
 - (c) Materialized views work but require refresh jobs and locking. Redis is faster for this read pattern.
 - (d) Unacceptable — the dashboard is the headline feature.
@@ -42,7 +42,7 @@ The admin summary dashboard's "totals" panel must load in <100ms. Computing tota
 
 ## Related
 
-- ADR 0001 (Trigger mechanism)
-- ADR 0003 (Idempotency)
-- ADR 0010 (Search strategy)
+- [[0001-trigger-mechanism|ADR 0001]] (Trigger mechanism)
+- [[0003-idempotency|ADR 0003]] (Idempotency)
+- [[0010-search-strategy|ADR 0010]] (Search strategy)
 - Section 3.3 in the brief

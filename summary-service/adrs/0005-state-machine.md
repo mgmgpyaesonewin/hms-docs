@@ -32,5 +32,5 @@ A `consultation_fees_invoice` has a `status` column with three possible values: 
 
 ## Related
 
-- ADR 0011 (Observability — audit log is here)
+- [[0011-observability|ADR 0011]] (Observability — audit log is here)
 - Section 3.2 in the brief

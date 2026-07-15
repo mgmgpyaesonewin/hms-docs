@@ -40,5 +40,5 @@ The Summary Service has two distinct roles: an HTTP API (serves admin reads and 
 
 ## Related
 
-- ADR 0001 (Trigger mechanism)
+- [[0001-trigger-mechanism|ADR 0001]] (Trigger mechanism)
 - Section 3.4, 3.5 in the brief

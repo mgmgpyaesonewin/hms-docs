@@ -39,6 +39,6 @@ The HMS is multi-tenant by design. The on-prem install is single-tenant in pract
 
 ## Related
 
-- ADR 0009 (Redis cache model)
-- ADR 0011 (Observability)
+- [[0009-redis-cache-model|ADR 0009]] (Redis cache model)
+- [[0011-observability|ADR 0011]] (Observability)
 - (Service-to-service auth is a v2 follow-up; no ADR in v1.)

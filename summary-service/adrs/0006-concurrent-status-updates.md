@@ -30,9 +30,9 @@ Two admins could open the same consultation fees invoice in their browsers and b
 - API request: `PATCH /consultation-fees-invoices/{id}/status` with header `If-Match: <version>` (mandatory).
 - API response on conflict: `409 Conflict` with body `{ "code": "VERSION_MISMATCH", "currentVersion": <n>, "yourVersion": <n-1> }`.
 - The BFF propagates the `If-Match` header from the UI request to the Summary Service.
-- The version is also bumped on adjustment updates (per ADR 0014). The same `If-Match` semantics apply.
+- The version is also bumped on adjustment updates (per [[0014-cfi-invariants|ADR 0014]]). The same `If-Match` semantics apply.
 
 ## Related
 
-- ADR 0005 (State machine)
-- ADR 0014 (CFI invariants — adjustment bumps `version` under the same `If-Match` semantics)
+- [[0005-state-machine|ADR 0005]] (State machine)
+- [[0014-cfi-invariants|ADR 0014]] (CFI invariants — adjustment bumps `version` under the same `If-Match` semantics)

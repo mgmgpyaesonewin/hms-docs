@@ -6,6 +6,21 @@ built is the code in the sibling repos (`hms-app/`,
 `hms-summary-service/`, `infra/`); this repo captures the *why* —
 architecture decisions, schemas, API contracts, operational runbooks.
 
+## Related concepts
+
+Use the Obsidian graph view (`Ctrl/Cmd+G`) to navigate between these nodes:
+
+- [[INDEX|Vault index]] — Map of Content for the design vault.
+- [[ONBOARDING|Workspace onboarding]] — sibling-repo orientation + quick start.
+- [[summary-service/README|Summary Service]] — the newest, most-active design folder (14 ADRs).
+- [[summary-service/adrs/0001-trigger-mechanism|Outbox trigger (ADR 0001)]]
+- [[summary-service/adrs/0003-idempotency|Idempotency (ADR 0003)]]
+- [[summary-service/adrs/0005-state-machine|CFI state machine (ADR 0005)]]
+- [[summary-service/adrs/0007-multi-tenancy-enforcement|Multi-tenancy (ADR 0007)]]
+- [[summary-service/adrs/0009-redis-cache-model|Redis cache model (ADR 0009)]]
+- [[hms-app/api/manifest|HMS REST manifest]] — single source of truth for documented routes.
+- [[ops/README|Ops]] · [[code-reviews/README|Code reviews]] · [[prompts/README|Prompts]] · [[archive/README|Archive]]
+
 ## Layout
 
 ```

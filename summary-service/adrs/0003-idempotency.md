@@ -21,17 +21,17 @@ The outbox delivers events at-least-once. The worker may receive the same `event
 
 - Postgres does the dedup; the worker is a 5-line `try / catch (unique violation) / advance`.
 - No new table or new dependency. The constraint is part of the schema.
-- The unique key is `event_id` itself, not `(tenant_id, opd_invoice_id)` — see ADR 0004 for that decision.
+- The unique key is `event_id` itself, not `(tenant_id, opd_invoice_id)` — see [[0004-uniqueness-for-cfis|ADR 0004]] for that decision.
 
 ## Consequences
 
 - Schema: `event_id UUID NOT NULL UNIQUE` on `consultation_fees_invoices`.
 - Worker code: `INSERT INTO consultation_fees_invoices (event_id, ...) VALUES (...) ON CONFLICT (event_id) DO NOTHING RETURNING id;` — if no row returned, the event was already processed; the worker marks the outbox row as processed and moves on.
 - This relies on `ON CONFLICT DO NOTHING` semantics being safe in a transactional context with subsequent side effects. The worker wraps the insert and the `event_outbox.status = 'DONE' / completed_at = now()` update in a single transaction so that if the insert is a no-op, the mark-processed still happens.
-- Redis updates are NOT inside this transaction (Redis is not transactional with Postgres). The Redis update runs after the DB commit, with its own at-least-once delivery. See ADR 0009 for the Redis idempotency strategy.
+- Redis updates are NOT inside this transaction (Redis is not transactional with Postgres). The Redis update runs after the DB commit, with its own at-least-once delivery. See [[0009-redis-cache-model|ADR 0009]] for the Redis idempotency strategy.
 
 ## Related
 
-- ADR 0001 (Trigger mechanism)
-- ADR 0004 (Uniqueness for CFIs)
-- ADR 0009 (Redis cache model)
+- [[0001-trigger-mechanism|ADR 0001]] (Trigger mechanism)
+- [[0004-uniqueness-for-cfis|ADR 0004]] (Uniqueness for CFIs)
+- [[0009-redis-cache-model|ADR 0009]] (Redis cache model)

@@ -5,6 +5,20 @@
 **Audience:** engineers, tech leads, contractors joining the HMS team.
 **Time to first running stack:** ~10 min on a clean laptop.
 
+## Related concepts
+
+Use the Obsidian graph view (`Ctrl/Cmd+G`) to navigate between these nodes:
+
+- [[INDEX|Vault index]] — Map of Content for the design vault.
+- [[summary-service/README|Summary Service]] — Express microservice for OPD consultation-fee invoicing.
+- [[summary-service/adrs/0001-trigger-mechanism|Outbox trigger (ADR 0001)]]
+- [[summary-service/adrs/0005-state-machine|CFI state machine (ADR 0005)]]
+- [[summary-service/adrs/0007-multi-tenancy-enforcement|Multi-tenancy (ADR 0007)]]
+- [[summary-service/adrs/0009-redis-cache-model|Redis cache model (ADR 0009)]]
+- [[hms-app/api/manifest|HMS REST manifest]] — documented routes for the monolith.
+- [[onboarding/hms-app]] · [[onboarding/hms-summary-service]] · [[onboarding/infra]] — per-service packets.
+- [[ops/README|Ops]] · [[code-reviews/README|Code reviews]] · [[prompts/README|Prompts]]
+
 ---
 
 ## 1. What this repo is

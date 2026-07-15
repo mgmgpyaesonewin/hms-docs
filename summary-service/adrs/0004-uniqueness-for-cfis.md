@@ -5,7 +5,7 @@
 
 ## Context
 
-The natural business invariant is: one OPD invoice maps to exactly one Consultation Fees Invoice. The CFI's `opd_invoice_id` should be unique per tenant. But the worker also uses `event_id` for idempotency (ADR 0003). The two keys serve different purposes.
+The natural business invariant is: one OPD invoice maps to exactly one Consultation Fees Invoice. The CFI's `opd_invoice_id` should be unique per tenant. But the worker also uses `event_id` for idempotency ([[0003-idempotency|ADR 0003]]). The two keys serve different purposes.
 
 ## Options considered
 
@@ -31,4 +31,4 @@ The natural business invariant is: one OPD invoice maps to exactly one Consultat
 
 ## Related
 
-- ADR 0003 (Idempotency)
+- [[0003-idempotency|ADR 0003]] (Idempotency)

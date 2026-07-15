@@ -79,7 +79,7 @@ The result is unordered by relevance — it's a substring match, not a ranked se
 
 ## Related
 
-- `data-model/schema.sql`
+- [[data-model/schema|data-model/schema.sql]]
 - Section 3.6 in the brief
-- ADR 0009 (Redis cache model — search is a Postgres-only filter; Redis does not accelerate it)
+- [[0009-redis-cache-model|ADR 0009]] (Redis cache model — search is a Postgres-only filter; Redis does not accelerate it)
 - `api/openapi.yaml` (the `search` query parameter)

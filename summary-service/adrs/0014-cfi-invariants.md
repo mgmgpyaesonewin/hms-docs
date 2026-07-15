@@ -79,7 +79,7 @@ function computePayoutAmount(amount: number, adjustment: number): number {
 
 ## Related
 
-- ADR 0005 (State machine — defines the UNPAID → PAID/VOID transitions that lock adjustment)
-- ADR 0006 (Concurrent status updates — `version` and `If-Match`)
+- [[0005-state-machine|ADR 0005]] (State machine — defines the UNPAID → PAID/VOID transitions that lock adjustment)
+- [[0006-concurrent-status-updates|ADR 0006]] (Concurrent status updates — `version` and `If-Match`)
 - README → Future work → Doctor payout workflow (v2 forward-look, not a v1 design constraint)
 - Section 3.5 in the brief

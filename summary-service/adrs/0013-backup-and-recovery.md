@@ -35,6 +35,6 @@ The new tables (`consultation_fees_invoices`, `consultation_fees_invoice_status_
 
 ## Related
 
-- ADR 0009 (Redis cache model)
-- ADR 0011 (Observability)
-- `ops/runbook.md` — "rebuild Redis" procedure
+- [[0009-redis-cache-model|ADR 0009]] (Redis cache model)
+- [[0011-observability|ADR 0011]] (Observability)
+- [[ops/runbook|ops/runbook.md]] — "rebuild Redis" procedure

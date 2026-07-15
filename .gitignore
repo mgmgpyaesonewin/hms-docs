@@ -9,5 +9,8 @@
 .claude/
 .scratch/
 
+# Obsidian app state — vault is a personal workspace, not a shared vault
+.obsidian/
+
 # draw.io lock files (created during edit, never useful in git)
 *.drawio.dtmp
