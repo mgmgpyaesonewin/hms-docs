@@ -11,3 +11,7 @@ Feedback location - /Users/pyaesonewin/Documents/work/hms-system/hms-docs/code-r
 Repo - https://github.com/MyanCare/YCare-HMS-Service-Module
 PRs - #320
 Feedback location - /Users/pyaesonewin/Documents/work/hms-system/ycare-vault/code-reviews
+
+Repo - https://github.com/MyanCare/YCare-HMS-Summary-Service
+PRs - #2, #6, #7, #8, #9, #10, #11
+Feedback location - /Users/pyaesonewin/Documents/work/hms-system/ycare-vault/code-reviews/hms-summary-service
