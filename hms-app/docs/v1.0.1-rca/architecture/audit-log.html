@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>OPD Billing Activity Log Architecture</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css">
+<link href="https://cdn.jsdelivr.net/npm/katex-copytex@latest/dist/katex-copytex.min.css" rel="stylesheet" type="text/css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <span id="markdown-mermaid" aria-hidden="true" data-config="{&quot;darkModeTheme&quot;:&quot;vscode&quot;,&quot;lightModeTheme&quot;:&quot;vscode&quot;,&quot;maxTextSize&quot;:50000,&quot;clickDrag&quot;:&quot;alt&quot;,&quot;showControls&quot;:&quot;onHoverOrFocus&quot;,&quot;resizable&quot;:true,&quot;maxHeight&quot;:&quot;&quot;}"></span>
+				<h1 id="opd-billing-activity-log-architecture">OPD Billing Activity Log Architecture</h1>
+<p><strong>Status:</strong> Design (ground floor) — pending implementation
+<strong>Scope:</strong> <code>@hms-app/</code> — <code>opd_billing_activity_logs.payload</code> column + per-call-site inline writes
+<strong>Authoring session:</strong> <code>/grill-with-docs</code> round 1</p>
+<h2 id="goal">Goal</h2>
+<p>Add a <code>payload JSONB</code> column to <code>opd_billing_activity_logs</code> and migrate the 7
+existing <code>createServiceOPDBillingLog</code> call sites to write structured per-action
+payloads. Future modules (OpdPackageBill, FOCItem, ExpiryUpdatedStock,
+PurchasedPriceUpdatedStock) follow the same pattern by copying the call-site
+shape — no shared service, no registry.</p>
+<p>The OPD billing modal is the <strong>showcase</strong> for the product team to understand what
+audit data should be captured going forward.</p>
+<p><strong>Out of scope for this ticket</strong> (parked for a separate design session):</p>
+<ul>
+<li>Per-field before/after diffing for <code>EDIT_SERVICE_BILL</code> events.</li>
+<li>Per-action pretty renderers in the modal (v1 dumps raw JSON).</li>
+</ul>
+<h2 id="decisions-locked">Decisions locked</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Decision</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Write point</td>
+<td>Server-side, same <code>trx</code> as business write</td>
+<td>Same pattern as <code>opd-package-bill.repository.ts:269</code>; transactional guarantee</td>
+</tr>
+<tr>
+<td>Payload strategy</td>
+<td>Snapshot-only</td>
+<td>Explicit before/after parked; per-action payloads already carry enough fidelity</td>
+</tr>
+<tr>
+<td>Actions</td>
+<td>6 — <code>CREATE</code>, <code>EDIT_SERVICE_BILL</code>, <code>CHANGE_PAYMENT_STATUS</code>, <code>CANCEL</code>, <code>ADD_PHARMACY_ITEM</code>, <code>REMOVE_PHARMACY_ITEM</code></td>
+<td>Derived from data: today 3 actions exist (Create / Changed Payment Status / Edit Service Bill); adding CANCEL + pharmacy-item add/remove</td>
+</tr>
+<tr>
+<td>Payload shape</td>
+<td>Per-action (asymmetric); thin <code>{refInvoiceNo}</code> header on every payload</td>
+<td>Different actions = different fields; header makes rows self-describing on export</td>
+</tr>
+<tr>
+<td>Description column</td>
+<td>Keep; template-string at writer</td>
+<td>527 legacy rows depend on it; modal already renders it</td>
+</tr>
+<tr>
+<td>Action column</td>
+<td>Stay <code>TEXT</code>; TS interface as the contract</td>
+<td>Cheaper migration; no direct-SQL writers in this codebase</td>
+</tr>
+<tr>
+<td>527 existing rows</td>
+<td>Leave as-is; <code>payload</code> is null on them; UI renders <code>description</code> only</td>
+<td>No data is recoverable from description; backfill would be inventing data</td>
+</tr>
+<tr>
+<td>&quot;from&quot; value for status / cancel / edit</td>
+<td>Caller reads the existing row inside the same <code>trx</code> as the business write</td>
+<td>Trx isolation = consistent snapshot; no race with concurrent edits</td>
+</tr>
+<tr>
+<td><code>changedFields</code> for EDIT</td>
+<td>Inline shallow diff with <code>JSON.stringify</code> equality</td>
+<td>v1 priority: get the common case working; per-row array diffs deferred</td>
+</tr>
+</tbody>
+</table>
+<h2 id="call-site-refactor-7-sites">Call-site refactor (7 sites)</h2>
+<p>All seven existing calls to <code>createServiceOPDBillingLog</code> migrate to writing the
+audit row inline inside the same <code>trx</code> as the business write.</p>
+<pre><code class="language-ts"><span class="hljs-comment">// CHANGE_PAYMENT_STATUS example</span>
+<span class="hljs-keyword">await</span> prisma.$transaction(<span class="hljs-keyword">async</span> (tx) =&gt; {
+  <span class="hljs-keyword">const</span> existing = <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBilling</span>.<span class="hljs-title function_">findUniqueOrThrow</span>({
+    <span class="hljs-attr">where</span>: { <span class="hljs-attr">id</span>: opdBillingId },
+    <span class="hljs-attr">select</span>: { <span class="hljs-attr">id</span>: <span class="hljs-literal">true</span>, <span class="hljs-attr">invoiceNo</span>: <span class="hljs-literal">true</span>, <span class="hljs-attr">opdBillingPaymentStatus</span>: <span class="hljs-literal">true</span> },
+  });
+
+  <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBilling</span>.<span class="hljs-title function_">update</span>({
+    <span class="hljs-attr">where</span>: { <span class="hljs-attr">id</span>: opdBillingId },
+    <span class="hljs-attr">data</span>: { <span class="hljs-attr">opdBillingPaymentStatus</span>: payload.<span class="hljs-property">paymentStatus</span> },
+  });
+
+  <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBillingActivityLog</span>.<span class="hljs-title function_">create</span>({
+    <span class="hljs-attr">data</span>: {
+      <span class="hljs-attr">action</span>: <span class="hljs-string">&quot;CHANGE_PAYMENT_STATUS&quot;</span>,
+      <span class="hljs-attr">description</span>: <span class="hljs-string">`Changed Payment Status from <span class="hljs-subst">${existing.opdBillingPaymentStatus}</span> to <span class="hljs-subst">${payload.paymentStatus}</span>`</span>,
+      <span class="hljs-attr">user</span>: { <span class="hljs-attr">connect</span>: { <span class="hljs-attr">id</span>: userId } },
+      <span class="hljs-attr">opdBilling</span>: { <span class="hljs-attr">connect</span>: { <span class="hljs-attr">id</span>: existing.<span class="hljs-property">id</span> } },
+      <span class="hljs-attr">payload</span>: {
+        <span class="hljs-attr">refInvoiceNo</span>: existing.<span class="hljs-property">invoiceNo</span>,
+        <span class="hljs-attr">from</span>: existing.<span class="hljs-property">opdBillingPaymentStatus</span>,
+        <span class="hljs-attr">to</span>: payload.<span class="hljs-property">paymentStatus</span>,
+      },
+    },
+  });
+});
+</code></pre>
+<p>This pattern is <strong>mandatory for every EDIT / CHANGE_PAYMENT_STATUS / CANCEL call
+site</strong>: read existing state → business write → build payload (using the read
+result for <code>from</code>) → audit write. All four steps in one <code>trx</code>.</p>
+<p>CREATE is simpler — no <code>from</code> value, the post-write row IS the snapshot.
+ADD/REMOVE_PHARMACY_ITEM build the payload from the items list being attached
+or detached, which the caller already has in scope.</p>
+<pre><code class="language-ts"><span class="hljs-comment">// EDIT_SERVICE_BILL example — project + shallow diff</span>
+<span class="hljs-keyword">await</span> prisma.$transaction(<span class="hljs-keyword">async</span> (tx) =&gt; {
+  <span class="hljs-keyword">const</span> before = <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBilling</span>.<span class="hljs-title function_">findUniqueOrThrow</span>({ <span class="hljs-attr">where</span>: { id }, <span class="hljs-attr">include</span>: <span class="hljs-variable constant_">SERVICES_INCLUDE</span> });
+  <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBilling</span>.<span class="hljs-title function_">update</span>({ <span class="hljs-attr">where</span>: { id }, <span class="hljs-attr">data</span>: editData });
+  <span class="hljs-keyword">const</span> after  = <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBilling</span>.<span class="hljs-title function_">findUniqueOrThrow</span>({ <span class="hljs-attr">where</span>: { id }, <span class="hljs-attr">include</span>: <span class="hljs-variable constant_">SERVICES_INCLUDE</span> });
+
+  <span class="hljs-comment">// Project to the form-shaped fields. Otherwise `id`, `updatedAt`, and</span>
+  <span class="hljs-comment">// joined relation metadata register as &quot;changes&quot; in the diff.</span>
+  <span class="hljs-keyword">const</span> <span class="hljs-title function_">project</span> = (<span class="hljs-params">r: <span class="hljs-keyword">typeof</span> after</span>) =&gt; ({
+    <span class="hljs-attr">patientName</span>: r.<span class="hljs-property">patient</span>.<span class="hljs-property">name</span>,
+    <span class="hljs-attr">date</span>: r.<span class="hljs-property">date</span>,
+    <span class="hljs-attr">billType</span>: r.<span class="hljs-property">billType</span>,
+    <span class="hljs-attr">patientType</span>: r.<span class="hljs-property">patientType</span>,
+    <span class="hljs-attr">pharmaInvoice</span>: r.<span class="hljs-property">pharmaInvoice</span>,
+    <span class="hljs-attr">appointmentId</span>: r.<span class="hljs-property">appointmentId</span>,
+    <span class="hljs-attr">additionalServices</span>: r.<span class="hljs-property">additionalServices</span>,
+  });
+  <span class="hljs-keyword">const</span> b = <span class="hljs-title function_">project</span>(before), a = <span class="hljs-title function_">project</span>(after);
+  <span class="hljs-keyword">const</span> changedFields = <span class="hljs-title class_">Object</span>.<span class="hljs-title function_">keys</span>(a).<span class="hljs-title function_">filter</span>(
+    <span class="hljs-function"><span class="hljs-params">k</span> =&gt;</span> <span class="hljs-title class_">JSON</span>.<span class="hljs-title function_">stringify</span>(b[k]) !== <span class="hljs-title class_">JSON</span>.<span class="hljs-title function_">stringify</span>(a[k])
+  );
+
+  <span class="hljs-keyword">await</span> tx.<span class="hljs-property">opdBillingActivityLog</span>.<span class="hljs-title function_">create</span>({
+    <span class="hljs-attr">data</span>: {
+      <span class="hljs-attr">action</span>: <span class="hljs-string">&quot;EDIT_SERVICE_BILL&quot;</span>,
+      <span class="hljs-attr">description</span>: <span class="hljs-string">`Edited Service Bill (<span class="hljs-subst">${changedFields.join(<span class="hljs-string">&quot;, &quot;</span>) || <span class="hljs-string">&quot;no field changes&quot;</span>}</span>)`</span>,
+      <span class="hljs-attr">user</span>: { <span class="hljs-attr">connect</span>: { <span class="hljs-attr">id</span>: userId } },
+      <span class="hljs-attr">opdBilling</span>: { <span class="hljs-attr">connect</span>: { <span class="hljs-attr">id</span>: after.<span class="hljs-property">id</span> } },
+      <span class="hljs-attr">payload</span>: { <span class="hljs-attr">refInvoiceNo</span>: after.<span class="hljs-property">invoiceNo</span>, ...a, changedFields },
+    },
+  });
+});
+</code></pre>
+<p><strong>The <code>trx</code> isolation guarantee is load-bearing.</strong> Reads inside the same <code>trx</code>
+as the business write see a consistent snapshot — no risk of recording
+<code>from: &quot;UNPAID&quot;</code> when someone else flipped it to <code>PAID</code> between the read and the
+write.</p>
+<h3 id="where-each-field-comes-from">Where each field comes from</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Source</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>refInvoiceNo</code> (header)</td>
+<td>the <code>opdBillings.invoiceNo</code> of the entity being audited</td>
+<td>read inside the same <code>trx</code> as the business write</td>
+</tr>
+<tr>
+<td><code>patientName</code>, <code>date</code>, <code>billType</code>, <code>patientType</code>, <code>pharmaInvoice</code>, <code>appointmentId</code>, <code>additionalServices</code> (CREATE / EDIT)</td>
+<td>the <strong>post-write</strong> state of the OPD billing row + its services</td>
+<td>read inside the same <code>trx</code>, after the business write succeeds</td>
+</tr>
+<tr>
+<td><code>changedFields</code> (EDIT only)</td>
+<td>shallow diff over the form-shaped fields (project both rows first — full Prisma rows catch <code>id</code> / <code>updatedAt</code> / joined relation metadata)</td>
+<td>inside the same <code>trx</code></td>
+</tr>
+<tr>
+<td><code>from</code> (CHANGE_PAYMENT_STATUS)</td>
+<td>the <strong>pre-write</strong> <code>opdBillings.opdBillingPaymentStatus</code></td>
+<td>read inside the same <code>trx</code>, before the update</td>
+</tr>
+<tr>
+<td><code>to</code> (CHANGE_PAYMENT_STATUS)</td>
+<td>the incoming <code>payload.paymentStatus</code></td>
+<td>from the request body</td>
+</tr>
+<tr>
+<td><code>previousPaymentStatus</code> (CANCEL)</td>
+<td>the <strong>pre-write</strong> <code>opdBillings.opdBillingPaymentStatus</code></td>
+<td>read inside the same <code>trx</code>, before the cancel</td>
+</tr>
+<tr>
+<td><code>reason</code> (CANCEL)</td>
+<td>from the request body</td>
+<td>from the request body</td>
+</tr>
+<tr>
+<td><code>pharmacyInvoiceNo</code>, <code>items</code>, <code>totalAddedAmount</code> (ADD/REMOVE_PHARMACY_ITEM)</td>
+<td>from the request body + the items being attached/detached</td>
+<td>from the request body</td>
+</tr>
+</tbody>
+</table>
+<h2 id="per-action-payload-shapes">Per-action payload shapes</h2>
+<p>TS interfaces only — no runtime validation. The action boundary (server action /
+tRPC procedure) already validates request bodies with Zod; the audited row was
+just read from the DB. Re-validation at audit time would catch nothing.</p>
+<pre><code class="language-ts"><span class="hljs-comment">// Header present on every payload for self-describing exports.</span>
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">Header</span> = { <span class="hljs-attr">refInvoiceNo</span>: <span class="hljs-built_in">string</span> };
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">CreatePayload</span> = <span class="hljs-title class_">Header</span> &amp; {
+  <span class="hljs-attr">patientName</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">date</span>: <span class="hljs-built_in">string</span>;                                   <span class="hljs-comment">// ISO, the bill date</span>
+  <span class="hljs-attr">billType</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">patientType</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">pharmaInvoice</span>: <span class="hljs-built_in">string</span> | <span class="hljs-literal">null</span>;
+  <span class="hljs-attr">appointmentId</span>: <span class="hljs-built_in">string</span> | <span class="hljs-literal">null</span>;
+  <span class="hljs-attr">additionalServices</span>: <span class="hljs-title class_">ServiceLine</span>[];
+};
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">EditServiceBillPayload</span> = <span class="hljs-title class_">CreatePayload</span> &amp; {
+  changedFields?: <span class="hljs-built_in">string</span>[];                       <span class="hljs-comment">// top-level keys that differ</span>
+};
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">ChangePaymentStatusPayload</span> = <span class="hljs-title class_">Header</span> &amp; {
+  <span class="hljs-attr">from</span>: <span class="hljs-string">&quot;UNPAID&quot;</span> | <span class="hljs-string">&quot;PAID&quot;</span> | <span class="hljs-string">&quot;CANCEL&quot;</span>;
+  <span class="hljs-attr">to</span>:   <span class="hljs-string">&quot;UNPAID&quot;</span> | <span class="hljs-string">&quot;PAID&quot;</span> | <span class="hljs-string">&quot;CANCEL&quot;</span>;
+};
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">CancelPayload</span> = <span class="hljs-title class_">Header</span> &amp; {
+  <span class="hljs-attr">previousPaymentStatus</span>: <span class="hljs-string">&quot;UNPAID&quot;</span> | <span class="hljs-string">&quot;PAID&quot;</span>;
+  reason?: <span class="hljs-built_in">string</span>;
+};
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">AddPharmacyItemPayload</span> = <span class="hljs-title class_">Header</span> &amp; {
+  <span class="hljs-attr">pharmacyInvoiceNo</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">items</span>: <span class="hljs-title class_">PharmacyItem</span>[];
+  <span class="hljs-attr">totalAddedAmount</span>: <span class="hljs-built_in">number</span>;
+};
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">RemovePharmacyItemPayload</span> = <span class="hljs-title class_">AddPharmacyItemPayload</span>;
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">ServiceLine</span> = {
+  <span class="hljs-attr">serviceName</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">priceType</span>: <span class="hljs-built_in">string</span>;                              <span class="hljs-comment">// free-text for v1</span>
+  <span class="hljs-attr">doctorName</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">qty</span>: <span class="hljs-built_in">number</span>;
+  <span class="hljs-attr">price</span>: <span class="hljs-built_in">number</span>;
+  <span class="hljs-attr">discount</span>: { <span class="hljs-attr">kind</span>: <span class="hljs-string">&quot;AMOUNT&quot;</span>; <span class="hljs-attr">value</span>: <span class="hljs-built_in">number</span> } | { <span class="hljs-attr">kind</span>: <span class="hljs-string">&quot;PERCENT&quot;</span>; <span class="hljs-attr">value</span>: <span class="hljs-built_in">number</span> };
+  <span class="hljs-attr">foc</span>: <span class="hljs-built_in">boolean</span>;
+  <span class="hljs-attr">amount</span>: <span class="hljs-built_in">number</span>;
+};
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">PharmacyItem</span> = {
+  <span class="hljs-attr">itemName</span>: <span class="hljs-built_in">string</span>;
+  <span class="hljs-attr">qty</span>: <span class="hljs-built_in">number</span>;
+  <span class="hljs-attr">price</span>: <span class="hljs-built_in">number</span>;
+  <span class="hljs-attr">amount</span>: <span class="hljs-built_in">number</span>;
+};
+</code></pre>
+<p>Caveat: <code>priceType</code> is free-text for v1. Tighten to enum later if the product
+team signs off on a canonical list. <code>discount</code> uses a discriminated union
+because both AMOUNT and PERCENT occur in the data; an audit log that lies about
+its data is worse than none.</p>
+<h2 id="view-details-ui">View details UI</h2>
+<p><code>service-billing-activity-log-modal.tsx</code> renders each row as
+<code>{timestamp, userName, description}</code>. A &quot;View details&quot; disclosure on each row
+dumps the <code>payload</code>:</p>
+<pre><code class="language-tsx">&lt;details&gt;
+  <span class="language-xml"><span class="hljs-tag">&lt;<span class="hljs-name">summary</span>&gt;</span>View details<span class="hljs-tag">&lt;/<span class="hljs-name">summary</span>&gt;</span></span>
+  <span class="language-xml"><span class="hljs-tag">&lt;<span class="hljs-name">pre</span>&gt;</span>{JSON.stringify(row.payload, null, 2)}<span class="hljs-tag">&lt;/<span class="hljs-name">pre</span>&gt;</span></span>
+&lt;/details&gt;
+</code></pre>
+<p>Acceptable for v1 because the product team is the audience and wants to see the
+raw data shape. Per-action pretty renderers are parked — they cost ~6
+renderers and a registry; add when the second consumer needs them.</p>
+<h2 id="migration">Migration</h2>
+<p>Single statement, additive, no data backfill:</p>
+<pre><code class="language-sql"><span class="hljs-comment">-- prisma/migrations/&lt;ts&gt;_opd_billing_activity_log_payload/migration.sql</span>
+<span class="hljs-keyword">ALTER</span> <span class="hljs-keyword">TABLE</span> &quot;opd_billing_activity_logs&quot; <span class="hljs-keyword">ADD</span> <span class="hljs-keyword">COLUMN</span> &quot;payload&quot; JSONB;
+</code></pre>
+<p>Existing 527 rows retain their <code>description</code> and gain <code>payload = null</code>. The
+existing modal renders <code>description</code> for those rows; the new &quot;View details&quot;
+expansion is empty.</p>
+<p>The corresponding <code>schema.prisma</code> change:</p>
+<pre><code class="language-prisma">model OPDBillingActivityLog {
+  // ... existing fields ...
+  payload Json? @map(&quot;payload&quot;) @db.JsonB
+}
+</code></pre>
+<h2 id="call-site-table">Call-site table</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Line</th>
+<th>Old action string</th>
+<th>New action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app/(dashboard)/shared/opd/workflows/create-opd-billing-workflow/audit-log.step.ts</code></td>
+<td>13</td>
+<td><code>&quot;Create&quot;</code></td>
+<td><code>CREATE</code></td>
+</tr>
+<tr>
+<td><code>app/(dashboard)/shared/opd/services/opd-billing.service.ts</code></td>
+<td>622</td>
+<td>(TBD — inspect at impl time)</td>
+<td>(TBD)</td>
+</tr>
+<tr>
+<td><code>app/(dashboard)/shared/opd/services/opd-billing.service.ts</code></td>
+<td>703</td>
+<td><code>&quot;Changed Payment Status&quot;</code></td>
+<td><code>CHANGE_PAYMENT_STATUS</code></td>
+</tr>
+<tr>
+<td><code>app/(dashboard)/shared/opd/services/opd-billing.service.ts</code></td>
+<td>809</td>
+<td><code>&quot;Changed Payment Status&quot;</code></td>
+<td><code>CHANGE_PAYMENT_STATUS</code></td>
+</tr>
+<tr>
+<td><code>app/(dashboard)/shared/opd/services/opd-billing.service.ts</code></td>
+<td>910</td>
+<td><code>&quot;Edit Service Bill&quot;</code></td>
+<td><code>EDIT_SERVICE_BILL</code></td>
+</tr>
+<tr>
+<td><code>app/(dashboard)/shared/opd/services/opd-billing.service.ts</code></td>
+<td>976</td>
+<td><code>&quot;Edit Service Bill&quot;</code></td>
+<td><code>EDIT_SERVICE_BILL</code></td>
+</tr>
+<tr>
+<td><code>app/(dashboard)/shared/opd/services/opd-billing-payment-status.service.ts</code></td>
+<td>63</td>
+<td><code>&quot;Changed Payment Status&quot;</code></td>
+<td><code>CHANGE_PAYMENT_STATUS</code></td>
+</tr>
+</tbody>
+</table>
+<p>After all 7 sites migrate, <code>createServiceOPDBillingLog</code> (repository method) is dead code — delete.</p>
+<h2 id="modal">Modal</h2>
+<p><code>service-billing-activity-log-modal.tsx</code> is OPD-specific today. The
+OPD-specific header (Patient Name, Bill Type, Doctor, Payment Status, Store,
+etc.) renders inline; the route is the existing
+<code>GET /api/opd-billing-log/[id]</code>.</p>
+<p>When a second module adopts audit logging, promote the modal to a shared
+component and the route to <code>/api/audit-log/[entity]/[id]</code> then. Not before.</p>
+<h2 id="outbox-interaction">Outbox interaction</h2>
+<p>The OPD billing writes already fire an <code>event_outbox</code> event for the
+<code>hms-summary-service</code> worker (consultation-fees invoice flow, ADR 0001). The
+audit log write is a <strong>separate</strong> <code>prisma.opdBillingActivityLog.create</code> in the
+same <code>trx</code>, NOT an outbox event. Do not mix the two paths — audit logs are
+local; outbox is for cross-service events.</p>
+<h2 id="follow-ups-out-of-scope">Follow-ups (out of scope)</h2>
+<ul>
+<li>Per-field before/after diff for <code>EDIT_SERVICE_BILL</code> — parked.</li>
+<li>Promote modal + route to shared component — when a second module needs it.</li>
+<li>Migrate <code>OpdPackageBill</code>, <code>FOCItem</code>, <code>ExpiryUpdatedStock</code>,
+<code>PurchasedPriceUpdatedStock</code> onto the same per-call-site pattern. Copy the
+writer shape; add a <code>payload</code> column if the domain's audit table lacks one.</li>
+<li>The <code>payout_amount</code> / status-history tables for the summary-service CFI work —
+different domain, separate design.</li>
+</ul>
+<h2 id="reference">Reference</h2>
+<ul>
+<li>Existing activity-log tables in this codebase: <code>opd_billing_activity_logs</code>,
+<code>opd_package_bill_activity_logs</code>, <code>foc_item_activity_logs</code>,
+<code>expiry_updated_stock_activity_logs</code>, <code>purchased_price_updated_stock_activity_logs</code>,
+<code>activity_logs</code> (generic <code>Logs</code> model).</li>
+<li>Reference implementation for transactional audit writes:
+<code>opd-package-bill.repository.ts:258-285</code> (<code>createPackageBillLog</code>).</li>
+<li>Reference for caller pattern:
+<code>opd-package-bill.repository.ts:269</code> is called inside the business write's <code>trx</code>
+by <code>create-package-bill-workflow/audit-log-step.ts:14</code>.</li>
+<li>Outbox design (separate concern, do not duplicate):
+<code>hms-docs/summary-service/adrs/0001-transactional-outbox.md</code>.</li>
+</ul>
+
+            <script async src="https://cdn.jsdelivr.net/npm/katex-copytex@latest/dist/katex-copytex.min.js"></script>
+            
+        </body>
+        </html>

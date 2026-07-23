@@ -80,3 +80,26 @@
  public.lab_pivots                  |         63
  public.imaging_lists               |         51
  public.store_mappings              |         30 
+
+              table_name             | rows_since 
+------------------------------------+------------
+ public.lab_service_audits          |       2464
+ public.lab_services                |        300
+ public.lab_service_items           |        287
+ public.appointments                |        183
+ public.service_bills               |        171
+ public.opd_billing_payment_methods |        160
+ public.bills                       |        159
+ public.opd_billings                |        159
+ public.service_package_bills       |        159
+ public.appointment_services        |        150
+ public.patients                    |        125
+ public.proxy_bills                 |         97
+ public.procedure_bills             |         94
+ public.imaging_services            |         64
+ public.referrals                   |         64
+ public.lab_pivots                  |         55
+ public.imaging_lists               |         33
+ public.sessions                    |         16
+ public.DoctorService               |          3
+ public.store_mappings              |          2
